@@ -1,11 +1,20 @@
-# Downloaded datasets (auto-fetched by the notebook via torchvision)
-me1-einops-einsum/data/
-data/
+# --- Scratch / tooling (never commit) ---
+.onit/
+serve_logs/
+serve_registry.json
+tmp/
 
-# Python / Jupyter artifacts
+# --- Data & caches ---
+data/
+*.pt
+*.pth
+*.zip
+*.tar.gz
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
-# OS junk
-.DS_Store
+# --- Secrets ---
+.env
+*.token
+credentials*
