@@ -1,0 +1,39 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_core/utils/__init__.py", line 165, in wrapped
+    return loop.run_until_complete(inner)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/nbclient/client.py", line 693, in async_execute
+    async with self.async_setup_kernel(**kwargs):
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/contextlib.py", line 210, in __aenter__
+    return await anext(self.gen)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/nbclient/client.py", line 648, in async_setup_kernel
+    await self.async_start_new_kernel(**kwargs)
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/nbclient/client.py", line 550, in async_start_new_kernel
+    await ensure_async(self.km.start_kernel(extra_arguments=self.extra_arguments, **kwargs))
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_core/utils/__init__.py", line 214, in ensure_async
+    result = await obj
+             ^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_client/manager.py", line 116, in wrapper
+    raise e
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_client/manager.py", line 107, in wrapper
+    out = await method(self, *args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_client/manager.py", line 528, in _async_start_kernel
+    kernel_cmd, kw = await self._async_pre_start_kernel(**kw)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_client/manager.py", line 490, in _async_pre_start_kernel
+    self.kernel_spec,
+    ^^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_client/manager.py", line 267, in kernel_spec
+    self._kernel_spec = self.kernel_spec_manager.get_kernel_spec(self.kernel_name)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/edgardo.callagon.jr/.conda/envs/onit/lib/python3.12/site-packages/jupyter_client/kernelspec.py", line 295, in get_kernel_spec
+    raise NoSuchKernel(kernel_name)
+jupyter_client.kernelspec.NoSuchKernel: No such kernel named onit
+EXIT=1
