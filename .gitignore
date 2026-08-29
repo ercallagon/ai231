@@ -1,0 +1,11 @@
+# Downloaded datasets (auto-fetched by the notebook via torchvision)
+me1-einops-einsum/data/
+data/
+
+# Python / Jupyter artifacts
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# OS junk
+.DS_Store
