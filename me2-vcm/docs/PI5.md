@@ -13,23 +13,36 @@ On Debian 13 / Python 3.13, install these system packages yourself:
 ```bash
 sudo apt update
 sudo apt install git python3-venv python3-dev python3-lgpio libportaudio2 libsndfile1 alsa-utils mpv
-git clone https://github.com/ercallagon/ai231.git ~/ai231
+git clone --filter=blob:none --sparse https://github.com/ercallagon/ai231.git ~/ai231
+cd ~/ai231
+git -C ~/ai231 sparse-checkout set me2-vcm/src me2-vcm/scripts me2-vcm/configs me2-vcm/models me2-vcm/audio me2-vcm/data/manifests
 cd ~/ai231/me2-vcm
+mkdir -p work/pi5_test_01
+git -C ~/ai231 rev-parse HEAD > work/pi5_test_01/source_revision.txt
 python3 -m venv --system-site-packages .venv
 .venv/bin/python -m pip install --only-binary=:all: -r requirements-pi.txt -r requirements-eval.txt
-.venv/bin/python scripts/reproduce.py verify
 .venv/bin/python -m sounddevice
 arecord -l
 wpctl status -n
 ```
 
-If ~/ai231 already exists, inspect and update that checkout rather than clone
-over it. Use --system-site-packages so apt's lgpio is visible in the venv.
+This sparse checkout includes runtime source, scripts, configs, ONNX models,
+cue, and manifest metadata. It omits experiment checkpoints, training logs,
+tests, and unrelated ME1 files. The tracked checkout is about 20 MiB; injected
+evaluation downloads its audio Parquet separately. The full-repository
+`scripts/reproduce.py verify` checks files omitted from this sparse checkout,
+so do not run it here. The measurement and assistant commands below load the
+selected model contracts. Use --system-site-packages so apt's lgpio is visible.
 No torch, pandas, typer, rich or huggingface_hub is needed for live inference.
-PyArrow is used only for file-based evaluation; it can be omitted for live use.
-The USB microphone previously supported only 48 kHz; the capture backend probes
-supported rates and resamples to the frozen 16 kHz model rate. Device indices
-can change: check the selected microphone instead of assuming index 0 is stable.
+The command installs PyArrow for injected evaluation; omit requirements-eval.txt
+for a live-only setup.
+
+These clone commands are for a fresh checkout. If ~/ai231 already exists,
+inspect its Git status and sparse paths before changing it; do not clone over
+local work. The source revision is saved with the test results. The capture
+backend probes supported microphone rates and resamples to the model's 16 kHz
+rate. Device numbers can change, so verify the input device instead of assuming
+0 is stable.
 
 ## Test the selected model and fallback
 
@@ -88,18 +101,19 @@ does not change wiring. No calls/SMS are part of verification.
 Model-only cost, without microphone or action side effects:
 
 ```bash
-.venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/selected.onnx --audio-seconds 6 --threads 1 --output work/pi5_selected_model_unique.json
-.venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/run043.onnx --audio-seconds 2 --threads 1 --output work/pi5_run043_model_unique.json
+.venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/selected.onnx --audio-seconds 6 --threads 1 --output work/pi5_test_01/selected_cost.json
+.venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/run043.onnx --audio-seconds 2 --threads 1 --output work/pi5_test_01/run043_cost.json
 ```
 
 Injected-file recognition and features+ONNX p95/RTF:
 
 ```bash
-.venv/bin/python scripts/reproduce.py reproduce --fetch --output work/pi5_injection_unique
+.venv/bin/python scripts/reproduce.py reproduce --fetch --output work/pi5_test_01/injection
 ```
 
-The latter downloads about 305 MB for test/holdout, verifies hashes and reports
-all processing failures. It bypasses wake detection, room acoustics and causal
+The sparse checkout includes the manifests; this command downloads about 305 MB
+of pinned test/holdout audio on first use, verifies hashes, and reports all
+processing failures. It bypasses wake detection, room acoustics and causal
 capture. Both commands record one intra-op and one inter-op thread; neither
 claims action or synthesized-speech latency. Model-only RTF uses nominal input
 capacity; injected RTF uses each actual waveform duration. Preserve raw JSON.
@@ -108,12 +122,11 @@ If timing both profiles, use identical thermal, power and thread conditions.
 From Windows, retrieve results using the existing LAN/SSH route:
 
 ```powershell
-scp -r ej@192.168.100.103:~/ai231/me2-vcm/work/pi5_injection_unique .
-scp ej@192.168.100.103:~/ai231/me2-vcm/work/pi5_selected_model_unique.json .
-scp ej@192.168.100.103:~/ai231/me2-vcm/work/pi5_run043_model_unique.json .
+scp -r ej@192.168.100.103:~/ai231/me2-vcm/work/pi5_test_01 .
 ```
 
-Use docs/BENCHMARK.md for the separate class acoustic benchmark. Remaining Pi
+Use docs/BENCHMARK.md on GitHub for the separate class acoustic benchmark. The
+sparse checkout omits documentation files. Remaining Pi
 checks: mic handoff/recovery, early/late speech after the cue, long pauses,
 over-limit rejection, speech/music interference, GPIO/timer display effects,
 decision-to-action timing, resource/thermal behavior and optional speech assets.
