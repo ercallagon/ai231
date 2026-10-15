@@ -94,7 +94,7 @@
     "src/hey_swift/integration/e2e_loop.py": "da439e305ee2553d0cf470c4cf9d1156a11ee390b6f14848149a59ee5ef713bf",
     "src/hey_swift/integration/model_contract.py": "897b819a9571ff2e215358e31b573c19a2f1d5129fdbef025822ba101f977483",
     "src/hey_swift/integration/router.py": "32f1d3efecbb374882ac488a410a94ad1c4e6013f583011e819c1606a700cabf",
-    "src/hey_swift/integration/runtime.py": "ab1808159f9bc50d712395df47fcf6ba776cf601c8829b4fea01a9bdd36a4ce4",
+    "src/hey_swift/integration/runtime.py": "ec3557460104e581ae2b0f0e0afb3d5a308b2c9355a4832d7eec83d4e5b7a159",
     "src/hey_swift/wakeword/__init__.py": "06e1a73cdefe544c282b9f04826b27e2e9b9c5a9518292c45450b6f5c0bf308b",
     "src/hey_swift/wakeword/dataset.py": "34584c0aa88658d598c19ac828eeb3fbaf54c69edab4f6a718c170b78f810932",
     "src/hey_swift/wakeword/evaluate.py": "37f4ebb7cf21966f6e8d7426f064aac90457a8221bb67353cf12479132bc81ff",

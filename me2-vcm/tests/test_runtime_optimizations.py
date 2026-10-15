@@ -15,6 +15,28 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 
+def test_workspace_initializes_missing_root_and_preserves_state(monkeypatch, tmp_path):
+    import tempfile
+    from hey_swift.integration import runtime
+
+    root = tmp_path / "fresh_checkout" / "integration"
+    monkeypatch.setattr(runtime, "ROOT", root)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tempfile, "tempdir", None)
+
+    runtime.prepare_workspace()
+    assert Path.cwd() == root
+    assert tempfile.tempdir == str(root / "tmp")
+    for name in ("state", "logs", "tmp"):
+        assert (root / name).is_dir()
+        assert (root / name).stat().st_mode & 0o777 == 0o700
+
+    saved = root / "state" / "existing.json"
+    saved.write_text("preserve me")
+    runtime.prepare_workspace()
+    assert saved.read_text() == "preserve me"
+
+
 def test_piper_prewarms_and_reuses_file_backed_wav(monkeypatch, tmp_path):
     from hey_swift.audio.speech import PiperSpeech
 

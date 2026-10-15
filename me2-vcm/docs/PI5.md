@@ -33,6 +33,11 @@ evaluation downloads its audio Parquet separately. The full-repository
 `scripts/reproduce.py verify` checks files omitted from this sparse checkout,
 so do not run it here. The measurement and assistant commands below load the
 selected model contracts. Use --system-site-packages so apt's lgpio is visible.
+The assistant creates its private integration/ runtime root and state/, logs/,
+and tmp/ subdirectories automatically, including on a fresh sparse checkout.
+If an older checkout reports a missing integration/state path, run
+`git -C ~/ai231 pull --ff-only` before retrying. The immediate workaround is
+`mkdir -p ~/ai231/me2-vcm/integration`; existing state is preserved.
 No torch, pandas, typer, rich or huggingface_hub is needed for live inference.
 The command installs PyArrow for injected evaluation; omit requirements-eval.txt
 for a live-only setup.

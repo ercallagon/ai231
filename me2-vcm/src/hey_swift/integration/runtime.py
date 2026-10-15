@@ -26,6 +26,7 @@ def prepare_workspace():
     Legacy mpv logs are cwd-relative. Piper/OBEX use Python's global tempdir.
     Run in a dedicated process, not inside an unrelated application's process.
     """
+    ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
     for name in ("state", "logs", "tmp"):
         (ROOT / name).mkdir(exist_ok=True, mode=0o700)
     os.chdir(ROOT)
