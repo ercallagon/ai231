@@ -1,0 +1,3 @@
+# Frozen manifests, source and model checksums must survive Windows checkout.
+# Preserve original bytes, including CSV CRLF and carried-over hardware sources.
+* -text whitespace=cr-at-eol
