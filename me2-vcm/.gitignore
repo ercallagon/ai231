@@ -1,0 +1,78 @@
+# --- Scratch / tooling (never commit) -------------------------------------
+work/
+tmp/
+.onit/
+serve_logs/
+serve_registry.json
+__pycache__/
+*.py[cod]
+*.pyo
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Python envs / build ----------------------------------------------------
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+*.egg
+
+# --- Heavy data (re-downloadable / regenerable) -----------------------------
+!data/
+!data/vcm/
+!data/vcm/protocols/
+!data/vcm/protocols/**/
+!data/vcm/protocols/**/*.csv
+!data/vcm/protocols/**/*.json
+# Only data/**/manifests/ is committed. Everything else is reproducible.
+# (.gitkeep markers are re-included so empty dirs survive in git.)
+data/wakeword/raw/
+data/wakeword/processed/
+data/vcm/raw/
+data/vcm/processed/
+!data/**/raw/.gitkeep
+!data/**/processed/.gitkeep
+*.parquet
+*.arrow
+*.npy
+*.npz
+*.wav
+*.flac
+*.mp3
+*.bin
+
+# --- Model / training artifacts (regenerable via scripts/) ------------------
+experiments/
+models/wakeword/*.onnx
+models/wakeword/*.pt
+models/vcm/*.onnx
+models/vcm/*.pt
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.onnx.data
+
+# Explicitly curated submission artifacts; no blanket force-add.
+!experiments/
+!experiments/**
+!experiments/selected/checkpoint.pt
+!experiments/baseline/checkpoint.pt
+!models/vcm/selected.onnx
+!models/vcm/run043.onnx
+!models/wakeword/wakeword_exp15_mined_lp.onnx
+!audio/wake_chime.wav
+
+# --- Secrets / local overrides ----------------------------------------------
+.env
+*.secret
+secrets/
+*.local.yaml
+overrides/
+*.ses
+*.session
+*.session-journal

@@ -1,0 +1,100 @@
+{
+  "tests": {
+    "source": {
+      "tests": 172,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 4,
+      "passed": 168
+    },
+    "benchmark": {
+      "tests": 174,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passed": 174
+    }
+  },
+  "clean_export_reproduction": {
+    "test_selected": "all cohort counts/confusions/decisions match; logits within 2e-4",
+    "test_run043": "all cohort counts/confusions/decisions match; logits within 2e-4",
+    "holdout_selected": "all cohort counts/confusions/decisions match; logits within 2e-4",
+    "holdout_run043": "all cohort counts/confusions/decisions match; logits within 2e-4"
+  },
+  "clean_environment_packages": [
+    {
+      "name": "cffi",
+      "version": "2.1.1"
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19"
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.4"
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.30.0"
+    },
+    {
+      "name": "packaging",
+      "version": "26.3"
+    },
+    {
+      "name": "pip",
+      "version": "25.0.1"
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.2"
+    },
+    {
+      "name": "pyarrow",
+      "version": "23.0.1"
+    },
+    {
+      "name": "pycparser",
+      "version": "3.11"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.3"
+    },
+    {
+      "name": "scipy",
+      "version": "1.18.1"
+    },
+    {
+      "name": "soundfile",
+      "version": "0.13.1"
+    }
+  ],
+  "clean_environment": "Fresh Python 3.12 venv, inference/evaluation wheels only; no torch/pandas training dependencies",
+  "data_reuse": "Only hash-verified pinned public Parquet files reused; no hidden source/feature caches required",
+  "pi313_aarch64_wheel_files": [
+    "cffi-2.1.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+    "colorzero-2.0-py2.py3-none-any.whl",
+    "dbus_next-0.2.3-py3-none-any.whl",
+    "flatbuffers-25.12.19-py2.py3-none-any.whl",
+    "gpiozero-2.0.1.post3-py3-none-any.whl",
+    "numpy-2.5.4-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+    "onnxruntime-1.30.0-cp313-cp313-manylinux_2_28_aarch64.whl",
+    "packaging-26.3-py3-none-any.whl",
+    "protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl",
+    "pyarrow-23.0.1-cp313-cp313-manylinux_2_28_aarch64.whl",
+    "pycparser-3.11-py3-none-any.whl",
+    "pyyaml-6.0.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+    "scipy-1.18.1-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+    "setuptools-84.0.0-py3-none-any.whl",
+    "sounddevice-0.5.6-py3-none-any.whl",
+    "soundfile-0.13.1-py2.py3-none-manylinux_2_28_aarch64.whl"
+  ],
+  "actual_pi_verification": false,
+  "code_default": "selected",
+  "confidence_threshold": 0.954,
+  "source_fallback": "run043",
+  "binary_private_path_scan": "No private HPC path marker in selected/baseline checkpoints or three published ONNX files",
+  "remote_authentication": "GitHub HTTPS push lacks an authenticated username; publication not yet confirmed"
+}

@@ -1,0 +1,87 @@
+========================================================================
+Hey Swift wake-word reproducibility training  tag=exp15_repro
+device     : cuda:0
+gpu        : NVIDIA A100-SXM4-40GB
+seed       : 20260926
+cfg        : lr=0.0003 bs=32 wd=0.0001 wake_w=1.0 ls=0.0 vtlp=0.3 spec=0.5 shift=12 cosine_floor=0.0 fa_cap=0.05 AUGPROB=0.85 SNREXT=0.35x(0.0, 10.0) LPPROB=0.45x(3000.0, 5000.0)Hz
+train  : wake=1931  not-wake=12887  total=14818
+valid  : wake=414  not-wake=726  total=1140
+test   : wake=415  not-wake=728  total=1143
+model    : WakeGRU n_classes=2  params=204738  size~0.82 MB fp32
+ep01 tloss=0.3685 | VAL thr=0.24 P=0.679 R=0.174 F1=0.277 FA=4.68% FR=82.6% | TRpos=0.213 VApos=0.157 | tempR=0.048 | lr=3.00e-04 317s
+   -> new best (score=0.174,0.277) *
+ep02 tloss=0.3359 | VAL thr=0.25 P=0.745 R=0.254 F1=0.378 FA=4.96% FR=74.6% | TRpos=0.290 VApos=0.197 | tempR=0.053 | lr=2.99e-04 259s
+   -> new best (score=0.254,0.378) *
+ep03 tloss=0.3059 | VAL thr=0.13 P=0.870 R=0.519 F1=0.651 FA=4.41% FR=48.1% | TRpos=0.258 VApos=0.137 | tempR=0.200 | lr=2.98e-04 264s
+   -> new best (score=0.519,0.651) *
+ep04 tloss=0.2807 | VAL thr=0.38 P=0.868 R=0.572 F1=0.690 FA=4.96% FR=42.8% | TRpos=0.470 VApos=0.443 | tempR=0.222 | lr=2.97e-04 285s
+   -> new best (score=0.572,0.690) *
+ep05 tloss=0.2665 | VAL thr=0.13 P=0.860 R=0.519 F1=0.648 FA=4.82% FR=48.1% | TRpos=0.381 VApos=0.255 | tempR=0.203 | lr=2.95e-04 301s
+ep06 tloss=0.2462 | VAL thr=0.14 P=0.878 R=0.606 F1=0.717 FA=4.82% FR=39.4% | TRpos=0.440 VApos=0.343 | tempR=0.232 | lr=2.93e-04 317s
+   -> new best (score=0.606,0.717) *
+ep07 tloss=0.2353 | VAL thr=0.13 P=0.875 R=0.611 F1=0.720 FA=4.96% FR=38.9% | TRpos=0.450 VApos=0.376 | tempR=0.220 | lr=2.90e-04 336s
+   -> new best (score=0.611,0.720) *
+ep08 tloss=0.2145 | VAL thr=0.07 P=0.898 R=0.768 F1=0.828 FA=4.96% FR=23.2% | TRpos=0.524 VApos=0.364 | tempR=0.338 | lr=2.87e-04 320s
+   -> new best (score=0.768,0.828) *
+ep09 tloss=0.2073 | VAL thr=0.12 P=0.907 R=0.802 F1=0.851 FA=4.68% FR=19.8% | TRpos=0.513 VApos=0.516 | tempR=0.362 | lr=2.84e-04 308s
+   -> new best (score=0.802,0.851) *
+ep10 tloss=0.1992 | VAL thr=0.25 P=0.906 R=0.816 F1=0.859 FA=4.82% FR=18.4% | TRpos=0.575 VApos=0.609 | tempR=0.365 | lr=2.80e-04 302s
+   -> new best (score=0.816,0.859) *
+ep11 tloss=0.1959 | VAL thr=0.34 P=0.898 R=0.766 F1=0.827 FA=4.96% FR=23.4% | TRpos=0.635 VApos=0.639 | tempR=0.333 | lr=2.76e-04 332s
+ep12 tloss=0.1793 | VAL thr=0.10 P=0.909 R=0.821 F1=0.863 FA=4.68% FR=17.9% | TRpos=0.613 VApos=0.530 | tempR=0.372 | lr=2.71e-04 335s
+   -> new best (score=0.821,0.863) *
+ep13 tloss=0.1725 | VAL thr=0.14 P=0.910 R=0.831 F1=0.869 FA=4.68% FR=16.9% | TRpos=0.476 VApos=0.603 | tempR=0.384 | lr=2.67e-04 300s
+   -> new best (score=0.831,0.869) *
+ep14 tloss=0.1714 | VAL thr=0.27 P=0.909 R=0.816 F1=0.860 FA=4.68% FR=18.4% | TRpos=0.765 VApos=0.705 | tempR=0.372 | lr=2.61e-04 346s
+ep15 tloss=0.1649 | VAL thr=0.10 P=0.905 R=0.831 F1=0.866 FA=4.96% FR=16.9% | TRpos=0.669 VApos=0.545 | tempR=0.382 | lr=2.56e-04 341s
+ep16 tloss=0.1683 | VAL thr=0.16 P=0.910 R=0.879 F1=0.894 FA=4.96% FR=12.1% | TRpos=0.660 VApos=0.637 | tempR=0.415 | lr=2.50e-04 357s
+   -> new best (score=0.879,0.894) *
+ep17 tloss=0.1571 | VAL thr=0.11 P=0.916 R=0.867 F1=0.891 FA=4.55% FR=13.3% | TRpos=0.736 VApos=0.664 | tempR=0.403 | lr=2.44e-04 366s
+ep18 tloss=0.1593 | VAL thr=0.05 P=0.907 R=0.824 F1=0.863 FA=4.82% FR=17.6% | TRpos=0.608 VApos=0.487 | tempR=0.377 | lr=2.38e-04 330s
+ep19 tloss=0.1484 | VAL thr=0.15 P=0.912 R=0.896 F1=0.904 FA=4.96% FR=10.4% | TRpos=0.722 VApos=0.710 | tempR=0.428 | lr=2.32e-04 323s
+   -> new best (score=0.896,0.904) *
+ep20 tloss=0.1460 | VAL thr=0.08 P=0.906 R=0.838 F1=0.871 FA=4.96% FR=16.2% | TRpos=0.603 VApos=0.542 | tempR=0.384 | lr=2.25e-04 328s
+ep21 tloss=0.1450 | VAL thr=0.19 P=0.910 R=0.884 F1=0.897 FA=4.96% FR=11.6% | TRpos=0.728 VApos=0.711 | tempR=0.415 | lr=2.18e-04 339s
+ep22 tloss=0.1397 | VAL thr=0.07 P=0.907 R=0.845 F1=0.875 FA=4.96% FR=15.5% | TRpos=0.634 VApos=0.606 | tempR=0.391 | lr=2.11e-04 336s
+ep23 tloss=0.1439 | VAL thr=0.12 P=0.911 R=0.891 F1=0.901 FA=4.96% FR=10.9% | TRpos=0.637 VApos=0.653 | tempR=0.420 | lr=2.04e-04 331s
+ep24 tloss=0.1358 | VAL thr=0.11 P=0.907 R=0.845 F1=0.875 FA=4.96% FR=15.5% | TRpos=0.675 VApos=0.634 | tempR=0.386 | lr=1.96e-04 325s
+ep25 tloss=0.1349 | VAL thr=0.11 P=0.907 R=0.848 F1=0.876 FA=4.96% FR=15.2% | TRpos=0.705 VApos=0.602 | tempR=0.386 | lr=1.89e-04 339s
+ep26 tloss=0.1263 | VAL thr=0.15 P=0.911 R=0.867 F1=0.889 FA=4.82% FR=13.3% | TRpos=0.711 VApos=0.677 | tempR=0.406 | lr=1.81e-04 316s
+ep27 tloss=0.1350 | VAL thr=0.09 P=0.910 R=0.877 F1=0.893 FA=4.96% FR=12.3% | TRpos=0.652 VApos=0.569 | tempR=0.413 | lr=1.73e-04 300s
+ep28 tloss=0.1259 | VAL thr=0.16 P=0.911 R=0.889 F1=0.900 FA=4.96% FR=11.1% | TRpos=0.710 VApos=0.721 | tempR=0.423 | lr=1.66e-04 308s
+ep29 tloss=0.1257 | VAL thr=0.11 P=0.915 R=0.886 F1=0.901 FA=4.68% FR=11.4% | TRpos=0.714 VApos=0.673 | tempR=0.415 | lr=1.58e-04 302s
+ep30 tloss=0.1278 | VAL thr=0.09 P=0.912 R=0.829 F1=0.868 FA=4.55% FR=17.1% | TRpos=0.647 VApos=0.584 | tempR=0.367 | lr=1.50e-04 304s
+ep31 tloss=0.1257 | VAL thr=0.09 P=0.912 R=0.899 F1=0.905 FA=4.96% FR=10.1% | TRpos=0.695 VApos=0.678 | tempR=0.420 | lr=1.42e-04 330s
+   -> new best (score=0.899,0.905) *
+ep32 tloss=0.1271 | VAL thr=0.06 P=0.908 R=0.807 F1=0.854 FA=4.68% FR=19.3% | TRpos=0.687 VApos=0.535 | tempR=0.357 | lr=1.34e-04 319s
+ep33 tloss=0.1150 | VAL thr=0.06 P=0.911 R=0.870 F1=0.890 FA=4.82% FR=13.0% | TRpos=0.703 VApos=0.636 | tempR=0.406 | lr=1.27e-04 323s
+ep34 tloss=0.1163 | VAL thr=0.08 P=0.906 R=0.841 F1=0.872 FA=4.96% FR=15.9% | TRpos=0.721 VApos=0.629 | tempR=0.382 | lr=1.19e-04 316s
+ep35 tloss=0.1147 | VAL thr=0.13 P=0.921 R=0.896 F1=0.908 FA=4.41% FR=10.4% | TRpos=0.747 VApos=0.718 | tempR=0.420 | lr=1.11e-04 316s
+ep36 tloss=0.1134 | VAL thr=0.07 P=0.912 R=0.899 F1=0.905 FA=4.96% FR=10.1% | TRpos=0.729 VApos=0.696 | tempR=0.423 | lr=1.04e-04 320s
+ep37 tloss=0.1109 | VAL thr=0.10 P=0.918 R=0.947 F1=0.932 FA=4.82% FR=5.3% | TRpos=0.747 VApos=0.780 | tempR=0.464 | lr=9.62e-05 319s
+   -> new best (score=0.947,0.932) *
+ep38 tloss=0.1152 | VAL thr=0.08 P=0.917 R=0.911 F1=0.914 FA=4.68% FR=8.9% | TRpos=0.765 VApos=0.708 | tempR=0.432 | lr=8.90e-05 312s
+ep39 tloss=0.1045 | VAL thr=0.09 P=0.916 R=0.891 F1=0.903 FA=4.68% FR=10.9% | TRpos=0.769 VApos=0.692 | tempR=0.423 | lr=8.19e-05 324s
+ep40 tloss=0.1072 | VAL thr=0.14 P=0.924 R=0.915 F1=0.920 FA=4.27% FR=8.5% | TRpos=0.797 VApos=0.777 | tempR=0.437 | lr=7.50e-05 325s
+ep41 tloss=0.1031 | VAL thr=0.06 P=0.919 R=0.935 F1=0.927 FA=4.68% FR=6.5% | TRpos=0.766 VApos=0.739 | tempR=0.452 | lr=6.83e-05 323s
+ep42 tloss=0.1064 | VAL thr=0.12 P=0.917 R=0.903 F1=0.910 FA=4.68% FR=9.7% | TRpos=0.769 VApos=0.742 | tempR=0.437 | lr=6.18e-05 320s
+ep43 tloss=0.1059 | VAL thr=0.07 P=0.919 R=0.908 F1=0.914 FA=4.55% FR=9.2% | TRpos=0.767 VApos=0.709 | tempR=0.432 | lr=5.56e-05 316s
+ep44 tloss=0.1025 | VAL thr=0.07 P=0.917 R=0.913 F1=0.915 FA=4.68% FR=8.7% | TRpos=0.750 VApos=0.705 | tempR=0.437 | lr=4.96e-05 328s
+ep45 tloss=0.1029 | VAL thr=0.10 P=0.916 R=0.920 F1=0.918 FA=4.82% FR=8.0% | TRpos=0.767 VApos=0.732 | tempR=0.440 | lr=4.39e-05 318s
+ep46 tloss=0.1014 | VAL thr=0.08 P=0.913 R=0.913 F1=0.913 FA=4.96% FR=8.7% | TRpos=0.767 VApos=0.703 | tempR=0.435 | lr=3.85e-05 327s
+ep47 tloss=0.0985 | VAL thr=0.07 P=0.915 R=0.913 F1=0.914 FA=4.82% FR=8.7% | TRpos=0.777 VApos=0.708 | tempR=0.435 | lr=3.34e-05 353s
+ep48 tloss=0.1030 | VAL thr=0.09 P=0.919 R=0.906 F1=0.912 FA=4.55% FR=9.4% | TRpos=0.761 VApos=0.710 | tempR=0.432 | lr=2.86e-05 350s
+ep49 tloss=0.0945 | VAL thr=0.11 P=0.916 R=0.891 F1=0.903 FA=4.68% FR=10.9% | TRpos=0.785 VApos=0.715 | tempR=0.418 | lr=2.42e-05 325s
+ep50 tloss=0.0955 | VAL thr=0.07 P=0.919 R=0.899 F1=0.908 FA=4.55% FR=10.1% | TRpos=0.774 VApos=0.706 | tempR=0.420 | lr=2.01e-05 310s
+ep51 tloss=0.0963 | VAL thr=0.07 P=0.911 R=0.891 F1=0.901 FA=4.96% FR=10.9% | TRpos=0.760 VApos=0.695 | tempR=0.423 | lr=1.63e-05 323s
+ep52 tloss=0.0953 | VAL thr=0.09 P=0.915 R=0.908 F1=0.912 FA=4.82% FR=9.2% | TRpos=0.793 VApos=0.726 | tempR=0.430 | lr=1.30e-05 323s
+ep53 tloss=0.0922 | VAL thr=0.11 P=0.918 R=0.915 F1=0.917 FA=4.68% FR=8.5% | TRpos=0.809 VApos=0.760 | tempR=0.432 | lr=9.96e-06 319s
+ep54 tloss=0.0968 | VAL thr=0.08 P=0.915 R=0.935 F1=0.925 FA=4.96% FR=6.5% | TRpos=0.797 VApos=0.752 | tempR=0.449 | lr=7.34e-06 307s
+ep55 tloss=0.0935 | VAL thr=0.10 P=0.917 R=0.935 F1=0.926 FA=4.82% FR=6.5% | TRpos=0.794 VApos=0.771 | tempR=0.449 | lr=5.11e-06 299s
+ep56 tloss=0.0906 | VAL thr=0.09 P=0.916 R=0.925 F1=0.921 FA=4.82% FR=7.5% | TRpos=0.793 VApos=0.745 | tempR=0.442 | lr=3.28e-06 294s
+ep57 tloss=0.0986 | VAL thr=0.08 P=0.914 R=0.930 F1=0.922 FA=4.96% FR=7.0% | TRpos=0.796 VApos=0.755 | tempR=0.444 | lr=1.85e-06 266s
+EARLY STOP at ep57 (no improvement 20)
+
+[val] BEST thr=0.10 P=0.918 R=0.947 F1=0.932 FA=4.82% FR=5.3%  (tp392 fp35 fn22 tn691)
+
+[test] BEST thr=0.19 P=0.907 R=0.846 F1=0.875 FA=4.95% FR=15.4%  (tp351 fp36 fn64 tn692)

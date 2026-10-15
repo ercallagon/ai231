@@ -1,0 +1,81 @@
+data:
+  protocol: data/vcm/protocols/hf_grouped_v2b/protocol.json
+  manifests: data/vcm/protocols/hf_grouped_v2b/manifests
+audio:
+  sample_rate: 16000
+  n_fft: 400
+  hop_length: 160
+  n_mels: 80
+  window_seconds: 6.0
+  f_min: 20.0
+  f_max: 8000.0
+  frames: 600
+  padding: masked_log_floor_right
+  crop: false
+  final_partial_frame: zero_pad_to_cover
+  validity_mask_input: true
+schema:
+  n_way_head: 20
+  oos_class: OUT_OF_SCOPE
+  slot_reject: true
+  slotted_intents:
+  - TIMER
+  - ALARM
+  - TEMPERATURE
+  - BRIGHTNESS
+  - COLOR
+  - CREATE_REMINDER
+  slot_sets:
+    TIMER:
+    - 10s
+    - 30s
+    - 1m
+    ALARM:
+    - 6AM
+    - 8AM
+    - 9PM
+    TEMPERATURE:
+    - '18'
+    - '22'
+    - '26'
+    - REJECT
+    BRIGHTNESS:
+    - '20'
+    - '60'
+    - '100'
+    COLOR:
+    - red
+    - blue
+    - green
+    CREATE_REMINDER:
+    - drink_water
+    - study
+    - exercise
+training:
+  seed: 42
+  batch: 32
+  epochs: 120
+  minimum_epochs: 40
+  patience: 20
+  lr: 0.0003
+  weight_decay: 0.01
+  label_smoothing: 0.05
+  slot_weight: 0.75
+  real_mass: 0.3
+  capacity_seconds: 6
+  frames: 600
+  selection_overall_weight: 0.7
+  selection_real_weight: 0.3
+  allocator_fraction: 0.3
+  gpu_free_mib: 16384
+  gradient_clip: 5.0
+  pretrained: false
+  arch: bc8_fullcontext_tcn_asp
+oos:
+  strategy: learned_plus_confidence_gate
+  confidence_threshold: 0.5
+experiment:
+  initialization: scratch_only
+  test_holdout_exposure_disclosed: true
+  no_new_test_holdout_evaluation: true
+  source: work/vcm_final_context_20261014_v1/run.py

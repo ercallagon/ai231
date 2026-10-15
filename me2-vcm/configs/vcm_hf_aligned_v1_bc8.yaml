@@ -1,0 +1,80 @@
+# Use scripts/vcm_bc8_trial.py; do not use the generic trainer CLI.
+data:
+  hf_root: data/vcm/raw
+  protocol: data/vcm/protocols/hf_aligned_v1/protocol.json
+  manifests: data/vcm/protocols/hf_aligned_v1/manifests
+  feature_cache: data/vcm/processed/hf_aligned_v1
+audio:
+  sample_rate: 16000
+  n_fft: 400
+  hop_length: 160
+  n_mels: 80
+  window_seconds: 2.0
+  f_min: 20.0
+  f_max: 8000.0
+schema:
+  n_way_head: 20
+  oos_class: OUT_OF_SCOPE
+  slot_reject: false
+  slotted_intents:
+  - TIMER
+  - ALARM
+  - TEMPERATURE
+  - BRIGHTNESS
+  - COLOR
+  - CREATE_REMINDER
+  slot_sets:
+    TIMER:
+    - 10s
+    - 30s
+    - 1m
+    ALARM:
+    - 6AM
+    - 8AM
+    - 9PM
+    TEMPERATURE:
+    - '18'
+    - '22'
+    - '26'
+    BRIGHTNESS:
+    - '20'
+    - '60'
+    - '100'
+    COLOR:
+    - red
+    - blue
+    - green
+    CREATE_REMINDER:
+    - drink_water
+    - study
+    - exercise
+training:
+  arch: a4
+  seed: 42
+  epochs: 30
+  batch_size: 256
+  lr: 0.003
+  optimizer: adamw
+  weight_decay: 0.01
+  warmup_epochs: 2
+  early_stop_patience: 8
+  device: cuda
+  num_workers: 4
+  augment_mode: spec_aug
+  label_smoothing: 0.05
+  enable_slot_heads: true
+  slot_loss_weight: 0.5
+oos:
+  strategy: learned_plus_confidence_gate
+  confidence_threshold: 0.5
+experiment:
+  architecture: bc_resnet_broadcast8
+  factory_routing_key: a4
+  entrypoint: scripts/vcm_bc8_trial.py
+  note: Isolated factory bridge; a4 is not the historical A4 architecture. Do not
+    run this config through the generic CLI.
+  implementation_sha256:
+    src/hey_swift/vcm/broadcast.py: e7bb77787dfa72d69b156feb860d9a56d93dd5043caa7bd1533770de4c341131
+    scripts/vcm_bc8_trial.py: 647b1c99735f2dafe51a9e66685b136cf575e064a0a0c6bb8c771819d819be3b
+    scripts/run_vcm_bc8_queue.py: 28e819dba4e248b78db51d4805385caec48a701c3f63c25bd0bb858bbd5a4512
+    src/hey_swift/vcm/THIRD_PARTY_BCRESNET_LICENSE.txt: 6a5a9905a39b4748a8a18650eccb476072ed151eb9557268050924c7f59f012a

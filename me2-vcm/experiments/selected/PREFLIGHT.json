@@ -1,0 +1,29 @@
+{
+  "bytes": 2028874,
+  "host_cpu_p50_ms": 24.337374605238438,
+  "host_cpu_p95_ms": 25.05102176219225,
+  "threads": 1,
+  "pi_verified": false,
+  "input_shapes": {
+    "mel": [
+      "batch",
+      1,
+      80,
+      600
+    ],
+    "frame_mask": [
+      "batch",
+      1,
+      600
+    ]
+  },
+  "batch1_2_parity": true,
+  "intent_temperature_baked_once": 1.0,
+  "parameters": 488264,
+  "finite_backward": true,
+  "full_recording_tail_retention": true,
+  "no_silent_truncation": true,
+  "no_pretrained_weights": true,
+  "initial_state_sha256": "8c12b2570ba6d9a38879a756c6f694f312e1971de3ad98a09650e763dbdcc3cf",
+  "complete_word_retention": "UNVERIFIED"
+}

@@ -1,0 +1,28 @@
+{
+  "gpu": 7,
+  "params": {
+    "seed": 42,
+    "batch": 32,
+    "epochs": 120,
+    "minimum_epochs": 40,
+    "patience": 20,
+    "lr": 0.0003,
+    "weight_decay": 0.01,
+    "label_smoothing": 0.05,
+    "slot_weight": 0.75,
+    "real_mass": 0.3,
+    "capacity_seconds": 6,
+    "frames": 600,
+    "selection_overall_weight": 0.7,
+    "selection_real_weight": 0.3,
+    "allocator_fraction": 0.3,
+    "gpu_free_mib": 16384,
+    "gradient_clip": 5.0,
+    "pretrained": false
+  },
+  "initial_state_sha256": "8c12b2570ba6d9a38879a756c6f694f312e1971de3ad98a09650e763dbdcc3cf",
+  "eligible": 25330,
+  "real_multiplier": 6.689929742388759,
+  "freeze_sha256": "96cc4e123753b39824ab9cf4213bc5317eb308da1ea90356905e882838f0c451",
+  "train_from_scratch": true
+}

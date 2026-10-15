@@ -1,0 +1,13 @@
+{
+  "parent": "experiments/vcm/run_042_hf_grouped_v2b_bc8_s42",
+  "parent_checkpoint_sha256": "3424e919ac84d50677bee7c7a60403b811fb9ecc218129b82d8681478d227ce3",
+  "training_real_fraction": 0.061460222344871085,
+  "target_real_intent_loss_mass": 0.3,
+  "real_intent_multiplier": 6.544579858883901,
+  "semantics": "Target is source mass before interacting with class weights; realized batch mass varies",
+  "slot_loss_unchanged": true,
+  "optimizer_reset": true,
+  "architecture_unchanged": true,
+  "new_audio": false,
+  "test_holdout_or_challenge_used_for_choices": false
+}

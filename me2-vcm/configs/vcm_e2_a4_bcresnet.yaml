@@ -1,0 +1,100 @@
+# =============================================================================
+# run_012 — BC-ResNet (A4) on the STANDARD 34k train set.
+#
+# Controlled comparison vs run_006 champion (vcm_e2_improved.yaml, A1 DS-CNN).
+# ONLY variable is the architecture: a1 (DS-CNN 966K) -> a4 (BC-ResNet small).
+# Everything else is byte-identical to run_006:
+#   - data: standard train_19intent.csv (34,487 clips), NO OOS injection
+#     (run_011 pilot showed OOS-injection HURTS: OOS-P 0.33 vs 0.54, OOS-R
+#      0.25 vs 0.79). Dropped for this run.
+#   - frozen test/val/holdout: untouched (byte-identical splits).
+#   - seed 42, lr 0.003, batch 256, spec_aug, label_smoothing 0.05,
+#     warmup 2, patience 8, conf threshold 0.50.
+#
+# Rationale (architecture ladder, user-directed): BC-ResNet (Kim et al.,
+# Interspeech 2021, arXiv:2106.04140) is the best next candidate — 1-D
+# temporal-conv efficiency + 2-D time-frequency residual modelling, proven on
+# Google Speech Commands at small param/FLOP budgets. Targets OOS
+# false-accepts + edge latency (the current bottleneck), NOT raw capacity.
+#
+# Success criterion: beat run_006 on frozen-test OOS precision (0.5388) and/or
+# false-accepts (220 FP) without regressing intent accuracy (0.8900).
+# =============================================================================
+data:
+  hf_root: data/vcm/raw
+  manifests: data/vcm/manifests
+  splits: data/vcm/manifests/splits.json
+  frozen_test: data/vcm/manifests/test_19intent_frozen.csv
+  holdout: data/vcm/manifests/holdout_untouched.csv
+audio:
+  sample_rate: 16000
+  mono: true
+  n_fft: 400
+  hop_length: 160
+  n_mels: 80
+  window_seconds: 2.0
+  f_min: 20.0
+  f_max: 8000.0
+  center_crop_pad: true
+schema:
+  n_intents: 19
+  oos_class: OUT_OF_SCOPE
+  n_way_head: 20
+  slotted_intents:
+  - TIMER
+  - ALARM
+  - TEMPERATURE
+  - BRIGHTNESS
+  - COLOR
+  - CREATE_REMINDER
+  slot_reject: false
+  slot_sets:
+    TIMER:
+    - 10s
+    - 30s
+    - 1m
+    - REJECT
+    ALARM:
+    - 6AM
+    - 8AM
+    - 9PM
+    - REJECT
+    TEMPERATURE:
+    - 18
+    - 22
+    - 26
+    - REJECT
+    BRIGHTNESS:
+    - 20
+    - 60
+    - 100
+    - REJECT
+    COLOR:
+    - red
+    - blue
+    - green
+    - REJECT
+    CREATE_REMINDER:
+    - drink_water
+    - study
+    - exercise
+    - REJECT
+training:
+  seed: 42
+  epochs: 30
+  batch_size: 256
+  lr: 0.003
+  optimizer: adamw
+  weight_decay: 0.01
+  warmup_epochs: 2
+  early_stop_patience: 8
+  device: cuda
+  checkpoint: best.pt
+  num_workers: 8
+  augment_mode: spec_aug
+  label_smoothing: 0.05
+  # A4 (BC-ResNet small) — the ONLY change vs run_006 (a1).
+  arch: a4
+oos:
+  strategy: learned_plus_confidence_gate
+  confidence_threshold: 0.5

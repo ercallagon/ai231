@@ -1,0 +1,87 @@
+# configs/wakeword.yaml — "Hey Swift" wake-word (keyword-spotting) configuration.
+#
+# Faithful to the validated wakeword_exp15 (mined + consumer-mic low-pass) model.
+# The deployed model is a 2-class WakeGRU (3x ConvBlock -> GRU -> FC head),
+# 204,738 params, exported to ONNX (Pi-deployable, NumPy features, no torch at
+# inference). Training is PyTorch. See docs/training.md (wake-word section) and
+# work/EXP15_RECIPE.md for the full carry-forward recipe.
+
+data:
+  root: data/wakeword
+  raw: data/wakeword/raw
+  processed: data/wakeword/processed
+  manifest_dir: data/wakeword/manifests   # train.csv / validation.csv / test.csv
+  sample_rate: 16000
+  mono: true
+
+audio:
+  sample_rate: 16000
+  n_mels: 40
+  n_fft: 512
+  hop_length: 160
+  win_length: 512
+  target_frames: 100
+  fmin: 20
+  fmax: 8000
+  cmvn: true                 # per-frame CMVN over the mel axis
+  delta: 1                   # static + 1 delta -> (1, 80, 100)
+  input_shape: [80, 100]     # model consumes (B, 80, 100)
+
+model:
+  arch: wake_gru             # 3x ConvBlock -> GRU(128) -> FC head (2-class)
+  n_classes: 2               # 0 = wake, 1 = not-wake
+  channels: [16, 32, 64]
+  gru_hidden: 128
+  dropout: 0.4
+  fc_hidden: 64
+  params_actual: 204738      # verified against historical exp15 best.pt
+  framework_train: pytorch
+  framework_infer: onnx      # ONNX Runtime, CPU (Pi)
+
+inference:
+  threshold: 0.30            # p(wake) fire threshold (deployment operating point)
+  sustain: 2                 # consecutive qualifying hops before firing
+  cooldown_seconds: 2.0      # post-fire suppression window
+  rms_floor_db: -60.0        # per-window silence gate (dBFS)
+  gate_nonwake: 0.90         # require P(not-wake) < 0.90
+  window_seconds: 1.0        # scoring window
+  hop_seconds: 0.25          # scoring hop
+  multiwin: true             # 4 overlapping 1.0 s sub-windows (0.25 s sub-hop)
+  n_subwin: 4
+  subhop_seconds: 0.25
+  onnx: models/wakeword/wakeword_exp15_mined_lp.onnx
+
+training:
+  # Frozen historical exp15 recipe (reproducibility run). Do not change without
+  # re-validating against the historical exp15 result.
+  seed: 20260926
+  epochs: 60
+  patience: 20
+  batch_size: 32
+  batch: 32
+  lr: 0.0003
+  wd: 0.0001
+  optimizer: adamw
+  scheduler: cosine          # cosine annealing to floor 0.0
+  cosine_floor: 0.0
+  loss: cross_entropy
+  wake_weight: 1.0
+  label_smooth: 0.0
+  fa_cap: 0.05               # checkpoint = max(recall,f1) among FA <= fa_cap
+  device: cuda
+  workers: 4
+  # augmentation (training-only)
+  aug_prob: 0.85
+  snr_ext_prob: 0.35
+  snr_ext_lo: 0.0
+  snr_ext_hi: 10.0
+  lp_prob: 0.45
+  lp_lo: 3000.0
+  lp_hi: 5000.0
+  vtlp_prob: 0.3
+  spec_prob: 0.5
+  shift_frames: 12
+  gain_db: [-12.0, 6.0]
+  snr_db: [8.0, 30.0]
+  rt60: [0.15, 0.6]
+  noise_cats: [white, pink, brown, babble, city]

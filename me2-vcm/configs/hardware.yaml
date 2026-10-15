@@ -1,0 +1,46 @@
+# configs/hardware.yaml — Raspberry Pi 5 peripheral / GPIO configuration.
+#
+# These interfaces are OPTIONAL and lazy-imported: importing hey_swift on a
+# laptop (no RPi.GPIO / spidev) must NOT fail. A clear error is raised only
+# when a Pi-specific action is actually invoked. See src/hey_swift/hardware/.
+
+platform:
+  name: raspberrypi5
+  cpu_only: true             # no CUDA at inference; ONNX Runtime CPU EP
+
+led:
+  # Tested Pi adapter: KY-016/common RGB LED through gpiozero RGBLED + lgpio.
+  # Preserve BCM pin order used by src/hey_swift/hardware/devices.py.
+  type: rgb_gpio
+  red_gpio: 17
+  green_gpio: 27
+  blue_gpio: 22
+  active_high: true
+  brightness: 0.4
+  colors:
+    idle: [0, 0, 40]         # dim blue
+    listening: [0, 120, 0]   # green
+    processing: [120, 80, 0] # amber
+    success: [0, 180, 0]     # bright green
+    error: [180, 0, 0]       # red
+
+display:
+  tm1637:                    # 4-digit 7-segment (clock/data)
+    enabled: true
+    # Tested wiring used by src/hey_swift/hardware/devices.py.
+    clk_gpio: 23
+    dio_gpio: 24
+    brightness: 8
+  lcd:                       # character LCD (I2C)
+    enabled: false
+    i2c_addr: 0x27
+    cols: 16
+    rows: 2
+
+audio_io:
+  capture_device: null       # null = default mic; set index/name to override
+  playback_device: null
+  capture_sample_rate: 48000 # Pi 5 board mic accepts 48 kHz only (rejects 16/44.1k); 0 = auto-probe
+  playback_sample_rate: 48000 # Pi speaker rejects 16 kHz; output rendered at this rate
+  capture_block_seconds: 3.0 # max command length captured after wake
+  pre_roll_ms: 200           # audio buffered before wake fires

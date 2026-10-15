@@ -1,0 +1,39 @@
+{
+  "train": {
+    "n": 25366,
+    "eligible": 25330,
+    "statuses": {
+      "ok": 25332,
+      "over_capacity": 34
+    },
+    "exclusions": {
+      "over_capacity": 34,
+      "training_audit_no_speech_uncertain": 2
+    },
+    "real_positive_eligible": 1452
+  },
+  "val": {
+    "n": 2922,
+    "eligible": 2908,
+    "statuses": {
+      "ok": 2908,
+      "over_capacity": 14
+    },
+    "exclusions": {
+      "over_capacity": 14
+    },
+    "real_positive_eligible": 145
+  },
+  "tune_oos": {
+    "n": 400,
+    "eligible": 284,
+    "statuses": {
+      "ok": 284,
+      "over_capacity": 116
+    },
+    "exclusions": {
+      "over_capacity": 116
+    },
+    "real_positive_eligible": 0
+  }
+}

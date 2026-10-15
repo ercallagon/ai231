@@ -1,0 +1,343 @@
+{
+  "schema_version": 1,
+  "version": "run043_reference_v1",
+  "role": "preserved_reference_not_final_release",
+  "selected_final_champion": null,
+  "publication_approved": false,
+  "assets": [
+    {
+      "path": "models/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42.onnx",
+      "role": "vcm_runtime",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/calibrated/model.onnx",
+      "sha256": "2dfde6cb9dc20ac923ac635a92722b2e238464acdc73af63232bf1c916c590b2",
+      "bytes": 1488732,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "docs/dataset.md; mixed dataset terms; trained-model distribution review pending",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {
+        "model": "run_043_hf_grouped_v2b_bc8_sourceft_s42",
+        "input_shape": [
+          "batch",
+          1,
+          80,
+          198
+        ],
+        "audio": {
+          "sample_rate": 16000,
+          "n_fft": 400,
+          "hop_length": 160,
+          "n_mels": 80,
+          "window_seconds": 2.0,
+          "f_min": 20.0,
+          "f_max": 8000.0
+        },
+        "n_way_head": 20,
+        "intents": [
+          "PLAY_MUSIC",
+          "WEATHER",
+          "TIME",
+          "LIGHT_ON",
+          "LIGHT_OFF",
+          "PAUSE",
+          "LIST_REMINDERS",
+          "STOP",
+          "NEXT",
+          "VOLUME_UP",
+          "VOLUME_DOWN",
+          "CALL",
+          "MESSAGE",
+          "TIMER",
+          "ALARM",
+          "TEMPERATURE",
+          "BRIGHTNESS",
+          "COLOR",
+          "CREATE_REMINDER",
+          "OUT_OF_SCOPE"
+        ],
+        "slot_sets": {
+          "TIMER": [
+            "10s",
+            "30s",
+            "1m"
+          ],
+          "ALARM": [
+            "6AM",
+            "8AM",
+            "9PM"
+          ],
+          "TEMPERATURE": [
+            "18",
+            "22",
+            "26"
+          ],
+          "BRIGHTNESS": [
+            "20",
+            "60",
+            "100"
+          ],
+          "COLOR": [
+            "red",
+            "blue",
+            "green"
+          ],
+          "CREATE_REMINDER": [
+            "drink_water",
+            "study",
+            "exercise"
+          ]
+        },
+        "slot_outputs": {
+          "TIMER": "slot_TIMER",
+          "ALARM": "slot_ALARM",
+          "TEMPERATURE": "slot_TEMPERATURE",
+          "BRIGHTNESS": "slot_BRIGHTNESS",
+          "COLOR": "slot_COLOR",
+          "CREATE_REMINDER": "slot_CREATE_REMINDER"
+        },
+        "confidence_threshold": 0.8749999999999998,
+        "temperature_baked_once": 0.6475641442117414,
+        "runtime_temperature_division": false
+      }
+    },
+    {
+      "path": "models/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42.labels.json",
+      "role": "vcm_labels",
+      "source_path": "work/rpi_transfer_run043_runtime_v5_20261010_04/models/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42.labels.json",
+      "sha256": "954ae8e83a8bba3adbc148e5436110df78ae7018c44bdf4d0ca982eebba4d1f7",
+      "bytes": 1058,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Reviewed project-generated label mapping",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "configs/vcm_run_043_calibrated.yaml",
+      "role": "vcm_runtime_config",
+      "source_path": "work/rpi_transfer_run043_runtime_v5_20261010_04/configs/vcm_run_043_calibrated.yaml",
+      "sha256": "025a0872a7f8243b4c84e3f2e44cc7199d1b4e790572414cb2ca3215db4a7fcb",
+      "bytes": 947,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Project source/configuration",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "models/wakeword/wakeword_exp15_mined_lp.onnx",
+      "role": "wake_runtime",
+      "source_path": "models/wakeword/wakeword_exp15_mined_lp.onnx",
+      "sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
+      "bytes": 825493,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Wake recording provenance/consent and model distribution review pending",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {
+        "input_shape": [
+          "batch",
+          80,
+          100
+        ],
+        "output_shape": [
+          "batch",
+          2
+        ],
+        "wake_output_index": 0,
+        "threshold": 0.3,
+        "sustain": 2,
+        "cooldown_seconds": 2,
+        "window_seconds": 1
+      }
+    },
+    {
+      "path": "configs/wakeword.yaml",
+      "role": "wake_config",
+      "source_path": "configs/wakeword.yaml",
+      "sha256": "6d08f76b41b0be78ab641b2c578fd0f424e5f0cb2d3e3a04f367d9c0d8c72038",
+      "bytes": 2802,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Project source/configuration",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "configs/hardware.yaml",
+      "role": "hardware_config",
+      "source_path": "configs/hardware.yaml",
+      "sha256": "1c5c07f13091792ceb95e895c903e1ba2c4eeb8399a07ad2a81a29c6e9808287",
+      "bytes": 1628,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Project source/configuration",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {
+        "rgb_bcm": [
+          17,
+          27,
+          22
+        ],
+        "tm1637_bcm": [
+          23,
+          24
+        ]
+      }
+    },
+    {
+      "path": "models/checkpoints/run_043_hf_grouped_v2b_bc8_sourceft_s42.best.pt",
+      "role": "final_checkpoint_commit_candidate",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/best.pt",
+      "sha256": "efda45e15e513d3e496e17b1286f2dcdf746c274086ed6c37369485e9dc3cced",
+      "bytes": 4175281,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "docs/dataset.md; mixed dataset terms; trained-model distribution review pending",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/train.log",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/train.log",
+      "sha256": "91c88b94c931de29b189ffc71cd502173f8cd2d8975595839ee1f907ae28acd8",
+      "bytes": 2218,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/history.json",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/history.json",
+      "sha256": "58c55cbd142b17c23525c7ddba89837893d6e88dcd0b1c78eef7c1e3a68a5a75",
+      "bytes": 246089,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/config.yaml",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/config.yaml",
+      "sha256": "0b0b88da2fb025aa7eb0096eee66ba664e2d01bf713b0ba6b5a160ae83f5db22",
+      "bytes": 2802,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/calibration.json",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/calibration.json",
+      "sha256": "5e6e5f775f5f78398a757d779b4f4e44af5e1e4d83ced1c25675ac201af79920",
+      "bytes": 8459,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/metrics_test.json",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/metrics_test.json",
+      "sha256": "77ed2a5708245ae7e7d5ece972eefd1e10f099c5b548095869a424d2de226b10",
+      "bytes": 10506,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/metrics_val.json",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/metrics_val.json",
+      "sha256": "43833522a5c082e2201a04d378604abb4fa3d9508f37614602c3706b5df6dc5c",
+      "bytes": 7953,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/calibrated/metrics_test.json",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/calibrated/metrics_test.json",
+      "sha256": "5adf488b1301b0d1166cd6c4dfce2bcaf35c2482708331680c7a6975bd8abb47",
+      "bytes": 9779,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "reports/reference_run043/finetune_provenance.json",
+      "role": "selected_training_evidence",
+      "source_path": "experiments/vcm/run_043_hf_grouped_v2b_bc8_sourceft_s42/finetune_provenance.json",
+      "sha256": "782078bfd2aa828b5c4954a448e3dc9aa9ad4eed7886d28b84a18ce3abcbd403",
+      "bytes": 573,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "Review logs/provenance for private paths/identifiers before publication",
+      "download_ready": false,
+      "blocker": "Release URL and distribution/use review pending",
+      "contract": {}
+    },
+    {
+      "path": "release_metadata/dataset_metadata_hf_grouped_v2b_reference_v1.tar.gz",
+      "role": "dataset_metadata",
+      "sha256": "1b0c730e692af5cdbd25877728b9e7e33732d762020a57a8d62a19c275676676",
+      "bytes": 17264459,
+      "url": null,
+      "use_authorized": false,
+      "terms_reference": "VCM DOI 10.57967/hf/10723 plus separate wake metadata rights review",
+      "download_ready": false,
+      "blocker": "Metadata privacy/terms review and immutable release URL pending"
+    }
+  ],
+  "required_inference_roles": [
+    "vcm_runtime",
+    "vcm_labels",
+    "vcm_runtime_config",
+    "wake_runtime",
+    "wake_config",
+    "hardware_config"
+  ],
+  "unresolved_assets": [
+    "Cue rights or reproducible replacement; preserve locally amplified Pi cue",
+    "Amy voice+JSON immutable retrieval and underlying terms review",
+    "User-owned/licensed offline MP3s; do not redistribute personal demo tracks",
+    "Wake raw audio fetch/generation and consent"
+  ],
+  "invariants": [
+    "No champion/model/threshold/wiring changes",
+    "New candidate requires a new catalog version",
+    "No external pretrained classifier initialization",
+    "Catalog is not permission to download or deploy"
+  ]
+}

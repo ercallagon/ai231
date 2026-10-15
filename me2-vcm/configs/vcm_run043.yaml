@@ -1,0 +1,101 @@
+data:
+  hf_root: data/vcm/raw
+  protocol: data/vcm/protocols/hf_grouped_v2b/protocol.json
+  manifests: data/vcm/protocols/hf_grouped_v2b/manifests
+  feature_cache: data/vcm/processed/hf_grouped_v2b
+audio:
+  sample_rate: 16000
+  n_fft: 400
+  hop_length: 160
+  n_mels: 80
+  window_seconds: 2.0
+  f_min: 20.0
+  f_max: 8000.0
+schema:
+  n_way_head: 20
+  oos_class: OUT_OF_SCOPE
+  slot_reject: false
+  slotted_intents:
+  - TIMER
+  - ALARM
+  - TEMPERATURE
+  - BRIGHTNESS
+  - COLOR
+  - CREATE_REMINDER
+  slot_sets:
+    TIMER:
+    - 10s
+    - 30s
+    - 1m
+    ALARM:
+    - 6AM
+    - 8AM
+    - 9PM
+    TEMPERATURE:
+    - '18'
+    - '22'
+    - '26'
+    BRIGHTNESS:
+    - '20'
+    - '60'
+    - '100'
+    COLOR:
+    - red
+    - blue
+    - green
+    CREATE_REMINDER:
+    - drink_water
+    - study
+    - exercise
+training:
+  arch: a4
+  seed: 42
+  epochs: 12
+  batch_size: 256
+  lr: 0.0003
+  optimizer: adamw
+  weight_decay: 0.01
+  warmup_epochs: 1
+  early_stop_patience: 5
+  device: cuda
+  num_workers: 4
+  augment_mode: spec_aug
+  label_smoothing: 0.05
+  enable_slot_heads: true
+  slot_loss_weight: 0.5
+oos:
+  strategy: learned_plus_confidence_gate
+  confidence_threshold: 0.875
+experiment:
+  architecture: bc_resnet_broadcast8
+  factory_routing_key: a4
+  entrypoint: scripts/vcm_bc8_source_finetune.py
+  note: Warm-start BC8; reset optimizer; source-weighted intent CE only. No new audio
+    or architecture changes.
+  implementation_sha256:
+    src/hey_swift/vcm/broadcast.py: e7bb77787dfa72d69b156feb860d9a56d93dd5043caa7bd1533770de4c341131
+    src/hey_swift/vcm/train_repro.py: d1656bc064dbfcce0e55a248165b979534c8df89df75d6ab57ea7ee9e7fe6cb3
+    src/hey_swift/vcm/augmentation.py: e2ff1391cde2605f1b017ac9f74ed0a360d29398e3dc7b8d1e0e3fdd73d844d1
+    scripts/vcm_bc8_trial.py: 647b1c99735f2dafe51a9e66685b136cf575e064a0a0c6bb8c771819d819be3b
+    scripts/vcm_grouped_bc8_trial.py: f00c92beeaa1ae7d74e8b7967fdd5a107fddebe5f8436b637fe822317a9559aa
+    scripts/run_vcm_grouped_bc8_queue.py: 4be2b57825c203d8c5e93bd5bec17d5947f1f88f3a8ded2cb7cb311533377c5f
+    scripts/prepare_vcm_grouped_protocol.py: e0b6550a92de1809f814f828cea571ad15f606146c786119fd540ab40dabf0ce
+    scripts/prepare_vcm_grouped_trial.py: 15ded64a03a63e05ec84e01d34f0452f338b639633bb8d33bb95203117f992bf
+    src/hey_swift/vcm/THIRD_PARTY_BCRESNET_LICENSE.txt: 6a5a9905a39b4748a8a18650eccb476072ed151eb9557268050924c7f59f012a
+    scripts/vcm_bc8_source_finetune.py: 4a68fdd2ef6db3c0f84124f5aad9703ce9702a7eb4448252e5f0704d60887e7a
+    scripts/run_vcm_sourceft_queue.py: 665ff624d896b8e546222b57f676e13423039d2cb2e130907abf081f09bc5ebc
+    scripts/prepare_vcm_sourceft_trial.py: 72e39836f4d3e46ef95d44c226a6a3cb98f950d355a8dc05824b99594f8585f6
+  trainer: hey_swift.vcm.train_repro
+  source_balance_target: 0.3
+  parent: run_042_hf_grouped_v2b_bc8_s42
+runtime:
+  frontend: legacy_center_crop
+  threads: 1
+  temperature_baked: true
+  pi5_verification: pending_for_this_checkout
+capture:
+  end_silence_ms: 550
+  command_seconds: 5.0
+  speech_start_ms: 120
+  pre_roll_ms: 200
+  speech_start_timeout: 3.0

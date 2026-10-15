@@ -1,0 +1,101 @@
+# run_011 PILOT (5k) — A1, OOS-injection hypothesis test
+
+# Controlled pilot: does targeted numeral/OOS injection improve OOS/rejection
+# performance without hurting valid-command performance?
+#
+# Differences vs configs/vcm_e2_a1_oos_full_precomp.yaml (full-34k run_011):
+#   * train population = 5,000-row stratified pilot (see
+#     data/vcm/pilot/run_011_pilot_5k/sampling_meta.json for the exact sample,
+#     seed, and scaling contract)
+#   * precomputed store tag = run_011_pilot_5k (5,000 rows, 1:1 with the pilot
+#     manifest, deterministic per-row augmentation)
+#   * epochs 15 / patience 4 (cheap signal; full run would use 30/8)
+# Everything else (arch, lr, batch, label smoothing, OOS gate, frozen eval
+# splits) is IDENTICAL so the pilot stays directly comparable to run_006 and
+# to any later scaled run.
+data:
+  hf_root: data/vcm/raw
+  manifests: data/vcm/manifests
+  splits: data/vcm/manifests/splits.json
+  frozen_test: data/vcm/manifests/test_19intent.csv
+  holdout: data/vcm/manifests/holdout_19intent.csv
+  # PILOT train population (val/test/holdout UNCHANGED, byte-identical).
+  manifests_override:
+    train: data/vcm/pilot/run_011_pilot_5k/train_19intent.csv
+audio:
+  sample_rate: 16000
+  mono: true
+  n_fft: 400
+  hop_length: 160
+  n_mels: 80
+  window_seconds: 2.0
+  f_min: 20.0
+  f_max: 8000.0
+  center_crop_pad: true
+schema:
+  n_intents: 19
+  oos_class: OUT_OF_SCOPE
+  n_way_head: 20
+  slotted_intents:
+  - TIMER
+  - ALARM
+  - TEMPERATURE
+  - BRIGHTNESS
+  - COLOR
+  - CREATE_REMINDER
+  slot_reject: false
+  slot_sets:
+    TIMER:
+    - 10s
+    - 30s
+    - 1m
+    - REJECT
+    ALARM:
+    - 6AM
+    - 8AM
+    - 9PM
+    - REJECT
+    TEMPERATURE:
+    - 18
+    - 22
+    - 26
+    - REJECT
+    BRIGHTNESS:
+    - 20
+    - 60
+    - 100
+    - REJECT
+    COLOR:
+    - red
+    - blue
+    - green
+    - REJECT
+    CREATE_REMINDER:
+    - drink_water
+    - study
+    - exercise
+    - REJECT
+training:
+  seed: 42
+  epochs: 30
+  batch_size: 256
+  lr: 0.003
+  optimizer: adamw
+  weight_decay: 0.01
+  warmup_epochs: 2
+  early_stop_patience: 8
+  device: cuda
+  checkpoint: best.pt
+  num_workers: 8
+  # Fallback path only (store covers all 5,000 pilot rows).
+  augment_mode: full
+  # Precomputed deterministic augmented store (5,000 rows, 1:1 with the pilot
+  # manifest). Built once by scripts/build_precomputed_aug.py.
+  use_precomputed_aug: run_011_pilot_5k
+  label_smoothing: 0.05
+  # A1 (966K) — same capacity as run_006 (best val 63.28%).
+  arch: a1
+oos:
+  strategy: learned_plus_confidence_gate
+  # Same OOS-precision target as run_010/full run_011.
+  confidence_threshold: 0.60

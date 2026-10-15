@@ -1,0 +1,20 @@
+{
+  "architecture": "bc8_fullcontext_tcn_asp",
+  "epochs": 72,
+  "best_epoch": 52,
+  "seed": 42,
+  "gpu_model": "NVIDIA A100-SXM4-40GB",
+  "gpu_count": 1,
+  "physical_gpu_index": 7,
+  "logged_epoch_seconds": 13127.226322065108,
+  "logged_epoch_gpu_allocation_hours": 3.6464517561291965,
+  "timing_scope": "Sum of epoch wall durations on one allocated GPU, includes validation and host overhead; not CUDA-active kernel time or CPU preparation/queue time",
+  "optimizer": "AdamW lr0.0003 wd0.01",
+  "scheduler": "ReduceLROnPlateau factor0.5 patience6 min_lr1e-6",
+  "stopping": "minimum40/max120 epochs; patience20, reached at72",
+  "batch": 32,
+  "loss": "class/source-weighted intent CE label_smoothing0.05 +0.75 applicable slot CE; gradient clipping5",
+  "checkpoint_bytes": 6138121,
+  "onnx_bytes": 2136900,
+  "pretrained": false
+}

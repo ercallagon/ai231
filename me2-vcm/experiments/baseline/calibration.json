@@ -1,0 +1,228 @@
+{
+  "temperature": 0.6475641442117414,
+  "temperature_fit_success": true,
+  "val_nll_before": 0.20809416472911835,
+  "val_nll_after": 0.1559393132944132,
+  "chosen": {
+    "threshold": 0.8749999999999998,
+    "tune_oos_false_accept_rate": 0.05,
+    "val_in_scope_correct_action_intent_rate": 0.8995080815179198,
+    "val_in_scope_false_reject_rate": 0.09416725228390724
+  },
+  "candidates": [
+    {
+      "threshold": 0.1,
+      "tune_oos_false_accept_rate": 0.4225,
+      "val_in_scope_correct_action_intent_rate": 0.9617006324666199,
+      "val_in_scope_false_reject_rate": 0.007730147575544624
+    },
+    {
+      "threshold": 0.125,
+      "tune_oos_false_accept_rate": 0.4225,
+      "val_in_scope_correct_action_intent_rate": 0.9617006324666199,
+      "val_in_scope_false_reject_rate": 0.007730147575544624
+    },
+    {
+      "threshold": 0.15,
+      "tune_oos_false_accept_rate": 0.4225,
+      "val_in_scope_correct_action_intent_rate": 0.9617006324666199,
+      "val_in_scope_false_reject_rate": 0.007730147575544624
+    },
+    {
+      "threshold": 0.175,
+      "tune_oos_false_accept_rate": 0.42,
+      "val_in_scope_correct_action_intent_rate": 0.9617006324666199,
+      "val_in_scope_false_reject_rate": 0.007730147575544624
+    },
+    {
+      "threshold": 0.19999999999999998,
+      "tune_oos_false_accept_rate": 0.42,
+      "val_in_scope_correct_action_intent_rate": 0.9617006324666199,
+      "val_in_scope_false_reject_rate": 0.007730147575544624
+    },
+    {
+      "threshold": 0.22499999999999998,
+      "tune_oos_false_accept_rate": 0.4175,
+      "val_in_scope_correct_action_intent_rate": 0.9617006324666199,
+      "val_in_scope_false_reject_rate": 0.008081517919887562
+    },
+    {
+      "threshold": 0.24999999999999997,
+      "tune_oos_false_accept_rate": 0.415,
+      "val_in_scope_correct_action_intent_rate": 0.9613492621222769,
+      "val_in_scope_false_reject_rate": 0.009486999297259312
+    },
+    {
+      "threshold": 0.27499999999999997,
+      "tune_oos_false_accept_rate": 0.4075,
+      "val_in_scope_correct_action_intent_rate": 0.9609978917779339,
+      "val_in_scope_false_reject_rate": 0.010541110330288124
+    },
+    {
+      "threshold": 0.29999999999999993,
+      "tune_oos_false_accept_rate": 0.4,
+      "val_in_scope_correct_action_intent_rate": 0.9602951510892481,
+      "val_in_scope_false_reject_rate": 0.011595221363316937
+    },
+    {
+      "threshold": 0.32499999999999996,
+      "tune_oos_false_accept_rate": 0.385,
+      "val_in_scope_correct_action_intent_rate": 0.9602951510892481,
+      "val_in_scope_false_reject_rate": 0.013703443429374561
+    },
+    {
+      "threshold": 0.35,
+      "tune_oos_false_accept_rate": 0.3725,
+      "val_in_scope_correct_action_intent_rate": 0.9588896697118763,
+      "val_in_scope_false_reject_rate": 0.015811665495432184
+    },
+    {
+      "threshold": 0.3749999999999999,
+      "tune_oos_false_accept_rate": 0.3575,
+      "val_in_scope_correct_action_intent_rate": 0.9574841883345045,
+      "val_in_scope_false_reject_rate": 0.017919887561489812
+    },
+    {
+      "threshold": 0.3999999999999999,
+      "tune_oos_false_accept_rate": 0.34,
+      "val_in_scope_correct_action_intent_rate": 0.9564300773014758,
+      "val_in_scope_false_reject_rate": 0.018973998594518624
+    },
+    {
+      "threshold": 0.42499999999999993,
+      "tune_oos_false_accept_rate": 0.3225,
+      "val_in_scope_correct_action_intent_rate": 0.9553759662684469,
+      "val_in_scope_false_reject_rate": 0.020379479971890373
+    },
+    {
+      "threshold": 0.44999999999999996,
+      "tune_oos_false_accept_rate": 0.3075,
+      "val_in_scope_correct_action_intent_rate": 0.9532677442023894,
+      "val_in_scope_false_reject_rate": 0.022839072382290933
+    },
+    {
+      "threshold": 0.47499999999999987,
+      "tune_oos_false_accept_rate": 0.29,
+      "val_in_scope_correct_action_intent_rate": 0.9529163738580464,
+      "val_in_scope_false_reject_rate": 0.023893183415319746
+    },
+    {
+      "threshold": 0.4999999999999999,
+      "tune_oos_false_accept_rate": 0.2775,
+      "val_in_scope_correct_action_intent_rate": 0.9515108924806747,
+      "val_in_scope_false_reject_rate": 0.02635277582572031
+    },
+    {
+      "threshold": 0.5249999999999999,
+      "tune_oos_false_accept_rate": 0.2475,
+      "val_in_scope_correct_action_intent_rate": 0.9504567814476458,
+      "val_in_scope_false_reject_rate": 0.029515108924806747
+    },
+    {
+      "threshold": 0.5499999999999999,
+      "tune_oos_false_accept_rate": 0.2225,
+      "val_in_scope_correct_action_intent_rate": 0.9486999297259311,
+      "val_in_scope_false_reject_rate": 0.03162333099086437
+    },
+    {
+      "threshold": 0.5749999999999998,
+      "tune_oos_false_accept_rate": 0.2125,
+      "val_in_scope_correct_action_intent_rate": 0.9472944483485594,
+      "val_in_scope_false_reject_rate": 0.03338018271257906
+    },
+    {
+      "threshold": 0.5999999999999999,
+      "tune_oos_false_accept_rate": 0.1925,
+      "val_in_scope_correct_action_intent_rate": 0.9455375966268447,
+      "val_in_scope_false_reject_rate": 0.03759662684469431
+    },
+    {
+      "threshold": 0.6249999999999999,
+      "tune_oos_false_accept_rate": 0.1875,
+      "val_in_scope_correct_action_intent_rate": 0.9430780042164442,
+      "val_in_scope_false_reject_rate": 0.040758959943780745
+    },
+    {
+      "threshold": 0.6499999999999998,
+      "tune_oos_false_accept_rate": 0.17,
+      "val_in_scope_correct_action_intent_rate": 0.9409697821503865,
+      "val_in_scope_false_reject_rate": 0.04427266338721012
+    },
+    {
+      "threshold": 0.6749999999999998,
+      "tune_oos_false_accept_rate": 0.16,
+      "val_in_scope_correct_action_intent_rate": 0.9395643007730148,
+      "val_in_scope_false_reject_rate": 0.04708362614195362
+    },
+    {
+      "threshold": 0.6999999999999998,
+      "tune_oos_false_accept_rate": 0.15,
+      "val_in_scope_correct_action_intent_rate": 0.9353478566408995,
+      "val_in_scope_false_reject_rate": 0.05200281096275474
+    },
+    {
+      "threshold": 0.7249999999999999,
+      "tune_oos_false_accept_rate": 0.1375,
+      "val_in_scope_correct_action_intent_rate": 0.9332396345748419,
+      "val_in_scope_false_reject_rate": 0.054111033028812365
+    },
+    {
+      "threshold": 0.7499999999999999,
+      "tune_oos_false_accept_rate": 0.1225,
+      "val_in_scope_correct_action_intent_rate": 0.9283204497540407,
+      "val_in_scope_false_reject_rate": 0.06113843991567112
+    },
+    {
+      "threshold": 0.7749999999999998,
+      "tune_oos_false_accept_rate": 0.1125,
+      "val_in_scope_correct_action_intent_rate": 0.9244553759662685,
+      "val_in_scope_false_reject_rate": 0.06535488404778636
+    },
+    {
+      "threshold": 0.7999999999999998,
+      "tune_oos_false_accept_rate": 0.095,
+      "val_in_scope_correct_action_intent_rate": 0.9209416725228391,
+      "val_in_scope_false_reject_rate": 0.06992269852424456
+    },
+    {
+      "threshold": 0.8249999999999998,
+      "tune_oos_false_accept_rate": 0.0775,
+      "val_in_scope_correct_action_intent_rate": 0.9149683766690091,
+      "val_in_scope_false_reject_rate": 0.07730147575544624
+    },
+    {
+      "threshold": 0.8499999999999998,
+      "tune_oos_false_accept_rate": 0.0575,
+      "val_in_scope_correct_action_intent_rate": 0.9061841180604358,
+      "val_in_scope_false_reject_rate": 0.08713984539704848
+    },
+    {
+      "threshold": 0.8749999999999998,
+      "tune_oos_false_accept_rate": 0.05,
+      "val_in_scope_correct_action_intent_rate": 0.8995080815179198,
+      "val_in_scope_false_reject_rate": 0.09416725228390724
+    },
+    {
+      "threshold": 0.8999999999999998,
+      "tune_oos_false_accept_rate": 0.045,
+      "val_in_scope_correct_action_intent_rate": 0.8893183415319748,
+      "val_in_scope_false_reject_rate": 0.1061138439915671
+    },
+    {
+      "threshold": 0.9249999999999998,
+      "tune_oos_false_accept_rate": 0.0325,
+      "val_in_scope_correct_action_intent_rate": 0.8777231201686577,
+      "val_in_scope_false_reject_rate": 0.11806043569922699
+    },
+    {
+      "threshold": 0.9499999999999998,
+      "tune_oos_false_accept_rate": 0.0175,
+      "val_in_scope_correct_action_intent_rate": 0.8583977512297962,
+      "val_in_scope_false_reject_rate": 0.13808854532677442
+    }
+  ],
+  "protocol_sha256": "f44e9f28bf9e51a9fa1be9ce30cf524e6ec65c148b7c94db0c119512abc93322",
+  "checkpoint_sha256": "efda45e15e513d3e496e17b1286f2dcdf746c274086ed6c37369485e9dc3cced",
+  "test_or_holdout_used": false,
+  "provisional_not_pi_promoted": true
+}

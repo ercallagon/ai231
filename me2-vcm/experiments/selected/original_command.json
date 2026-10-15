@@ -1,0 +1,16 @@
+{
+  "command": [
+    "PYTHON_ENV/bin/python",
+    "-B",
+    "PROJECT_ROOT/work/vcm_final_context_20261014_v1/run.py",
+    "train",
+    "--gpu",
+    "7"
+  ],
+  "cwd": "PROJECT_ROOT",
+  "environment": {
+    "CUDA_VISIBLE_DEVICES": "7",
+    "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
+  },
+  "no_slurm": true
+}

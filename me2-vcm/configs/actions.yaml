@@ -1,0 +1,74 @@
+# configs/actions.yaml — intent + slot -> typed device action behavior.
+#
+# The VCM emits (intent, slots). The action router (src/hey_swift/actions/)
+# maps each intent to a concrete handler. This file configures handler
+# behavior (defaults, ranges, feedback) without touching code.
+
+# Rejection / OOS handling:
+rejection:
+  oos_confidence_threshold: 0.5   # mirror of configs/vcm.yaml oos.confidence_threshold
+  on_oos:
+    led: error
+    speak: "Sorry, I didn't catch that."
+    cooldown_seconds: 1.0
+
+# Per-intent action bindings. `handler` is a dotted path into
+# src/hey_swift/actions/handlers/. `slots` declares which slot values the
+# handler consumes (validated against the VCM slot sets).
+actions:
+  PLAY_MUSIC:
+    handler: music.play
+    slots: {}
+  PAUSE:
+    handler: music.pause
+  STOP:
+    handler: music.stop
+  NEXT:
+    handler: music.next
+  VOLUME_UP:
+    handler: volume.up
+    step: 10
+  VOLUME_DOWN:
+    handler: volume.down
+    step: 10
+  LIGHT_ON:
+    handler: lights.on
+  LIGHT_OFF:
+    handler: lights.off
+  BRIGHTNESS:
+    handler: lights.set_brightness
+    slots: [BRIGHTNESS]          # 20 / 60 / 100 percent
+    range: [0, 100]
+  COLOR:
+    handler: lights.set_color
+    slots: [COLOR]               # red / blue / green
+  TEMPERATURE:
+    handler: climate.set_temperature
+    slots: [TEMPERATURE]         # 18 / 22 / 26 degrees
+    unit: celsius
+    range: [16, 30]
+  TIMER:
+    handler: timer.start
+    slots: [TIMER]               # 10s / 30s / 1m
+  ALARM:
+    handler: alarm.set
+    slots: [ALARM]               # 6AM / 8AM / 9PM
+  CREATE_REMINDER:
+    handler: reminder.create
+    slots: [CREATE_REMINDER]     # drink_water / study / exercise
+  LIST_REMINDERS:
+    handler: reminder.list
+  WEATHER:
+    handler: info.weather
+  TIME:
+    handler: info.time
+  CALL:
+    handler: comms.call
+  MESSAGE:
+    handler: comms.message
+
+# Feedback defaults applied after any successful action:
+feedback:
+  led: success
+  speak_default: "Done."
+  ack_latency_ms: 300

@@ -1,0 +1,65 @@
+{
+  "intents": [
+    "PLAY_MUSIC",
+    "WEATHER",
+    "TIME",
+    "LIGHT_ON",
+    "LIGHT_OFF",
+    "PAUSE",
+    "LIST_REMINDERS",
+    "STOP",
+    "NEXT",
+    "VOLUME_UP",
+    "VOLUME_DOWN",
+    "CALL",
+    "MESSAGE",
+    "TIMER",
+    "ALARM",
+    "TEMPERATURE",
+    "BRIGHTNESS",
+    "COLOR",
+    "CREATE_REMINDER",
+    "OUT_OF_SCOPE"
+  ],
+  "slots": {
+    "TIMER": [
+      "10s",
+      "30s",
+      "1m"
+    ],
+    "ALARM": [
+      "6AM",
+      "8AM",
+      "9PM"
+    ],
+    "TEMPERATURE": [
+      "18",
+      "22",
+      "26"
+    ],
+    "BRIGHTNESS": [
+      "20",
+      "60",
+      "100"
+    ],
+    "COLOR": [
+      "red",
+      "blue",
+      "green"
+    ],
+    "CREATE_REMINDER": [
+      "drink_water",
+      "study",
+      "exercise"
+    ]
+  },
+  "confidence_threshold": 0.875,
+  "slot_outputs": {
+    "TIMER": "slot_TIMER",
+    "ALARM": "slot_ALARM",
+    "TEMPERATURE": "slot_TEMPERATURE",
+    "BRIGHTNESS": "slot_BRIGHTNESS",
+    "COLOR": "slot_COLOR",
+    "CREATE_REMINDER": "slot_CREATE_REMINDER"
+  }
+}

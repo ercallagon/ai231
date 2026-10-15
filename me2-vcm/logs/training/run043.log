@@ -1,0 +1,14 @@
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] train=25366 val=2922 deterministic=True amp=True
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 00 augmented_train_acc=0.9807 train_loss=0.6543 val_acc=0.9596 val_macro_f1=0.9521 val_e2e=0.9422 val_slot=0.9554 (90s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 01 augmented_train_acc=0.9795 train_loss=0.6544 val_acc=0.9596 val_macro_f1=0.9514 val_e2e=0.9422 val_slot=0.9547 (183s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 02 augmented_train_acc=0.9806 train_loss=0.6402 val_acc=0.9565 val_macro_f1=0.9497 val_e2e=0.9398 val_slot=0.9541 (277s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 03 augmented_train_acc=0.9812 train_loss=0.6378 val_acc=0.9603 val_macro_f1=0.9535 val_e2e=0.9446 val_slot=0.9587 (370s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 04 augmented_train_acc=0.9812 train_loss=0.6208 val_acc=0.9600 val_macro_f1=0.9534 val_e2e=0.9439 val_slot=0.9580 (465s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 05 augmented_train_acc=0.9819 train_loss=0.6112 val_acc=0.9596 val_macro_f1=0.9529 val_e2e=0.9442 val_slot=0.9587 (558s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 06 augmented_train_acc=0.9834 train_loss=0.6079 val_acc=0.9613 val_macro_f1=0.9555 val_e2e=0.9442 val_slot=0.9560 (652s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 07 augmented_train_acc=0.9849 train_loss=0.5942 val_acc=0.9582 val_macro_f1=0.9519 val_e2e=0.9432 val_slot=0.9587 (745s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 08 augmented_train_acc=0.9840 train_loss=0.5912 val_acc=0.9606 val_macro_f1=0.9546 val_e2e=0.9449 val_slot=0.9573 (839s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 09 augmented_train_acc=0.9853 train_loss=0.5814 val_acc=0.9603 val_macro_f1=0.9546 val_e2e=0.9452 val_slot=0.9587 (933s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 10 augmented_train_acc=0.9852 train_loss=0.5838 val_acc=0.9593 val_macro_f1=0.9535 val_e2e=0.9449 val_slot=0.9587 (1027s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] epoch 11 augmented_train_acc=0.9869 train_loss=0.5707 val_acc=0.9600 val_macro_f1=0.9543 val_e2e=0.9452 val_slot=0.9580 (1120s)
+[run_043_hf_grouped_v2b_bc8_sourceft_s42] DONE best_epoch=9 val_e2e=0.9452 clean_train_acc=0.9962

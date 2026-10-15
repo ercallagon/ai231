@@ -1,0 +1,20 @@
+{
+  "gate_cases": [
+    "uniform_reject",
+    "OOS_argmax_reject",
+    "valid_confident_accept",
+    "temperature_REJECT_blocks",
+    "processing_failure_denominator_and_reject"
+  ],
+  "calibration_constraints": true,
+  "baseline_partition_accounting": true,
+  "CPU_ONNX_validation_parity_rows": 12,
+  "original_hashes_unchanged": true,
+  "no_new_test_holdout_inference": true,
+  "policy_sha256": "29712705160e346398086fe04acfd36d1f5c5528d89358cacc90fffa87f53595",
+  "python": "3.12.14 | packaged by Anaconda, Inc. | (main, Aug 27 2026, 14:46:43) [GCC 14.3.0]",
+  "commands": [
+    "env CUDA_VISIBLE_DEVICES= PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -B work/finalize_submit/recalibrate_six_second_v1.py",
+    "env CUDA_VISIBLE_DEVICES= PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -B work/vcm_six_second_calibration_20261015_v1/check_policy.py"
+  ]
+}

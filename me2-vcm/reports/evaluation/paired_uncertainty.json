@@ -1,0 +1,35 @@
+{
+  "val": {
+    "n": 2819,
+    "paired_accepted_success_delta": 0.018800993260021284,
+    "row_bootstrap_95_percentile": [
+      0.007449450159631075,
+      0.0297978006385243
+    ],
+    "fixes": 155,
+    "regressions": 102,
+    "caveat": "Rows are correlated within speakers/variations. This interval does not establish unseen-speaker generalization; holdout includes one historical exact PCM duplicate pair."
+  },
+  "test": {
+    "n": 4367,
+    "paired_accepted_success_delta": 0.028394779024501948,
+    "row_bootstrap_95_percentile": [
+      0.02060911380810625,
+      0.036186168994733196
+    ],
+    "fixes": 213,
+    "regressions": 89,
+    "caveat": "Rows are correlated within speakers/variations. This interval does not establish unseen-speaker generalization; holdout includes one historical exact PCM duplicate pair."
+  },
+  "holdout": {
+    "n": 186,
+    "paired_accepted_success_delta": 0.3655913978494624,
+    "row_bootstrap_95_percentile": [
+      0.2955645161290323,
+      0.44086021505376344
+    ],
+    "fixes": 69,
+    "regressions": 1,
+    "caveat": "Rows are correlated within speakers/variations. This interval does not establish unseen-speaker generalization; holdout includes one historical exact PCM duplicate pair."
+  }
+}

@@ -1,0 +1,2119 @@
+{
+  "selected": {
+    "overall_intent": {
+      "n": 2922,
+      "correct": 2819,
+      "rate": 0.9647501711156742
+    },
+    "real_intent": {
+      "n": 158,
+      "correct": 131,
+      "rate": 0.8291139240506329
+    },
+    "synthetic_intent": {
+      "n": 2764,
+      "correct": 2688,
+      "rate": 0.9725036179450073
+    },
+    "supported_joint": {
+      "n": 2819,
+      "correct": 2719,
+      "rate": 0.9645264278112806
+    },
+    "supported_accepted_joint": {
+      "n": 2819,
+      "correct": 2572,
+      "rate": 0.9123802766938631
+    },
+    "real_supported_accepted": {
+      "n": 124,
+      "correct": 90,
+      "rate": 0.7258064516129032
+    },
+    "synthetic_supported_accepted": {
+      "n": 2695,
+      "correct": 2482,
+      "rate": 0.9209647495361781
+    },
+    "semantic": {
+      "n": 2917,
+      "correct": 2664,
+      "rate": 0.9132670551936921
+    },
+    "wrong_supported_accepts": 14,
+    "false_rejects": 233,
+    "oos_false_accept": {
+      "n": 76,
+      "correct": 1,
+      "rate": 0.013157894736842105
+    },
+    "unsupported_false_accept": {
+      "n": 22,
+      "correct": 5,
+      "rate": 0.22727272727272727
+    },
+    "unsupported_temperature_false_accept": {
+      "n": 15,
+      "correct": 2,
+      "rate": 0.13333333333333333
+    },
+    "temperature_joint": {
+      "n": 306,
+      "correct": 287,
+      "rate": 0.9379084967320261
+    },
+    "temperature_accepted": {
+      "n": 306,
+      "correct": 273,
+      "rate": 0.8921568627450981
+    },
+    "failures": 14,
+    "unscored": 5,
+    "macro_f1": 0.9619019111757549,
+    "confusion": [
+      [
+        103,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        2,
+        2
+      ],
+      [
+        0,
+        86,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        2,
+        0,
+        91,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        104,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        2,
+        82,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        80,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        86,
+        0,
+        0,
+        1,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        103,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        177,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        106,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        117,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        39,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        82,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        2,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        243,
+        3,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        1,
+        0,
+        0,
+        243,
+        0,
+        0,
+        0,
+        0,
+        6,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        309,
+        0,
+        5,
+        0,
+        1,
+        5
+      ],
+      [
+        0,
+        0,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        3,
+        208,
+        0,
+        0,
+        1,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        272,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        5,
+        0,
+        0,
+        0,
+        223,
+        4,
+        2
+      ],
+      [
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        65,
+        3
+      ]
+    ],
+    "failure_column": 20,
+    "families": {
+      "PLAY_MUSIC": {
+        "intent": {
+          "n": 114,
+          "correct": 103,
+          "rate": 0.9035087719298246
+        },
+        "joint": {
+          "n": 114,
+          "correct": 103,
+          "rate": 0.9035087719298246
+        },
+        "accepted_joint": {
+          "n": 114,
+          "correct": 103,
+          "rate": 0.9035087719298246
+        },
+        "precision": 0.944954128440367,
+        "recall": 0.9035087719298246,
+        "f1": 0.9237668161434978,
+        "failures": 2,
+        "false_reject": 10
+      },
+      "WEATHER": {
+        "intent": {
+          "n": 86,
+          "correct": 86,
+          "rate": 1.0
+        },
+        "joint": {
+          "n": 86,
+          "correct": 86,
+          "rate": 1.0
+        },
+        "accepted_joint": {
+          "n": 86,
+          "correct": 85,
+          "rate": 0.9883720930232558
+        },
+        "precision": 0.9662921348314607,
+        "recall": 1.0,
+        "f1": 0.9828571428571428,
+        "failures": 0,
+        "false_reject": 1
+      },
+      "TIME": {
+        "intent": {
+          "n": 94,
+          "correct": 91,
+          "rate": 0.9680851063829787
+        },
+        "joint": {
+          "n": 94,
+          "correct": 91,
+          "rate": 0.9680851063829787
+        },
+        "accepted_joint": {
+          "n": 94,
+          "correct": 87,
+          "rate": 0.925531914893617
+        },
+        "precision": 0.9578947368421052,
+        "recall": 0.9680851063829787,
+        "f1": 0.962962962962963,
+        "failures": 1,
+        "false_reject": 6
+      },
+      "LIGHT_ON": {
+        "intent": {
+          "n": 106,
+          "correct": 104,
+          "rate": 0.9811320754716981
+        },
+        "joint": {
+          "n": 106,
+          "correct": 104,
+          "rate": 0.9811320754716981
+        },
+        "accepted_joint": {
+          "n": 106,
+          "correct": 99,
+          "rate": 0.9339622641509434
+        },
+        "precision": 0.9203539823008849,
+        "recall": 0.9811320754716981,
+        "f1": 0.949771689497717,
+        "failures": 0,
+        "false_reject": 7
+      },
+      "LIGHT_OFF": {
+        "intent": {
+          "n": 84,
+          "correct": 82,
+          "rate": 0.9761904761904762
+        },
+        "joint": {
+          "n": 84,
+          "correct": 82,
+          "rate": 0.9761904761904762
+        },
+        "accepted_joint": {
+          "n": 84,
+          "correct": 78,
+          "rate": 0.9285714285714286
+        },
+        "precision": 0.9761904761904762,
+        "recall": 0.9761904761904762,
+        "f1": 0.9761904761904762,
+        "failures": 0,
+        "false_reject": 6
+      },
+      "PAUSE": {
+        "intent": {
+          "n": 80,
+          "correct": 80,
+          "rate": 1.0
+        },
+        "joint": {
+          "n": 80,
+          "correct": 80,
+          "rate": 1.0
+        },
+        "accepted_joint": {
+          "n": 80,
+          "correct": 78,
+          "rate": 0.975
+        },
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0,
+        "failures": 0,
+        "false_reject": 2
+      },
+      "LIST_REMINDERS": {
+        "intent": {
+          "n": 93,
+          "correct": 86,
+          "rate": 0.9247311827956989
+        },
+        "joint": {
+          "n": 93,
+          "correct": 86,
+          "rate": 0.9247311827956989
+        },
+        "accepted_joint": {
+          "n": 93,
+          "correct": 81,
+          "rate": 0.8709677419354839
+        },
+        "precision": 1.0,
+        "recall": 0.9247311827956989,
+        "f1": 0.9608938547486032,
+        "failures": 0,
+        "false_reject": 12
+      },
+      "STOP": {
+        "intent": {
+          "n": 103,
+          "correct": 103,
+          "rate": 1.0
+        },
+        "joint": {
+          "n": 103,
+          "correct": 103,
+          "rate": 1.0
+        },
+        "accepted_joint": {
+          "n": 103,
+          "correct": 99,
+          "rate": 0.9611650485436893
+        },
+        "precision": 0.9716981132075472,
+        "recall": 1.0,
+        "f1": 0.985645933014354,
+        "failures": 0,
+        "false_reject": 4
+      },
+      "NEXT": {
+        "intent": {
+          "n": 180,
+          "correct": 177,
+          "rate": 0.9833333333333333
+        },
+        "joint": {
+          "n": 180,
+          "correct": 177,
+          "rate": 0.9833333333333333
+        },
+        "accepted_joint": {
+          "n": 180,
+          "correct": 175,
+          "rate": 0.9722222222222222
+        },
+        "precision": 0.9888268156424581,
+        "recall": 0.9833333333333333,
+        "f1": 0.9860724233983287,
+        "failures": 0,
+        "false_reject": 5
+      },
+      "VOLUME_UP": {
+        "intent": {
+          "n": 109,
+          "correct": 106,
+          "rate": 0.9724770642201835
+        },
+        "joint": {
+          "n": 109,
+          "correct": 106,
+          "rate": 0.9724770642201835
+        },
+        "accepted_joint": {
+          "n": 109,
+          "correct": 96,
+          "rate": 0.8807339449541285
+        },
+        "precision": 0.9636363636363636,
+        "recall": 0.9724770642201835,
+        "f1": 0.9680365296803652,
+        "failures": 0,
+        "false_reject": 11
+      },
+      "VOLUME_DOWN": {
+        "intent": {
+          "n": 120,
+          "correct": 117,
+          "rate": 0.975
+        },
+        "joint": {
+          "n": 120,
+          "correct": 117,
+          "rate": 0.975
+        },
+        "accepted_joint": {
+          "n": 120,
+          "correct": 112,
+          "rate": 0.9333333333333333
+        },
+        "precision": 0.9512195121951219,
+        "recall": 0.975,
+        "f1": 0.9629629629629629,
+        "failures": 0,
+        "false_reject": 8
+      },
+      "CALL": {
+        "intent": {
+          "n": 42,
+          "correct": 39,
+          "rate": 0.9285714285714286
+        },
+        "joint": {
+          "n": 42,
+          "correct": 39,
+          "rate": 0.9285714285714286
+        },
+        "accepted_joint": {
+          "n": 42,
+          "correct": 38,
+          "rate": 0.9047619047619048
+        },
+        "precision": 0.9512195121951219,
+        "recall": 0.9285714285714286,
+        "f1": 0.9397590361445782,
+        "failures": 0,
+        "false_reject": 3
+      },
+      "MESSAGE": {
+        "intent": {
+          "n": 84,
+          "correct": 82,
+          "rate": 0.9761904761904762
+        },
+        "joint": {
+          "n": 84,
+          "correct": 82,
+          "rate": 0.9761904761904762
+        },
+        "accepted_joint": {
+          "n": 84,
+          "correct": 81,
+          "rate": 0.9642857142857143
+        },
+        "precision": 1.0,
+        "recall": 0.9761904761904762,
+        "f1": 0.9879518072289156,
+        "failures": 0,
+        "false_reject": 3
+      },
+      "TIMER": {
+        "intent": {
+          "n": 252,
+          "correct": 243,
+          "rate": 0.9642857142857143
+        },
+        "joint": {
+          "n": 248,
+          "correct": 238,
+          "rate": 0.9596774193548387
+        },
+        "accepted_joint": {
+          "n": 248,
+          "correct": 215,
+          "rate": 0.8669354838709677
+        },
+        "precision": 0.9959016393442623,
+        "recall": 0.9642857142857143,
+        "f1": 0.9798387096774194,
+        "failures": 0,
+        "false_reject": 32
+      },
+      "ALARM": {
+        "intent": {
+          "n": 252,
+          "correct": 243,
+          "rate": 0.9642857142857143
+        },
+        "joint": {
+          "n": 250,
+          "correct": 241,
+          "rate": 0.964
+        },
+        "accepted_joint": {
+          "n": 250,
+          "correct": 226,
+          "rate": 0.904
+        },
+        "precision": 0.9455252918287937,
+        "recall": 0.9642857142857143,
+        "f1": 0.9548133595284872,
+        "failures": 0,
+        "false_reject": 22
+      },
+      "TEMPERATURE": {
+        "intent": {
+          "n": 321,
+          "correct": 309,
+          "rate": 0.9626168224299065
+        },
+        "joint": {
+          "n": 306,
+          "correct": 287,
+          "rate": 0.9379084967320261
+        },
+        "accepted_joint": {
+          "n": 306,
+          "correct": 273,
+          "rate": 0.8921568627450981
+        },
+        "precision": 0.9903846153846154,
+        "recall": 0.9626168224299065,
+        "f1": 0.976303317535545,
+        "failures": 5,
+        "false_reject": 29
+      },
+      "BRIGHTNESS": {
+        "intent": {
+          "n": 219,
+          "correct": 208,
+          "rate": 0.9497716894977168
+        },
+        "joint": {
+          "n": 215,
+          "correct": 202,
+          "rate": 0.9395348837209302
+        },
+        "accepted_joint": {
+          "n": 215,
+          "correct": 181,
+          "rate": 0.8418604651162791
+        },
+        "precision": 0.9952153110047847,
+        "recall": 0.9497716894977168,
+        "f1": 0.97196261682243,
+        "failures": 1,
+        "false_reject": 32
+      },
+      "COLOR": {
+        "intent": {
+          "n": 272,
+          "correct": 272,
+          "rate": 1.0
+        },
+        "joint": {
+          "n": 272,
+          "correct": 272,
+          "rate": 1.0
+        },
+        "accepted_joint": {
+          "n": 272,
+          "correct": 265,
+          "rate": 0.9742647058823529
+        },
+        "precision": 0.9645390070921985,
+        "recall": 1.0,
+        "f1": 0.9819494584837545,
+        "failures": 0,
+        "false_reject": 7
+      },
+      "CREATE_REMINDER": {
+        "intent": {
+          "n": 235,
+          "correct": 223,
+          "rate": 0.948936170212766
+        },
+        "joint": {
+          "n": 233,
+          "correct": 223,
+          "rate": 0.9570815450643777
+        },
+        "accepted_joint": {
+          "n": 233,
+          "correct": 200,
+          "rate": 0.8583690987124464
+        },
+        "precision": 1.0,
+        "recall": 0.948936170212766,
+        "f1": 0.9737991266375546,
+        "failures": 2,
+        "false_reject": 33
+      },
+      "OUT_OF_SCOPE": {
+        "intent": {
+          "n": 76,
+          "correct": 65,
+          "rate": 0.8552631578947368
+        },
+        "joint": {
+          "n": 0,
+          "correct": 0,
+          "rate": null
+        },
+        "accepted_joint": {
+          "n": 0,
+          "correct": 0,
+          "rate": null
+        },
+        "precision": 0.7738095238095238,
+        "recall": 0.8552631578947368,
+        "f1": 0.8125,
+        "failures": 3,
+        "false_reject": 0
+      }
+    },
+    "T": 1.0,
+    "threshold": 0.954,
+    "processed_subsets": {
+      "all": {
+        "manifest_n": 2922,
+        "processed_n": 2908,
+        "failures": 14,
+        "processed_intent_correct": 2819,
+        "processed_intent_accuracy": 0.96939477303989,
+        "processed_supported_n": 2809,
+        "processed_supported_accepted_correct": 2572,
+        "processed_oos_n": 73,
+        "processed_oos_false_accepts": 1,
+        "processed_oos_far": 0.0136986301369863
+      },
+      "real": {
+        "manifest_n": 158,
+        "processed_n": 149,
+        "failures": 9,
+        "processed_intent_correct": 131,
+        "processed_intent_accuracy": 0.8791946308724832,
+        "processed_supported_n": 119,
+        "processed_supported_accepted_correct": 90,
+        "processed_oos_n": 4,
+        "processed_oos_false_accepts": 0,
+        "processed_oos_far": 0.0
+      },
+      "synthetic": {
+        "manifest_n": 2764,
+        "processed_n": 2759,
+        "failures": 5,
+        "processed_intent_correct": 2688,
+        "processed_intent_accuracy": 0.9742660384197173,
+        "processed_supported_n": 2690,
+        "processed_supported_accepted_correct": 2482,
+        "processed_oos_n": 69,
+        "processed_oos_false_accepts": 1,
+        "processed_oos_far": 0.014492753623188406
+      }
+    },
+    "duration_cohorts": {
+      "le2s": {
+        "n": 1470,
+        "failures": 0,
+        "supported_n": 1432,
+        "accepted_correct": 1391
+      },
+      "gt2_le4s": {
+        "n": 1227,
+        "failures": 0,
+        "supported_n": 1184,
+        "accepted_correct": 1059
+      },
+      "gt4_le6s": {
+        "n": 211,
+        "failures": 0,
+        "supported_n": 193,
+        "accepted_correct": 122
+      },
+      "gt6s": {
+        "n": 14,
+        "failures": 14,
+        "supported_n": 10,
+        "accepted_correct": 0
+      }
+    },
+    "processing_status": {
+      "ok": 2908,
+      "over_capacity": 14
+    },
+    "runtime_parity_rows": 12,
+    "model_sha256": "edb9c14b384a9ff08f524e93a3c4b4def69dfe4140fbd98f997f2ad0abea3d88",
+    "threads": 1,
+    "temperature_already_baked_once": true,
+    "infer_scope": "features_plus_ONNX_no_decode_resampling_capture_actions",
+    "infer_p95_ms": 28.305681375786662,
+    "per_clip_rtf_p95": 0.025577595533680768,
+    "physical_pi_verified": false,
+    "complete_word_retention": "UNVERIFIED",
+    "previously_exposed_evaluation": true
+  },
+  "run043": {
+    "overall_intent": {
+      "n": 2922,
+      "correct": 2806,
+      "rate": 0.9603011635865846
+    },
+    "real_intent": {
+      "n": 158,
+      "correct": 117,
+      "rate": 0.740506329113924
+    },
+    "synthetic_intent": {
+      "n": 2764,
+      "correct": 2689,
+      "rate": 0.9728654124457308
+    },
+    "supported_joint": {
+      "n": 2819,
+      "correct": 2673,
+      "rate": 0.9482085846044697
+    },
+    "supported_accepted_joint": {
+      "n": 2819,
+      "correct": 2519,
+      "rate": 0.8935792834338417
+    },
+    "real_supported_accepted": {
+      "n": 124,
+      "correct": 76,
+      "rate": 0.6129032258064516
+    },
+    "synthetic_supported_accepted": {
+      "n": 2695,
+      "correct": 2443,
+      "rate": 0.9064935064935065
+    },
+    "semantic": {
+      "n": 2917,
+      "correct": 2598,
+      "rate": 0.8906410695920466
+    },
+    "wrong_supported_accepts": 42,
+    "false_rejects": 258,
+    "oos_false_accept": {
+      "n": 76,
+      "correct": 2,
+      "rate": 0.02631578947368421
+    },
+    "unsupported_false_accept": {
+      "n": 22,
+      "correct": 17,
+      "rate": 0.7727272727272727
+    },
+    "unsupported_temperature_false_accept": {
+      "n": 15,
+      "correct": 15,
+      "rate": 1.0
+    },
+    "temperature_joint": {
+      "n": 306,
+      "correct": 280,
+      "rate": 0.9150326797385621
+    },
+    "temperature_accepted": {
+      "n": 306,
+      "correct": 257,
+      "rate": 0.8398692810457516
+    },
+    "failures": 0,
+    "unscored": 5,
+    "macro_f1": 0.9545817813628471,
+    "confusion": [
+      [
+        108,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0
+      ],
+      [
+        0,
+        86,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        91,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        101,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        3,
+        79,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        80,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        85,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        6,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        102,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        177,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        102,
+        6,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        114,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        39,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        84,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        6,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        237,
+        0,
+        0,
+        4,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        2,
+        0,
+        1,
+        0,
+        0,
+        1,
+        1,
+        3,
+        0,
+        0,
+        0,
+        242,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        0,
+        313,
+        3,
+        1,
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        211,
+        2,
+        0,
+        4,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0,
+        0,
+        3,
+        1,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        263,
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        1,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        2,
+        1,
+        0,
+        2,
+        223,
+        1,
+        0
+      ],
+      [
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0,
+        69,
+        0
+      ]
+    ],
+    "failure_column": 20,
+    "families": {
+      "PLAY_MUSIC": {
+        "intent": {
+          "n": 114,
+          "correct": 108,
+          "rate": 0.9473684210526315
+        },
+        "joint": {
+          "n": 114,
+          "correct": 108,
+          "rate": 0.9473684210526315
+        },
+        "accepted_joint": {
+          "n": 114,
+          "correct": 102,
+          "rate": 0.8947368421052632
+        },
+        "precision": 0.9908256880733946,
+        "recall": 0.9473684210526315,
+        "f1": 0.9686098654708519,
+        "failures": 0,
+        "false_reject": 11
+      },
+      "WEATHER": {
+        "intent": {
+          "n": 86,
+          "correct": 86,
+          "rate": 1.0
+        },
+        "joint": {
+          "n": 86,
+          "correct": 86,
+          "rate": 1.0
+        },
+        "accepted_joint": {
+          "n": 86,
+          "correct": 84,
+          "rate": 0.9767441860465116
+        },
+        "precision": 0.9347826086956522,
+        "recall": 1.0,
+        "f1": 0.9662921348314606,
+        "failures": 0,
+        "false_reject": 2
+      },
+      "TIME": {
+        "intent": {
+          "n": 94,
+          "correct": 91,
+          "rate": 0.9680851063829787
+        },
+        "joint": {
+          "n": 94,
+          "correct": 91,
+          "rate": 0.9680851063829787
+        },
+        "accepted_joint": {
+          "n": 94,
+          "correct": 88,
+          "rate": 0.9361702127659575
+        },
+        "precision": 0.9285714285714286,
+        "recall": 0.9680851063829787,
+        "f1": 0.9479166666666666,
+        "failures": 0,
+        "false_reject": 6
+      },
+      "LIGHT_ON": {
+        "intent": {
+          "n": 106,
+          "correct": 101,
+          "rate": 0.9528301886792453
+        },
+        "joint": {
+          "n": 106,
+          "correct": 101,
+          "rate": 0.9528301886792453
+        },
+        "accepted_joint": {
+          "n": 106,
+          "correct": 96,
+          "rate": 0.9056603773584906
+        },
+        "precision": 0.9351851851851852,
+        "recall": 0.9528301886792453,
+        "f1": 0.9439252336448598,
+        "failures": 0,
+        "false_reject": 10
+      },
+      "LIGHT_OFF": {
+        "intent": {
+          "n": 84,
+          "correct": 79,
+          "rate": 0.9404761904761905
+        },
+        "joint": {
+          "n": 84,
+          "correct": 79,
+          "rate": 0.9404761904761905
+        },
+        "accepted_joint": {
+          "n": 84,
+          "correct": 79,
+          "rate": 0.9404761904761905
+        },
+        "precision": 0.9875,
+        "recall": 0.9404761904761905,
+        "f1": 0.9634146341463415,
+        "failures": 0,
+        "false_reject": 2
+      },
+      "PAUSE": {
+        "intent": {
+          "n": 80,
+          "correct": 80,
+          "rate": 1.0
+        },
+        "joint": {
+          "n": 80,
+          "correct": 80,
+          "rate": 1.0
+        },
+        "accepted_joint": {
+          "n": 80,
+          "correct": 79,
+          "rate": 0.9875
+        },
+        "precision": 0.9523809523809523,
+        "recall": 1.0,
+        "f1": 0.975609756097561,
+        "failures": 0,
+        "false_reject": 1
+      },
+      "LIST_REMINDERS": {
+        "intent": {
+          "n": 93,
+          "correct": 85,
+          "rate": 0.9139784946236559
+        },
+        "joint": {
+          "n": 93,
+          "correct": 85,
+          "rate": 0.9139784946236559
+        },
+        "accepted_joint": {
+          "n": 93,
+          "correct": 79,
+          "rate": 0.8494623655913979
+        },
+        "precision": 0.9770114942528736,
+        "recall": 0.9139784946236559,
+        "f1": 0.9444444444444445,
+        "failures": 0,
+        "false_reject": 9
+      },
+      "STOP": {
+        "intent": {
+          "n": 103,
+          "correct": 102,
+          "rate": 0.9902912621359223
+        },
+        "joint": {
+          "n": 103,
+          "correct": 102,
+          "rate": 0.9902912621359223
+        },
+        "accepted_joint": {
+          "n": 103,
+          "correct": 99,
+          "rate": 0.9611650485436893
+        },
+        "precision": 0.9807692307692307,
+        "recall": 0.9902912621359223,
+        "f1": 0.9855072463768114,
+        "failures": 0,
+        "false_reject": 4
+      },
+      "NEXT": {
+        "intent": {
+          "n": 180,
+          "correct": 177,
+          "rate": 0.9833333333333333
+        },
+        "joint": {
+          "n": 180,
+          "correct": 177,
+          "rate": 0.9833333333333333
+        },
+        "accepted_joint": {
+          "n": 180,
+          "correct": 176,
+          "rate": 0.9777777777777777
+        },
+        "precision": 0.9779005524861878,
+        "recall": 0.9833333333333333,
+        "f1": 0.9806094182825484,
+        "failures": 0,
+        "false_reject": 3
+      },
+      "VOLUME_UP": {
+        "intent": {
+          "n": 109,
+          "correct": 102,
+          "rate": 0.9357798165137615
+        },
+        "joint": {
+          "n": 109,
+          "correct": 102,
+          "rate": 0.9357798165137615
+        },
+        "accepted_joint": {
+          "n": 109,
+          "correct": 96,
+          "rate": 0.8807339449541285
+        },
+        "precision": 0.918918918918919,
+        "recall": 0.9357798165137615,
+        "f1": 0.9272727272727272,
+        "failures": 0,
+        "false_reject": 12
+      },
+      "VOLUME_DOWN": {
+        "intent": {
+          "n": 120,
+          "correct": 114,
+          "rate": 0.95
+        },
+        "joint": {
+          "n": 120,
+          "correct": 114,
+          "rate": 0.95
+        },
+        "accepted_joint": {
+          "n": 120,
+          "correct": 110,
+          "rate": 0.9166666666666666
+        },
+        "precision": 0.8571428571428571,
+        "recall": 0.95,
+        "f1": 0.9011857707509882,
+        "failures": 0,
+        "false_reject": 10
+      },
+      "CALL": {
+        "intent": {
+          "n": 42,
+          "correct": 39,
+          "rate": 0.9285714285714286
+        },
+        "joint": {
+          "n": 42,
+          "correct": 39,
+          "rate": 0.9285714285714286
+        },
+        "accepted_joint": {
+          "n": 42,
+          "correct": 39,
+          "rate": 0.9285714285714286
+        },
+        "precision": 0.975,
+        "recall": 0.9285714285714286,
+        "f1": 0.951219512195122,
+        "failures": 0,
+        "false_reject": 3
+      },
+      "MESSAGE": {
+        "intent": {
+          "n": 84,
+          "correct": 84,
+          "rate": 1.0
+        },
+        "joint": {
+          "n": 84,
+          "correct": 84,
+          "rate": 1.0
+        },
+        "accepted_joint": {
+          "n": 84,
+          "correct": 83,
+          "rate": 0.9880952380952381
+        },
+        "precision": 0.9882352941176471,
+        "recall": 1.0,
+        "f1": 0.9940828402366864,
+        "failures": 0,
+        "false_reject": 1
+      },
+      "TIMER": {
+        "intent": {
+          "n": 252,
+          "correct": 237,
+          "rate": 0.9404761904761905
+        },
+        "joint": {
+          "n": 248,
+          "correct": 236,
+          "rate": 0.9516129032258065
+        },
+        "accepted_joint": {
+          "n": 248,
+          "correct": 214,
+          "rate": 0.8629032258064516
+        },
+        "precision": 0.9957983193277311,
+        "recall": 0.9404761904761905,
+        "f1": 0.9673469387755103,
+        "failures": 0,
+        "false_reject": 33
+      },
+      "ALARM": {
+        "intent": {
+          "n": 252,
+          "correct": 242,
+          "rate": 0.9603174603174603
+        },
+        "joint": {
+          "n": 250,
+          "correct": 236,
+          "rate": 0.944
+        },
+        "accepted_joint": {
+          "n": 250,
+          "correct": 210,
+          "rate": 0.84
+        },
+        "precision": 0.9758064516129032,
+        "recall": 0.9603174603174603,
+        "f1": 0.9680000000000001,
+        "failures": 0,
+        "false_reject": 38
+      },
+      "TEMPERATURE": {
+        "intent": {
+          "n": 321,
+          "correct": 313,
+          "rate": 0.9750778816199377
+        },
+        "joint": {
+          "n": 306,
+          "correct": 280,
+          "rate": 0.9150326797385621
+        },
+        "accepted_joint": {
+          "n": 306,
+          "correct": 257,
+          "rate": 0.8398692810457516
+        },
+        "precision": 0.9936507936507937,
+        "recall": 0.9750778816199377,
+        "f1": 0.9842767295597484,
+        "failures": 0,
+        "false_reject": 38
+      },
+      "BRIGHTNESS": {
+        "intent": {
+          "n": 219,
+          "correct": 211,
+          "rate": 0.9634703196347032
+        },
+        "joint": {
+          "n": 215,
+          "correct": 200,
+          "rate": 0.9302325581395349
+        },
+        "accepted_joint": {
+          "n": 215,
+          "correct": 184,
+          "rate": 0.8558139534883721
+        },
+        "precision": 0.9678899082568807,
+        "recall": 0.9634703196347032,
+        "f1": 0.965675057208238,
+        "failures": 0,
+        "false_reject": 24
+      },
+      "COLOR": {
+        "intent": {
+          "n": 272,
+          "correct": 263,
+          "rate": 0.9669117647058824
+        },
+        "joint": {
+          "n": 272,
+          "correct": 258,
+          "rate": 0.9485294117647058
+        },
+        "accepted_joint": {
+          "n": 272,
+          "correct": 241,
+          "rate": 0.8860294117647058
+        },
+        "precision": 0.9704797047970479,
+        "recall": 0.9669117647058824,
+        "f1": 0.9686924493554329,
+        "failures": 0,
+        "false_reject": 30
+      },
+      "CREATE_REMINDER": {
+        "intent": {
+          "n": 235,
+          "correct": 223,
+          "rate": 0.948936170212766
+        },
+        "joint": {
+          "n": 233,
+          "correct": 215,
+          "rate": 0.9227467811158798
+        },
+        "accepted_joint": {
+          "n": 233,
+          "correct": 203,
+          "rate": 0.871244635193133
+        },
+        "precision": 0.9737991266375546,
+        "recall": 0.948936170212766,
+        "f1": 0.9612068965517242,
+        "failures": 0,
+        "false_reject": 21
+      },
+      "OUT_OF_SCOPE": {
+        "intent": {
+          "n": 76,
+          "correct": 69,
+          "rate": 0.9078947368421053
+        },
+        "joint": {
+          "n": 0,
+          "correct": 0,
+          "rate": null
+        },
+        "accepted_joint": {
+          "n": 0,
+          "correct": 0,
+          "rate": null
+        },
+        "precision": 0.7582417582417582,
+        "recall": 0.9078947368421053,
+        "f1": 0.8263473053892216,
+        "failures": 0,
+        "false_reject": 0
+      }
+    },
+    "T": 1.0,
+    "threshold": 0.875,
+    "processed_subsets": {
+      "all": {
+        "manifest_n": 2922,
+        "processed_n": 2922,
+        "failures": 0,
+        "processed_intent_correct": 2806,
+        "processed_intent_accuracy": 0.9603011635865846,
+        "processed_supported_n": 2819,
+        "processed_supported_accepted_correct": 2519,
+        "processed_oos_n": 76,
+        "processed_oos_false_accepts": 2,
+        "processed_oos_far": 0.02631578947368421
+      },
+      "real": {
+        "manifest_n": 158,
+        "processed_n": 158,
+        "failures": 0,
+        "processed_intent_correct": 117,
+        "processed_intent_accuracy": 0.740506329113924,
+        "processed_supported_n": 124,
+        "processed_supported_accepted_correct": 76,
+        "processed_oos_n": 7,
+        "processed_oos_false_accepts": 1,
+        "processed_oos_far": 0.14285714285714285
+      },
+      "synthetic": {
+        "manifest_n": 2764,
+        "processed_n": 2764,
+        "failures": 0,
+        "processed_intent_correct": 2689,
+        "processed_intent_accuracy": 0.9728654124457308,
+        "processed_supported_n": 2695,
+        "processed_supported_accepted_correct": 2443,
+        "processed_oos_n": 69,
+        "processed_oos_false_accepts": 1,
+        "processed_oos_far": 0.014492753623188406
+      }
+    },
+    "duration_cohorts": {
+      "le2s": {
+        "n": 1470,
+        "failures": 0,
+        "supported_n": 1432,
+        "accepted_correct": 1397
+      },
+      "gt2_le4s": {
+        "n": 1227,
+        "failures": 0,
+        "supported_n": 1184,
+        "accepted_correct": 1024
+      },
+      "gt4_le6s": {
+        "n": 211,
+        "failures": 0,
+        "supported_n": 193,
+        "accepted_correct": 98
+      },
+      "gt6s": {
+        "n": 14,
+        "failures": 0,
+        "supported_n": 10,
+        "accepted_correct": 0
+      }
+    },
+    "processing_status": {
+      "ok_legacy_center_crop": 2922
+    },
+    "runtime_parity_rows": 12,
+    "model_sha256": "2dfde6cb9dc20ac923ac635a92722b2e238464acdc73af63232bf1c916c590b2",
+    "threads": 1,
+    "temperature_already_baked_once": true,
+    "infer_scope": "features_plus_ONNX_no_decode_resampling_capture_actions",
+    "infer_p95_ms": 16.980105685070157,
+    "per_clip_rtf_p95": 0.01495285639072873,
+    "physical_pi_verified": false,
+    "complete_word_retention": "UNVERIFIED",
+    "previously_exposed_evaluation": true
+  },
+  "paired_supported": {
+    "candidate_fixes": 155,
+    "candidate_regressions": 102
+  }
+}

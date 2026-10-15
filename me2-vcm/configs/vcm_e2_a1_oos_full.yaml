@@ -1,0 +1,87 @@
+data:
+  hf_root: data/vcm/raw
+  manifests: data/vcm/manifests
+  splits: data/vcm/manifests/splits.json
+  frozen_test: data/vcm/manifests/test_19intent_frozen.csv
+  holdout: data/vcm/manifests/holdout_untouched.csv
+  # OOS-injection override: train uses the augmented manifest (standard train +
+  # stratified numeral-OOS sample). Built by scripts/build_oos_injection.py.
+  # val/test/holdout are UNCHANGED (point at the committed manifest dir).
+  manifests_override:
+    train: data/vcm/manifests/oos_inject_4000/train_19intent.csv
+audio:
+  sample_rate: 16000
+  mono: true
+  n_fft: 400
+  hop_length: 160
+  n_mels: 80
+  window_seconds: 2.0
+  f_min: 20.0
+  f_max: 8000.0
+  center_crop_pad: true
+schema:
+  n_intents: 19
+  oos_class: OUT_OF_SCOPE
+  n_way_head: 20
+  slotted_intents:
+  - TIMER
+  - ALARM
+  - TEMPERATURE
+  - BRIGHTNESS
+  - COLOR
+  - CREATE_REMINDER
+  slot_reject: false
+  slot_sets:
+    TIMER:
+    - 10s
+    - 30s
+    - 1m
+    - REJECT
+    ALARM:
+    - 6AM
+    - 8AM
+    - 9PM
+    - REJECT
+    TEMPERATURE:
+    - 18
+    - 22
+    - 26
+    - REJECT
+    BRIGHTNESS:
+    - 20
+    - 60
+    - 100
+    - REJECT
+    COLOR:
+    - red
+    - blue
+    - green
+    - REJECT
+    CREATE_REMINDER:
+    - drink_water
+    - study
+    - exercise
+    - REJECT
+training:
+  seed: 42
+  epochs: 30
+  batch_size: 256
+  lr: 0.003
+  optimizer: adamw
+  weight_decay: 0.01
+  warmup_epochs: 2
+  early_stop_patience: 8
+  device: cuda
+  checkpoint: best.pt
+  num_workers: 8
+  # "full" = speed + noise + gain perturbation (attacks VOLUME_UP/DOWN and
+  # LIGHT_ON/OFF acoustic confusions). run_006 used spec_aug only.
+  augment_mode: full
+  label_smoothing: 0.05
+  # A1 (966K) — the capacity that produced the best val (63.28%) in run_006.
+  arch: a1
+oos:
+  strategy: learned_plus_confidence_gate
+  # Raised from 0.5 -> 0.60 to attack OOS precision (false accepts). Calibrate
+  # on val after the run; 0.65 is the fallback if precision is still <0.70.
+  confidence_threshold: 0.60

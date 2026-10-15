@@ -1,0 +1,6 @@
+# Inference only. Install lgpio via apt; use --system-site-packages.
+-r requirements.txt
+sounddevice>=0.5
+gpiozero>=2
+dbus-next>=0.2.3
+# Optional speech: pip install piper-tts; obtain an authorized voice separately.

@@ -1,0 +1,15 @@
+{
+  "default": "selected",
+  "profiles": {
+    "selected": {
+      "model": "models/vcm/selected.onnx",
+      "labels": "models/vcm/selected.labels.json",
+      "config": "configs/vcm_selected.yaml"
+    },
+    "run043": {
+      "model": "models/vcm/run043.onnx",
+      "labels": "models/vcm/run043.labels.json",
+      "config": "configs/vcm_run043.yaml"
+    }
+  }
+}

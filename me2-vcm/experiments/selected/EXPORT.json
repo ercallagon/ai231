@@ -1,0 +1,22 @@
+{
+  "bytes": 2136900,
+  "host_cpu_p50_ms": 21.846741903573275,
+  "host_cpu_p95_ms": 22.399155283346772,
+  "threads": 1,
+  "pi_verified": false,
+  "input_shapes": {
+    "mel": [
+      "batch",
+      1,
+      80,
+      600
+    ],
+    "frame_mask": [
+      "batch",
+      1,
+      600
+    ]
+  },
+  "batch1_2_parity": true,
+  "intent_temperature_baked_once": 0.6499874044563441
+}

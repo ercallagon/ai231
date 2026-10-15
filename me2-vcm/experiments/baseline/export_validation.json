@@ -1,0 +1,8 @@
+{
+  "onnx_sha256": "4774ee6bf2b6405a95045a79d19e1d777538b472c3f6a2df3063eb3cbf40bc58",
+  "onnx_bytes": 1488732,
+  "onnx_checker_and_batch_1_2_parity_passed": true,
+  "host_onnx_p50_ms": 12.66977284103632,
+  "host_onnx_p95_ms": 14.335042890161276,
+  "pi_verified": false
+}

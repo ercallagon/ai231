@@ -1,0 +1,65 @@
+{
+  "dataset": "airimonda/ai231-me2-voice-commands",
+  "revision": "bfca0bbebfe17e00d6a685d1da573615d29ecdce",
+  "doi": "10.57967/hf/10723",
+  "protocol": "hf_grouped_v2b",
+  "manifests": {
+    "train": {
+      "rows": 25366,
+      "original_sha256": "e0a2dc18700b92af11de9e008e2181039b5033fc1913ce477a218a614f1293a2",
+      "public_metadata_sha256": "d195d0c1356cf3127e1d2134a004aa8de3377e5c9bf406e6e3ca9b28617a3387",
+      "hours": 14.40078439236111,
+      "real_rows": 1559,
+      "declared_speaker_groups": 559,
+      "speaker_note": "Pseudonymized declared identifiers; synthetic voices are not human speaker counts"
+    },
+    "val": {
+      "rows": 2922,
+      "original_sha256": "f654b1e506ffc11f9d818c6fe2aeb0d0c47516586b6062da3119de9e1937b161",
+      "public_metadata_sha256": "230c592fba59330fddc0e4c98fe71813b287ac87216eaddb2a3a9bfc5d22cee9",
+      "hours": 1.8623341493055556,
+      "real_rows": 158,
+      "declared_speaker_groups": 68,
+      "speaker_note": "Pseudonymized declared identifiers; synthetic voices are not human speaker counts"
+    },
+    "tune_oos": {
+      "rows": 400,
+      "original_sha256": "2698f23c22ef5cf884d40470b4fb9012373d5d4ea9cbd3e2fe60ebcba50a4224",
+      "public_metadata_sha256": "b0d272641a2b2f93d660a24a369cd9deeeacb197badb4131d1a142e44472db6a",
+      "hours": 0.5652055381944444,
+      "real_rows": 400,
+      "declared_speaker_groups": 311,
+      "speaker_note": "Pseudonymized declared identifiers; synthetic voices are not human speaker counts"
+    },
+    "challenge": {
+      "rows": 1171,
+      "original_sha256": "c2f2bc5e0bafbfab5cc3382aaac64661a071f849857a42f53a1aa6ad2bd2743c",
+      "public_metadata_sha256": "27b56af4dbe1ab71c405ca98f814731898afe1dbcf5dc7937ad2b1071f0483b0",
+      "hours": 0.8436229166666667,
+      "real_rows": 631,
+      "declared_speaker_groups": 6,
+      "speaker_note": "Pseudonymized declared identifiers; synthetic voices are not human speaker counts"
+    },
+    "test": {
+      "rows": 4693,
+      "original_sha256": "2aaaef54fd13099b6e37fd532f498f66241b8ac7bae7543ef7a3e7db9ed803f3",
+      "public_metadata_sha256": "a2597b2437a5e024a646a9d38f66d9033af9af684e479b1a93228329a2352744",
+      "hours": 2.6260203819444445,
+      "real_rows": 824,
+      "declared_speaker_groups": 214,
+      "speaker_note": "Pseudonymized declared identifiers; synthetic voices are not human speaker counts"
+    },
+    "holdout": {
+      "rows": 202,
+      "original_sha256": "4ac1435917d4e43967463efabe6d5509159897130cd30ab6790d5ba90f71b55d",
+      "public_metadata_sha256": "08c2ae9d36e1a68807fa1ff6be4fcd42886d84d652da5eabc9aa47d17699ab1f",
+      "hours": 0.17913552083333334,
+      "real_rows": 96,
+      "declared_speaker_groups": 5,
+      "speaker_note": "Pseudonymized declared identifiers; synthetic voices are not human speaker counts"
+    }
+  },
+  "transformations": "Original row order, IDs, label/slot, byte/PCM hashes and Parquet offsets retained; identifying/unneeded metadata omitted; speaker IDs pseudonymized",
+  "grouping": "Existing frozen grouped-v2b manifests reused; no resplitting. Validation and tune_oos originate from permitted HF training partitions; test and holdout retain original roles.",
+  "exposure": "Test/holdout repeatedly examined historically; gate refinement used validation/tune only after that exposure; no pristine final-test claim"
+}

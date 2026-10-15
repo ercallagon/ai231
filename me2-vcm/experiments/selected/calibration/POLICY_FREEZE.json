@@ -1,0 +1,26 @@
+{
+  "kind": "global_intent_confidence_plus_hard_OOS_TEMP_REJECT",
+  "threshold": 0.954,
+  "temperature": 0.6499874044563441,
+  "temperature_baked_once": true,
+  "onnx_sha256": "edb9c14b384a9ff08f524e93a3c4b4def69dfe4140fbd98f997f2ad0abea3d88",
+  "checkpoint_sha256": "6c92fdbf1bd41506a6d8ebbf978c51d17767437b19bcad885fa439f59b4c431c",
+  "input_contract": {
+    "mel": [
+      "batch",
+      1,
+      80,
+      600
+    ],
+    "frame_mask": [
+      "batch",
+      1,
+      600
+    ]
+  },
+  "source_freeze_sha256": "d813c3ec746432f0e4ce013edab126d1523c60cce8c54e37733d02c651627590",
+  "selection_only_val_tune": true,
+  "no_new_test_holdout_access": true,
+  "pi_verified": false,
+  "requires_new_runtime_adapter": true
+}

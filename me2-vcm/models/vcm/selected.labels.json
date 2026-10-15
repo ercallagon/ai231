@@ -1,0 +1,85 @@
+{
+  "intents": [
+    "PLAY_MUSIC",
+    "WEATHER",
+    "TIME",
+    "LIGHT_ON",
+    "LIGHT_OFF",
+    "PAUSE",
+    "LIST_REMINDERS",
+    "STOP",
+    "NEXT",
+    "VOLUME_UP",
+    "VOLUME_DOWN",
+    "CALL",
+    "MESSAGE",
+    "TIMER",
+    "ALARM",
+    "TEMPERATURE",
+    "BRIGHTNESS",
+    "COLOR",
+    "CREATE_REMINDER",
+    "OUT_OF_SCOPE"
+  ],
+  "slot_sets": {
+    "TIMER": [
+      "10s",
+      "30s",
+      "1m"
+    ],
+    "ALARM": [
+      "6AM",
+      "8AM",
+      "9PM"
+    ],
+    "TEMPERATURE": [
+      "18",
+      "22",
+      "26",
+      "REJECT"
+    ],
+    "BRIGHTNESS": [
+      "20",
+      "60",
+      "100"
+    ],
+    "COLOR": [
+      "red",
+      "blue",
+      "green"
+    ],
+    "CREATE_REMINDER": [
+      "drink_water",
+      "study",
+      "exercise"
+    ]
+  },
+  "inputs": {
+    "mel": [
+      "batch",
+      1,
+      80,
+      600
+    ],
+    "frame_mask": [
+      "batch",
+      1,
+      600
+    ]
+  },
+  "frontend_version": "whole6s_mask600_final_partial_v1",
+  "temperature_baked": 0.6499874044563441,
+  "confidence_threshold": 0.954,
+  "requires_new_runtime_adapter": true,
+  "calibration_version": "vcm_six_second_calibration_20261015_v1",
+  "n_way_head": 20,
+  "oos_class": "OUT_OF_SCOPE",
+  "slot_outputs": {
+    "TIMER": "slot_TIMER",
+    "ALARM": "slot_ALARM",
+    "TEMPERATURE": "slot_TEMPERATURE",
+    "BRIGHTNESS": "slot_BRIGHTNESS",
+    "COLOR": "slot_COLOR",
+    "CREATE_REMINDER": "slot_CREATE_REMINDER"
+  }
+}

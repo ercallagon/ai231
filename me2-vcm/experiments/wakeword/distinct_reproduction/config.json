@@ -1,0 +1,22 @@
+{
+ "exp": "exp15_repro",
+ "seed": 20260926,
+ "device": "cuda:0",
+ "epochs_run": 57,
+ "best_epoch": 57,
+ "n_params": 204738,
+ "train_classes": {
+  "0": 1931,
+  "1": 12887
+ },
+ "val_classes": {
+  "0": 414,
+  "1": 726
+ },
+ "test_classes": {
+  "0": 415,
+  "1": 728
+ },
+ "elapsed_s": 18180.3,
+ "recipe_source": "me2-wakeword-swift/scripts/train_v5.py (exp15)"
+}

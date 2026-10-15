@@ -1,0 +1,538 @@
+{
+  "scope": "Development only; no live recall or wake test claim",
+  "models": {
+    "exp15": {
+      "model_sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
+      "frontend": "logmel",
+      "canonical_validation": {
+        "clean": {
+          "n": 1052,
+          "accuracy": 0.9163498098859315,
+          "recall": 0.8159509202453987,
+          "far": 0.03856749311294766,
+          "precision": 0.9047619047619048,
+          "f1": 0.8580645161290322,
+          "tp": 266,
+          "fp": 28,
+          "fn": 60,
+          "tn": 698
+        },
+        "hp": {
+          "n": 1052,
+          "accuracy": 0.9106463878326996,
+          "recall": 0.7730061349693251,
+          "far": 0.027548209366391185,
+          "precision": 0.9264705882352942,
+          "f1": 0.842809364548495,
+          "tp": 252,
+          "fp": 20,
+          "fn": 74,
+          "tn": 706
+        }
+      },
+      "music_raw_fires": 0,
+      "music_aec_fires": 0,
+      "music_seconds_per_path": 60.05866666666667,
+      "zero_music_gate_hypotheses": [
+        {
+          "threshold": 0.3,
+          "sustain": 2,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9163498098859315,
+            "recall": 0.8159509202453987,
+            "far": 0.03856749311294766,
+            "precision": 0.9047619047619048,
+            "f1": 0.8580645161290322,
+            "tp": 266,
+            "fp": 28,
+            "fn": 60,
+            "tn": 698
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9106463878326996,
+            "recall": 0.7730061349693251,
+            "far": 0.027548209366391185,
+            "precision": 0.9264705882352942,
+            "f1": 0.842809364548495,
+            "tp": 252,
+            "fp": 20,
+            "fn": 74,
+            "tn": 706
+          },
+          "positive_interval_annotation_pending": true
+        },
+        {
+          "threshold": 0.3,
+          "sustain": 3,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9163498098859315,
+            "recall": 0.8159509202453987,
+            "far": 0.03856749311294766,
+            "precision": 0.9047619047619048,
+            "f1": 0.8580645161290322,
+            "tp": 266,
+            "fp": 28,
+            "fn": 60,
+            "tn": 698
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9106463878326996,
+            "recall": 0.7730061349693251,
+            "far": 0.027548209366391185,
+            "precision": 0.9264705882352942,
+            "f1": 0.842809364548495,
+            "tp": 252,
+            "fp": 20,
+            "fn": 74,
+            "tn": 706
+          },
+          "positive_interval_annotation_pending": true
+        },
+        {
+          "threshold": 0.3,
+          "sustain": 4,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9163498098859315,
+            "recall": 0.8159509202453987,
+            "far": 0.03856749311294766,
+            "precision": 0.9047619047619048,
+            "f1": 0.8580645161290322,
+            "tp": 266,
+            "fp": 28,
+            "fn": 60,
+            "tn": 698
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9106463878326996,
+            "recall": 0.7730061349693251,
+            "far": 0.027548209366391185,
+            "precision": 0.9264705882352942,
+            "f1": 0.842809364548495,
+            "tp": 252,
+            "fp": 20,
+            "fn": 74,
+            "tn": 706
+          },
+          "positive_interval_annotation_pending": true
+        },
+        {
+          "threshold": 0.3,
+          "sustain": 5,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9163498098859315,
+            "recall": 0.8159509202453987,
+            "far": 0.03856749311294766,
+            "precision": 0.9047619047619048,
+            "f1": 0.8580645161290322,
+            "tp": 266,
+            "fp": 28,
+            "fn": 60,
+            "tn": 698
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9106463878326996,
+            "recall": 0.7730061349693251,
+            "far": 0.027548209366391185,
+            "precision": 0.9264705882352942,
+            "f1": 0.842809364548495,
+            "tp": 252,
+            "fp": 20,
+            "fn": 74,
+            "tn": 706
+          },
+          "positive_interval_annotation_pending": true
+        }
+      ]
+    },
+    "scratch_logmel": {
+      "model_sha256": "8ce73e1627bec139de186fce51a2cbe116e2853139195a88c98462a5a09f0e39",
+      "frontend": "logmel",
+      "canonical_validation": {
+        "clean": {
+          "n": 1052,
+          "accuracy": 0.9211026615969582,
+          "recall": 0.8128834355828221,
+          "far": 0.030303030303030304,
+          "precision": 0.9233449477351916,
+          "f1": 0.8646003262642741,
+          "tp": 265,
+          "fp": 22,
+          "fn": 61,
+          "tn": 704
+        },
+        "hp": {
+          "n": 1052,
+          "accuracy": 0.9077946768060836,
+          "recall": 0.7668711656441718,
+          "far": 0.028925619834710745,
+          "precision": 0.922509225092251,
+          "f1": 0.8375209380234506,
+          "tp": 250,
+          "fp": 21,
+          "fn": 76,
+          "tn": 705
+        }
+      },
+      "music_raw_fires": 2,
+      "music_aec_fires": 1,
+      "music_seconds_per_path": 60.05866666666667,
+      "zero_music_gate_hypotheses": [
+        {
+          "threshold": 0.3,
+          "sustain": 5,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9211026615969582,
+            "recall": 0.8128834355828221,
+            "far": 0.030303030303030304,
+            "precision": 0.9233449477351916,
+            "f1": 0.8646003262642741,
+            "tp": 265,
+            "fp": 22,
+            "fn": 61,
+            "tn": 704
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9077946768060836,
+            "recall": 0.7668711656441718,
+            "far": 0.028925619834710745,
+            "precision": 0.922509225092251,
+            "f1": 0.8375209380234506,
+            "tp": 250,
+            "fp": 21,
+            "fn": 76,
+            "tn": 705
+          },
+          "positive_interval_annotation_pending": true
+        }
+      ]
+    },
+    "scratch_pcen": {
+      "model_sha256": "5a49b5727533349df0a0f7f5d0f2431b8a3ac52c0738ce5e8070bf9529e3f21a",
+      "frontend": "pcen",
+      "canonical_validation": {
+        "clean": {
+          "n": 1052,
+          "accuracy": 0.9344106463878327,
+          "recall": 0.8404907975460123,
+          "far": 0.023415977961432508,
+          "precision": 0.9415807560137457,
+          "f1": 0.8881685575364667,
+          "tp": 274,
+          "fp": 17,
+          "fn": 52,
+          "tn": 709
+        },
+        "hp": {
+          "n": 1052,
+          "accuracy": 0.9439163498098859,
+          "recall": 0.8742331288343558,
+          "far": 0.024793388429752067,
+          "precision": 0.9405940594059405,
+          "f1": 0.9062003179650239,
+          "tp": 285,
+          "fp": 18,
+          "fn": 41,
+          "tn": 708
+        }
+      },
+      "music_raw_fires": 24,
+      "music_aec_fires": 6,
+      "music_seconds_per_path": 60.05866666666667,
+      "zero_music_gate_hypotheses": []
+    },
+    "existing_exp16": {
+      "model_sha256": "8fcc48398b056719249890f3631ef5a5180a5e4809d9eaf44300481e70bf84c2",
+      "frontend": "logmel",
+      "canonical_validation": {
+        "clean": {
+          "n": 1052,
+          "accuracy": 0.9315589353612167,
+          "recall": 0.8282208588957055,
+          "far": 0.02203856749311295,
+          "precision": 0.9440559440559441,
+          "f1": 0.8823529411764706,
+          "tp": 270,
+          "fp": 16,
+          "fn": 56,
+          "tn": 710
+        },
+        "hp": {
+          "n": 1052,
+          "accuracy": 0.9306083650190115,
+          "recall": 0.8220858895705522,
+          "far": 0.02066115702479339,
+          "precision": 0.9469964664310954,
+          "f1": 0.8801313628899836,
+          "tp": 268,
+          "fp": 15,
+          "fn": 58,
+          "tn": 711
+        }
+      },
+      "music_raw_fires": 3,
+      "music_aec_fires": 0,
+      "music_seconds_per_path": 60.05866666666667,
+      "zero_music_gate_hypotheses": []
+    },
+    "wake_hp_tone_s20261011": {
+      "model_sha256": "e50bf81f6a8a71ecc42af66e1756b344e68a59d0b2e685f99d9642b12ad0e4df",
+      "frontend": "logmel",
+      "canonical_validation": {
+        "clean": {
+          "n": 1052,
+          "accuracy": 0.9258555133079848,
+          "recall": 0.8466257668711656,
+          "far": 0.03856749311294766,
+          "precision": 0.9078947368421053,
+          "f1": 0.8761904761904762,
+          "tp": 276,
+          "fp": 28,
+          "fn": 50,
+          "tn": 698
+        },
+        "hp": {
+          "n": 1052,
+          "accuracy": 0.9296577946768061,
+          "recall": 0.8466257668711656,
+          "far": 0.03305785123966942,
+          "precision": 0.92,
+          "f1": 0.8817891373801917,
+          "tp": 276,
+          "fp": 24,
+          "fn": 50,
+          "tn": 702
+        }
+      },
+      "music_raw_fires": 3,
+      "music_aec_fires": 0,
+      "music_seconds_per_path": 60.05866666666667,
+      "zero_music_gate_hypotheses": [
+        {
+          "threshold": 0.4,
+          "sustain": 5,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9220532319391636,
+            "recall": 0.8190184049079755,
+            "far": 0.03168044077134986,
+            "precision": 0.9206896551724137,
+            "f1": 0.8668831168831169,
+            "tp": 267,
+            "fp": 23,
+            "fn": 59,
+            "tn": 703
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9296577946768061,
+            "recall": 0.8312883435582822,
+            "far": 0.026170798898071626,
+            "precision": 0.9344827586206896,
+            "f1": 0.8798701298701299,
+            "tp": 271,
+            "fp": 19,
+            "fn": 55,
+            "tn": 707
+          },
+          "positive_interval_annotation_pending": true
+        }
+      ]
+    },
+    "wake_negative": {
+      "model_sha256": "2b0477713b161c85c0b4bef5ec90a727011086e438017fc94ed68855cb8ed4b8",
+      "frontend": "logmel",
+      "canonical_validation": {
+        "clean": {
+          "n": 1052,
+          "accuracy": 0.9296577946768061,
+          "recall": 0.8282208588957055,
+          "far": 0.024793388429752067,
+          "precision": 0.9375,
+          "f1": 0.8794788273615635,
+          "tp": 270,
+          "fp": 18,
+          "fn": 56,
+          "tn": 708
+        },
+        "hp": {
+          "n": 1052,
+          "accuracy": 0.9268060836501901,
+          "recall": 0.8159509202453987,
+          "far": 0.023415977961432508,
+          "precision": 0.9399293286219081,
+          "f1": 0.8735632183908046,
+          "tp": 266,
+          "fp": 17,
+          "fn": 60,
+          "tn": 709
+        }
+      },
+      "music_raw_fires": 1,
+      "music_aec_fires": 0,
+      "music_seconds_per_path": 60.05866666666667,
+      "zero_music_gate_hypotheses": [
+        {
+          "threshold": 0.2,
+          "sustain": 5,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9325095057034221,
+            "recall": 0.8558282208588958,
+            "far": 0.03305785123966942,
+            "precision": 0.9207920792079208,
+            "f1": 0.8871224165341812,
+            "tp": 279,
+            "fp": 24,
+            "fn": 47,
+            "tn": 702
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9344106463878327,
+            "recall": 0.8496932515337423,
+            "far": 0.027548209366391185,
+            "precision": 0.9326599326599326,
+            "f1": 0.8892455858747994,
+            "tp": 277,
+            "fp": 20,
+            "fn": 49,
+            "tn": 706
+          },
+          "positive_interval_annotation_pending": true
+        },
+        {
+          "threshold": 0.3,
+          "sustain": 5,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9296577946768061,
+            "recall": 0.8282208588957055,
+            "far": 0.024793388429752067,
+            "precision": 0.9375,
+            "f1": 0.8794788273615635,
+            "tp": 270,
+            "fp": 18,
+            "fn": 56,
+            "tn": 708
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9268060836501901,
+            "recall": 0.8159509202453987,
+            "far": 0.023415977961432508,
+            "precision": 0.9399293286219081,
+            "f1": 0.8735632183908046,
+            "tp": 266,
+            "fp": 17,
+            "fn": 60,
+            "tn": 709
+          },
+          "positive_interval_annotation_pending": true
+        }
+      ]
+    },
+    "wake_negative_hp": {
+      "model_sha256": "9d8cf7309219d04ed00f951044d956eddde67564a286bc25235a410cd7835e2c",
+      "frontend": "logmel",
+      "canonical_validation": {
+        "clean": {
+          "n": 1052,
+          "accuracy": 0.9277566539923955,
+          "recall": 0.8251533742331288,
+          "far": 0.026170798898071626,
+          "precision": 0.9340277777777778,
+          "f1": 0.8762214983713354,
+          "tp": 269,
+          "fp": 19,
+          "fn": 57,
+          "tn": 707
+        },
+        "hp": {
+          "n": 1052,
+          "accuracy": 0.9268060836501901,
+          "recall": 0.8190184049079755,
+          "far": 0.024793388429752067,
+          "precision": 0.9368421052631579,
+          "f1": 0.8739770867430442,
+          "tp": 267,
+          "fp": 18,
+          "fn": 59,
+          "tn": 708
+        }
+      },
+      "music_raw_fires": 1,
+      "music_aec_fires": 0,
+      "music_seconds_per_path": 60.05866666666667,
+      "zero_music_gate_hypotheses": [
+        {
+          "threshold": 0.2,
+          "sustain": 5,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9344106463878327,
+            "recall": 0.8619631901840491,
+            "far": 0.03305785123966942,
+            "precision": 0.921311475409836,
+            "f1": 0.8906497622820919,
+            "tp": 281,
+            "fp": 24,
+            "fn": 45,
+            "tn": 702
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.935361216730038,
+            "recall": 0.852760736196319,
+            "far": 0.027548209366391185,
+            "precision": 0.9328859060402684,
+            "f1": 0.8910256410256411,
+            "tp": 278,
+            "fp": 20,
+            "fn": 48,
+            "tn": 706
+          },
+          "positive_interval_annotation_pending": true
+        },
+        {
+          "threshold": 0.3,
+          "sustain": 5,
+          "clean": {
+            "n": 1052,
+            "accuracy": 0.9277566539923955,
+            "recall": 0.8251533742331288,
+            "far": 0.026170798898071626,
+            "precision": 0.9340277777777778,
+            "f1": 0.8762214983713354,
+            "tp": 269,
+            "fp": 19,
+            "fn": 57,
+            "tn": 707
+          },
+          "hp": {
+            "n": 1052,
+            "accuracy": 0.9268060836501901,
+            "recall": 0.8190184049079755,
+            "far": 0.024793388429752067,
+            "precision": 0.9368421052631579,
+            "f1": 0.8739770867430442,
+            "tp": 267,
+            "fp": 18,
+            "fn": 59,
+            "tn": 708
+          },
+          "positive_interval_annotation_pending": true
+        }
+      ]
+    }
+  }
+}
