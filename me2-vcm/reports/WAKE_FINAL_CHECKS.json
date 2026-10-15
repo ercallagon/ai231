@@ -1,0 +1,112 @@
+{
+  "curated_tests": {
+    "tests": 233,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 4
+  },
+  "pretraining_tests": {
+    "tests": 26,
+    "failures": 0
+  },
+  "patch_rehearsal": {
+    "passed": true,
+    "dry_run": true,
+    "apply": true,
+    "rollback": true,
+    "protected_unchanged": true,
+    "pi_verified": false
+  },
+  "original_exp15_checkpoint": {
+    "original_checkpoint_sha256": "d6d9069df46f01f1ed44a014d34cd37150b210e38a4428423f7e41b73c6254b0",
+    "parity_batches": [
+      1,
+      2,
+      17
+    ],
+    "max_abs_errors": [
+      4.76837158203125e-07,
+      2.682209014892578e-07,
+      1.2218952178955078e-06
+    ],
+    "passed": true
+  },
+  "source_clock": "integer16000Hz sample counts; chunk invariant exact2s cooldown",
+  "selection": {
+    "nominated": "pcen2s_v1",
+    "recommendation": "not supported for deployment; optional diagnostic Pi A/B only",
+    "default": "exp15",
+    "music_regression": false,
+    "positive_validation_nonregression": true,
+    "test_recall_nonregression": true,
+    "test_rate_guard": false,
+    "pi_verified": false,
+    "protected_unchanged": true
+  },
+  "package": {
+    "archive": "work/wake_final_streaming_20261015_v1/wake_final_streaming_pi_candidate_v2.tar.gz",
+    "sha256": "b51073e112ec5c37501dc1aa32b5f2c1e6c2fd8d77cd66e65e5763cf5eabbd6a",
+    "bytes": 2297713,
+    "expanded_files": "deploy/rpi/wake_final_streaming_20261015_v1",
+    "nominated": "pcen2s_v1",
+    "default": "exp15",
+    "pi_verified": false,
+    "prior_archive_preserved": true,
+    "regression_fixtures_corrected": true
+  },
+  "initial_dataset_check_note": "Two initial directory-enumeration tests failed transiently; direct manifest byte/PCM checks and complete26-test rerun passed. No dataset files or collector code were changed.",
+  "legacy_test_fixture_correction": "Initial expanded suite exposed two stale pre-existing fixtures: slots vs slot_sets and missing benchmark_log. Fixtures now cover both schemas plus REJECT fail-closed; original failing JUnit retained; full rerun passed.",
+  "baseline_models_preserved": true,
+  "pi_verified": false,
+  "published_this_revision": false,
+  "wake_training_public_reproduction": "blocked by permission/retrieval of private original wake recordings; metadata and archived private-workspace recipes published, not a public one-command retraining claim",
+  "host_entire_hop": {
+    "exp15_default": {
+      "p95_ms": 8.470442146062851,
+      "scoring_hop_rtf_p95": 0.033881768584251404,
+      "threads": {
+        "intra": 1,
+        "inter": 1
+      },
+      "physical_pi5": false
+    },
+    "pcen2s_v1": {
+      "p95_ms": 4.270763508975506,
+      "scoring_hop_rtf_p95": 0.017083054035902025,
+      "threads": {
+        "intra": 1,
+        "inter": 1
+      },
+      "physical_pi5": false
+    }
+  },
+  "private_transfer_guide": "work/wake_final_streaming_20261015_v1/TRANSFER_EXACT.md",
+  "isolation": {
+    "known_train_reserved_canonical_voice_overlap": [],
+    "known_train_reserved_PCM_overlap": [],
+    "historical_validation_test_shared_canonical_voice_families": [
+      "piper-en-GB-alan-medium",
+      "piper-en-GB-alba-medium",
+      "piper-en-GB-cori-medium",
+      "piper-en-GB-jenny-dioco-medium",
+      "piper-en-GB-northern-english-male-medium",
+      "piper-en-GB-semaine-medium",
+      "piper-en-US-amy-medium",
+      "piper-en-US-danny-low",
+      "piper-en-US-hfc-female-medium",
+      "piper-en-US-hfc-male-medium",
+      "piper-en-US-joe-medium",
+      "piper-en-US-kristin-medium",
+      "piper-en-US-lessac-medium",
+      "piper-en-US-mike-medium",
+      "piper-en-US-reza-ibrahim-medium",
+      "piper-en-US-ryan-medium",
+      "piper-en-US-sam-medium"
+    ],
+    "evaluation_independence": "NOT independent: previously exposed, synthetic-only positives, validation/test share canonical Piper voice families; historical splits preserved",
+    "unknown_cross_engine_human_ancestry": true,
+    "no_split_overwrites": true
+  },
+  "private_cache_bytes": 13275849696,
+  "no_active_training": true
+}

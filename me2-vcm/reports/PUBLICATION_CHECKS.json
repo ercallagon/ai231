@@ -1,0 +1,37 @@
+{
+  "date": "2026-10-15",
+  "parent_revision": "fbf01a6710e4b552aa15c11c82588b898a16ca2e",
+  "testing_scope": "exact staged export; CPU-only, mocked hardware/services; no training or Pi access",
+  "regression": {
+    "tests": 233,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 4,
+    "passed": 229
+  },
+  "junit_sha256": "1867d17a5663270b204556ded620fe9113aca51040119050ab487075cd80ecc2",
+  "clean_environment": "Existing inference-only Python 3.12 venv; no Torch; model/hash/contract verification",
+  "clean_verify_passed": true,
+  "verified_vcm_profiles": [
+    "selected",
+    "run043"
+  ],
+  "verified_wake_profiles": [
+    "exp15",
+    "exp15_calibrated",
+    "cmvn2s_v1",
+    "pcen2s_v1",
+    "exp15_streamft_v1",
+    "exp15_fresh_control_v1"
+  ],
+  "protected_models_and_configs_unchanged": true,
+  "staged_me2_paths_before_receipt": 114,
+  "staged_bytes_before_receipt": 17577774,
+  "credential_and_private_path_findings": [],
+  "unapproved_new_recording_or_archive_files": [],
+  "me1_and_repository_root_unchanged": true,
+  "physical_pi_verified": false,
+  "model_or_threshold_reselection": false,
+  "test_holdout_retuning": false,
+  "committed_receipt_note": "This receipt is added after checks; no source/model/config changes follow the verified export"
+}

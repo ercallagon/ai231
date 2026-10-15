@@ -1,0 +1,98 @@
+[
+  {
+    "epoch": 1,
+    "loss": 1.3275347519665956,
+    "augmented_train_accuracy": 0.6722412109375,
+    "selected": {
+      "threshold": 0.9899999999999995,
+      "metrics": {
+        "raw": {
+          "detected": 233,
+          "n": 326,
+          "recall": 0.7147239263803681,
+          "original_events": 14,
+          "original_hours": 0.24748678819444445,
+          "original_fa_h": 56.568676260005184,
+          "generated_events": 0,
+          "generated_hours": 0.28444444444444444,
+          "generated_fa_h": 0.0,
+          "unmatched_positive_events": 0,
+          "latency_median_ms": 335.375,
+          "latency_p95_ms": 614.5124999999999
+        },
+        "hp80": {
+          "detected": 220,
+          "n": 326,
+          "recall": 0.6748466257668712,
+          "original_events": 7,
+          "original_hours": 0.24748678819444445,
+          "original_fa_h": 28.284338130002592,
+          "generated_events": 0,
+          "generated_hours": 0.28444444444444444,
+          "generated_fa_h": 0.0,
+          "unmatched_positive_events": 0,
+          "latency_median_ms": 365.21875,
+          "latency_p95_ms": 627.6406249999999
+        }
+      }
+    },
+    "score": [
+      0.6748466257668712,
+      0.6947852760736196,
+      0.49877300613496933,
+      -56.568676260005184,
+      -627.6406249999999
+    ],
+    "seconds": 68.73540799599141,
+    "elapsed_gpu_seconds": 69.75629190914333,
+    "peak_reserved_bytes": 859832320
+  },
+  {
+    "epoch": 2,
+    "loss": 0.5158587994519621,
+    "augmented_train_accuracy": 0.8128662109375,
+    "selected": {
+      "threshold": 0.9899999999999995,
+      "metrics": {
+        "raw": {
+          "detected": 214,
+          "n": 326,
+          "recall": 0.656441717791411,
+          "original_events": 13,
+          "original_hours": 0.24748678819444445,
+          "original_fa_h": 52.52805652714767,
+          "generated_events": 0,
+          "generated_hours": 0.28444444444444444,
+          "generated_fa_h": 0.0,
+          "unmatched_positive_events": 0,
+          "latency_median_ms": 328.9375,
+          "latency_p95_ms": 618.8625
+        },
+        "hp80": {
+          "detected": 202,
+          "n": 326,
+          "recall": 0.6196319018404908,
+          "original_events": 4,
+          "original_hours": 0.24748678819444445,
+          "original_fa_h": 16.16247893143005,
+          "generated_events": 0,
+          "generated_hours": 0.28444444444444444,
+          "generated_fa_h": 0.0,
+          "unmatched_positive_events": 0,
+          "latency_median_ms": 354.71875,
+          "latency_p95_ms": 634.4718749999998
+        }
+      }
+    },
+    "score": [
+      0.6196319018404908,
+      0.6380368098159509,
+      0.4447852760736196,
+      -52.52805652714767,
+      -634.4718749999998
+    ],
+    "seconds": 62.18535621929914,
+    "elapsed_gpu_seconds": 132.8203379260376,
+    "peak_reserved_bytes": 859832320
+  }
+]

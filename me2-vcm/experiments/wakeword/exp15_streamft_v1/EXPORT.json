@@ -1,0 +1,16 @@
+{
+  "model_sha256": "562868305685d4945b02bce2d628d80d1643e12b6c771622bd455a3857df3126",
+  "checkpoint_sha256": "fef6a1a0fac71b5c94ce20da81acff6031d47281714f03f29d67541345fec72e",
+  "epoch": 1,
+  "parity_batches": [
+    1,
+    2,
+    17
+  ],
+  "max_abs_errors": [
+    3.725290298461914e-07,
+    2.980232238769531e-07,
+    1.2218952178955078e-06
+  ],
+  "passed": true
+}

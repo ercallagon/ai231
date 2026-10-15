@@ -1,0 +1,30 @@
+{
+  "status": "derived_from_verified_original_loop_and_committed_receipt_history",
+  "eligible_training_rows": 25330,
+  "batch_size": 32,
+  "drop_last": false,
+  "gradient_accumulation": false,
+  "optimizer_steps_per_batch": 1,
+  "batches_per_epoch": 792,
+  "completed_epochs": 72,
+  "selected_checkpoint_epoch": 52,
+  "derived_completed_optimizer_steps": 57024,
+  "derived_selected_checkpoint_optimizer_steps": 41184,
+  "derivation": "ceil(25330/32)=792; original DataLoader leaves drop_last at False and calls opt.step once for each batch without accumulation",
+  "source_references": [
+    "TRAINING_RECEIPT.json",
+    "history.json",
+    "../../scripts/train_selected.py"
+  ],
+  "original_loop_review": "Original archived run.py loader and optimizer loop independently checked; public scratch driver preserves the same accounting",
+  "selected_epoch_average_augmented_training_objective": 0.40763125924361915,
+  "last_epoch_average_augmented_training_objective": 0.4043819006069159,
+  "node_id": null,
+  "node_note": "Not recorded in the committed selected-run provenance; physical GPU index 7 does not identify the host node",
+  "gpu_count": 1,
+  "gpu_model": "NVIDIA A100-SXM4-40GB",
+  "seed": 42,
+  "epoch_wall_seconds_sum": 13127.226322065108,
+  "allocated_gpu_hours_from_epoch_wall": 3.6464517561291965,
+  "timing_scope": "Includes validation and host overhead; excludes preparation/queue and is not CUDA-active kernel time"
+}

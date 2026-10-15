@@ -1,0 +1,150 @@
+[exp15] starting Sunday, 27 September, 2026 11:15:06 PM PST
+========================================================================
+HEY SWIFT 2-CLASS v5 (audio-aug + LP)  exp=exp15_mined_lp  seed=20260926
+========================================================================
+device     : cuda:0
+gpu        : NVIDIA A100-SXM4-40GB
+train  : wake=1931  not-wake=12887  total=14818
+valid  : wake=414  not-wake=726  total=1140
+test   : wake=415  not-wake=728  total=1143
+cfg      : lr=0.0003 bs=32 wd=0.0001 wake_w=1.0 ls=0.0 focal=0.0 vtlp=0.3 spec=0.5 shift=12 cosine_floor=0.0 no_cosine=False fa_cap=0.05 AUGPROB=0.85 SNREXT=0.35x[0.0,10.0] LPPROB=0.45x[3000,5000]Hz
+model    : WakeGRU n_classes=2  params=204738  size~0.82 MB fp32
+ep01 tloss=0.3680 | VAL thr=0.21 P=0.700 R=0.203 F1=0.315 FA=4.96% FR=79.7% | TRpos=0.198 VApos=0.146 | tempR=0.203 | lr=3.00e-04 280s
+   -> new best (score=0.203,0.315) *
+ep02 tloss=0.3371 | VAL thr=0.26 P=0.714 R=0.181 F1=0.289 FA=4.13% FR=81.9% | TRpos=0.261 VApos=0.158 | tempR=0.181 | lr=2.99e-04 215s
+ep03 tloss=0.3083 | VAL thr=0.15 P=0.809 R=0.357 F1=0.496 FA=4.82% FR=64.3% | TRpos=0.270 VApos=0.122 | tempR=0.357 | lr=2.98e-04 248s
+   -> new best (score=0.357,0.496) *
+ep04 tloss=0.2877 | VAL thr=0.29 P=0.848 R=0.473 F1=0.608 FA=4.82% FR=52.7% | TRpos=0.389 VApos=0.299 | tempR=0.473 | lr=2.97e-04 235s
+   -> new best (score=0.473,0.608) *
+ep05 tloss=0.2716 | VAL thr=0.27 P=0.850 R=0.493 F1=0.624 FA=4.96% FR=50.7% | TRpos=0.435 VApos=0.297 | tempR=0.493 | lr=2.95e-04 261s
+   -> new best (score=0.493,0.624) *
+ep06 tloss=0.2490 | VAL thr=0.22 P=0.880 R=0.618 F1=0.726 FA=4.82% FR=38.2% | TRpos=0.463 VApos=0.396 | tempR=0.618 | lr=2.93e-04 265s
+   -> new best (score=0.618,0.726) *
+ep07 tloss=0.2369 | VAL thr=0.14 P=0.888 R=0.652 F1=0.752 FA=4.68% FR=34.8% | TRpos=0.441 VApos=0.399 | tempR=0.652 | lr=2.90e-04 255s
+   -> new best (score=0.652,0.752) *
+ep08 tloss=0.2197 | VAL thr=0.07 P=0.899 R=0.710 F1=0.794 FA=4.55% FR=29.0% | TRpos=0.485 VApos=0.377 | tempR=0.710 | lr=2.87e-04 252s
+   -> new best (score=0.710,0.794) *
+ep09 tloss=0.2104 | VAL thr=0.08 P=0.902 R=0.713 F1=0.796 FA=4.41% FR=28.7% | TRpos=0.411 VApos=0.345 | tempR=0.713 | lr=2.84e-04 254s
+   -> new best (score=0.713,0.796) *
+ep10 tloss=0.2019 | VAL thr=0.23 P=0.900 R=0.783 F1=0.837 FA=4.96% FR=21.7% | TRpos=0.606 VApos=0.578 | tempR=0.783 | lr=2.80e-04 277s
+   -> new best (score=0.783,0.837) *
+ep11 tloss=0.2008 | VAL thr=0.23 P=0.889 R=0.693 F1=0.779 FA=4.96% FR=30.7% | TRpos=0.642 VApos=0.565 | tempR=0.693 | lr=2.76e-04 267s
+ep12 tloss=0.1860 | VAL thr=0.12 P=0.900 R=0.783 F1=0.837 FA=4.96% FR=21.7% | TRpos=0.552 VApos=0.447 | tempR=0.783 | lr=2.71e-04 257s
+ep13 tloss=0.1770 | VAL thr=0.10 P=0.900 R=0.780 F1=0.836 FA=4.96% FR=22.0% | TRpos=0.552 VApos=0.465 | tempR=0.780 | lr=2.67e-04 254s
+ep14 tloss=0.1728 | VAL thr=0.15 P=0.903 R=0.812 F1=0.855 FA=4.96% FR=18.8% | TRpos=0.723 VApos=0.596 | tempR=0.812 | lr=2.61e-04 255s
+   -> new best (score=0.812,0.855) *
+ep15 tloss=0.1666 | VAL thr=0.18 P=0.901 R=0.768 F1=0.829 FA=4.82% FR=23.2% | TRpos=0.703 VApos=0.581 | tempR=0.768 | lr=2.56e-04 251s
+ep16 tloss=0.1648 | VAL thr=0.13 P=0.905 R=0.826 F1=0.864 FA=4.96% FR=17.4% | TRpos=0.687 VApos=0.618 | tempR=0.826 | lr=2.50e-04 247s
+   -> new best (score=0.826,0.864) *
+ep17 tloss=0.1604 | VAL thr=0.05 P=0.913 R=0.807 F1=0.856 FA=4.41% FR=19.3% | TRpos=0.647 VApos=0.474 | tempR=0.807 | lr=2.44e-04 258s
+ep18 tloss=0.1598 | VAL thr=0.08 P=0.906 R=0.843 F1=0.874 FA=4.96% FR=15.7% | TRpos=0.590 VApos=0.451 | tempR=0.843 | lr=2.38e-04 261s
+   -> new best (score=0.843,0.874) *
+ep19 tloss=0.1541 | VAL thr=0.38 P=0.906 R=0.836 F1=0.869 FA=4.96% FR=16.4% | TRpos=0.716 VApos=0.730 | tempR=0.836 | lr=2.32e-04 254s
+ep20 tloss=0.1510 | VAL thr=0.24 P=0.903 R=0.807 F1=0.852 FA=4.96% FR=19.3% | TRpos=0.639 VApos=0.648 | tempR=0.807 | lr=2.25e-04 246s
+ep21 tloss=0.1452 | VAL thr=0.16 P=0.914 R=0.845 F1=0.878 FA=4.55% FR=15.5% | TRpos=0.719 VApos=0.698 | tempR=0.845 | lr=2.18e-04 243s
+   -> new best (score=0.845,0.878) *
+ep22 tloss=0.1414 | VAL thr=0.06 P=0.912 R=0.821 F1=0.864 FA=4.55% FR=17.9% | TRpos=0.674 VApos=0.492 | tempR=0.821 | lr=2.11e-04 251s
+ep23 tloss=0.1359 | VAL thr=0.16 P=0.916 R=0.920 F1=0.918 FA=4.82% FR=8.0% | TRpos=0.683 VApos=0.742 | tempR=0.920 | lr=2.04e-04 250s
+   -> new best (score=0.920,0.918) *
+ep24 tloss=0.1396 | VAL thr=0.20 P=0.909 R=0.870 F1=0.889 FA=4.96% FR=13.0% | TRpos=0.698 VApos=0.687 | tempR=0.870 | lr=1.96e-04 251s
+ep25 tloss=0.1336 | VAL thr=0.06 P=0.916 R=0.838 F1=0.875 FA=4.41% FR=16.2% | TRpos=0.704 VApos=0.551 | tempR=0.838 | lr=1.89e-04 262s
+ep26 tloss=0.1311 | VAL thr=0.39 P=0.912 R=0.874 F1=0.893 FA=4.82% FR=12.6% | TRpos=0.762 VApos=0.792 | tempR=0.874 | lr=1.81e-04 300s
+ep27 tloss=0.1275 | VAL thr=0.09 P=0.901 R=0.768 F1=0.829 FA=4.82% FR=23.2% | TRpos=0.689 VApos=0.536 | tempR=0.768 | lr=1.73e-04 314s
+ep28 tloss=0.1292 | VAL thr=0.17 P=0.908 R=0.855 F1=0.881 FA=4.96% FR=14.5% | TRpos=0.724 VApos=0.676 | tempR=0.855 | lr=1.66e-04 295s
+ep29 tloss=0.1306 | VAL thr=0.11 P=0.910 R=0.855 F1=0.882 FA=4.82% FR=14.5% | TRpos=0.672 VApos=0.607 | tempR=0.855 | lr=1.58e-04 244s
+ep30 tloss=0.1223 | VAL thr=0.12 P=0.909 R=0.848 F1=0.878 FA=4.82% FR=15.2% | TRpos=0.702 VApos=0.637 | tempR=0.848 | lr=1.50e-04 227s
+ep31 tloss=0.1230 | VAL thr=0.07 P=0.912 R=0.824 F1=0.865 FA=4.55% FR=17.6% | TRpos=0.663 VApos=0.583 | tempR=0.824 | lr=1.42e-04 229s
+ep32 tloss=0.1197 | VAL thr=0.12 P=0.908 R=0.860 F1=0.883 FA=4.96% FR=14.0% | TRpos=0.726 VApos=0.690 | tempR=0.860 | lr=1.34e-04 210s
+ep33 tloss=0.1171 | VAL thr=0.04 P=0.907 R=0.853 F1=0.879 FA=4.96% FR=14.7% | TRpos=0.696 VApos=0.582 | tempR=0.853 | lr=1.27e-04 213s
+ep34 tloss=0.1101 | VAL thr=0.15 P=0.912 R=0.903 F1=0.908 FA=4.96% FR=9.7% | TRpos=0.717 VApos=0.748 | tempR=0.903 | lr=1.19e-04 210s
+ep35 tloss=0.1140 | VAL thr=0.10 P=0.915 R=0.853 F1=0.883 FA=4.55% FR=14.7% | TRpos=0.749 VApos=0.622 | tempR=0.853 | lr=1.11e-04 208s
+ep36 tloss=0.1135 | VAL thr=0.04 P=0.912 R=0.879 F1=0.895 FA=4.82% FR=12.1% | TRpos=0.675 VApos=0.567 | tempR=0.879 | lr=1.04e-04 208s
+ep37 tloss=0.1125 | VAL thr=0.07 P=0.906 R=0.838 F1=0.871 FA=4.96% FR=16.2% | TRpos=0.747 VApos=0.625 | tempR=0.838 | lr=9.62e-05 207s
+ep38 tloss=0.1047 | VAL thr=0.11 P=0.914 R=0.901 F1=0.908 FA=4.82% FR=9.9% | TRpos=0.793 VApos=0.745 | tempR=0.901 | lr=8.90e-05 206s
+ep39 tloss=0.1093 | VAL thr=0.06 P=0.910 R=0.884 F1=0.897 FA=4.96% FR=11.6% | TRpos=0.713 VApos=0.651 | tempR=0.884 | lr=8.19e-05 203s
+ep40 tloss=0.1088 | VAL thr=0.17 P=0.911 R=0.889 F1=0.900 FA=4.96% FR=11.1% | TRpos=0.780 VApos=0.744 | tempR=0.889 | lr=7.50e-05 208s
+ep41 tloss=0.1032 | VAL thr=0.11 P=0.915 R=0.911 F1=0.913 FA=4.82% FR=8.9% | TRpos=0.755 VApos=0.755 | tempR=0.911 | lr=6.83e-05 200s
+ep42 tloss=0.1014 | VAL thr=0.08 P=0.916 R=0.925 F1=0.921 FA=4.82% FR=7.5% | TRpos=0.765 VApos=0.742 | tempR=0.925 | lr=6.18e-05 220s
+   -> new best (score=0.925,0.921) *
+ep43 tloss=0.1116 | VAL thr=0.09 P=0.914 R=0.923 F1=0.918 FA=4.96% FR=7.7% | TRpos=0.743 VApos=0.738 | tempR=0.923 | lr=5.56e-05 229s
+ep44 tloss=0.1036 | VAL thr=0.20 P=0.913 R=0.918 F1=0.916 FA=4.96% FR=8.2% | TRpos=0.812 VApos=0.792 | tempR=0.918 | lr=4.96e-05 249s
+ep45 tloss=0.1007 | VAL thr=0.07 P=0.914 R=0.896 F1=0.905 FA=4.82% FR=10.4% | TRpos=0.773 VApos=0.682 | tempR=0.896 | lr=4.39e-05 304s
+ep46 tloss=0.0978 | VAL thr=0.12 P=0.910 R=0.874 F1=0.892 FA=4.96% FR=12.6% | TRpos=0.794 VApos=0.706 | tempR=0.874 | lr=3.85e-05 283s
+ep47 tloss=0.1003 | VAL thr=0.10 P=0.913 R=0.891 F1=0.902 FA=4.82% FR=10.9% | TRpos=0.772 VApos=0.703 | tempR=0.891 | lr=3.34e-05 293s
+ep48 tloss=0.0985 | VAL thr=0.12 P=0.912 R=0.896 F1=0.904 FA=4.96% FR=10.4% | TRpos=0.800 VApos=0.732 | tempR=0.896 | lr=2.86e-05 236s
+ep49 tloss=0.0914 | VAL thr=0.10 P=0.915 R=0.915 F1=0.915 FA=4.82% FR=8.5% | TRpos=0.802 VApos=0.747 | tempR=0.915 | lr=2.42e-05 223s
+ep50 tloss=0.0966 | VAL thr=0.08 P=0.910 R=0.882 F1=0.896 FA=4.96% FR=11.8% | TRpos=0.774 VApos=0.704 | tempR=0.882 | lr=2.01e-05 229s
+ep51 tloss=0.0974 | VAL thr=0.09 P=0.920 R=0.886 F1=0.903 FA=4.41% FR=11.4% | TRpos=0.776 VApos=0.705 | tempR=0.886 | lr=1.63e-05 229s
+ep52 tloss=0.1007 | VAL thr=0.11 P=0.916 R=0.896 F1=0.906 FA=4.68% FR=10.4% | TRpos=0.795 VApos=0.732 | tempR=0.896 | lr=1.30e-05 229s
+ep53 tloss=0.0968 | VAL thr=0.10 P=0.912 R=0.877 F1=0.894 FA=4.82% FR=12.3% | TRpos=0.799 VApos=0.699 | tempR=0.877 | lr=9.96e-06 225s
+ep54 tloss=0.0937 | VAL thr=0.13 P=0.919 R=0.903 F1=0.911 FA=4.55% FR=9.7% | TRpos=0.792 VApos=0.759 | tempR=0.903 | lr=7.34e-06 231s
+ep55 tloss=0.0935 | VAL thr=0.10 P=0.911 R=0.894 F1=0.902 FA=4.96% FR=10.6% | TRpos=0.799 VApos=0.734 | tempR=0.894 | lr=5.11e-06 227s
+ep56 tloss=0.0985 | VAL thr=0.10 P=0.912 R=0.896 F1=0.904 FA=4.96% FR=10.4% | TRpos=0.809 VApos=0.729 | tempR=0.896 | lr=3.28e-06 260s
+ep57 tloss=0.0909 | VAL thr=0.10 P=0.915 R=0.889 F1=0.902 FA=4.68% FR=11.1% | TRpos=0.799 VApos=0.724 | tempR=0.889 | lr=1.85e-06 265s
+ep58 tloss=0.0976 | VAL thr=0.10 P=0.912 R=0.899 F1=0.905 FA=4.96% FR=10.1% | TRpos=0.788 VApos=0.729 | tempR=0.899 | lr=8.22e-07 276s
+ep59 tloss=0.0969 | VAL thr=0.10 P=0.912 R=0.903 F1=0.908 FA=4.96% FR=9.7% | TRpos=0.798 VApos=0.735 | tempR=0.903 | lr=2.06e-07 296s
+ep60 tloss=0.0936 | VAL thr=0.09 P=0.912 R=0.899 F1=0.905 FA=4.96% FR=10.1% | TRpos=0.802 VApos=0.724 | tempR=0.899 | lr=0.00e+00 287s
+
+[val] BEST thr=0.08 P=0.916 R=0.925 F1=0.921 FA=4.82% FR=7.5%  (tp383 fp35 fn31 tn691)
+
+[test] BEST thr=0.26 P=0.893 R=0.701 F1=0.785 FA=4.81% FR=29.9%  (tp291 fp35 fn124 tn693)
+
+DONE exp15_mined_lp: 60 epochs, 14833.0s, best_thr=0.08
+TRAIN_EXIT=0
+[exp15] exporting ONNX Monday, 28 September, 2026 03:23:38 AM PST
+[export] inferred n_classes=2
+[export] exp15_mined_lp (gru) -> HPC_HOME/sandbox/me2-wakeword-swift/training/experiments/exp15_mined_lp/wakeword_exp15_mined_lp.onnx
+HPC_HOME/.conda/envs/onit/lib/python3.12/site-packages/torch/onnx/symbolic_opset9.py:4277: UserWarning: Exporting a model to ONNX with a batch_size other than 1, with a variable length with GRU can cause an error when running the ONNX model with a different batch size. Make sure to save the model with a batch size of 1, or define the initial states (h0/c0) as inputs of the model. 
+  warnings.warn(
+[export] dynamic batch OK (3,2)
+[export] ONNX 0.825 MB  torch/onnx diff=2.86e-06 (pass=True)  numpy/torch feat diff=0.00e+00 (pass=True)
+[export] ONNX CPU latency mean=2.04ms p95=4.91ms
+EXPORT_DONE
+EXPORT_EXIT=0
+[exp15] full bench @0.17 Monday, 28 September, 2026 03:24:17 AM PST
+[validation/clean] thr=0.17 P=0.931 R=0.874 F1=0.902 FA=3.72% FR=12.6% (11.9s)
+[validation/snr30] thr=0.17 P=0.924 R=0.908 F1=0.916 FA=4.27% FR=9.2% (15.6s)
+[validation/snr20] thr=0.17 P=0.940 R=0.877 F1=0.907 FA=3.17% FR=12.3% (15.6s)
+[validation/snr10] thr=0.17 P=0.957 R=0.802 F1=0.873 FA=2.07% FR=19.8% (15.4s)
+[validation/snr5] thr=0.17 P=0.947 R=0.727 F1=0.822 FA=2.34% FR=27.3% (15.6s)
+[validation/snr0] thr=0.17 P=0.959 R=0.684 F1=0.798 FA=1.65% FR=31.6% (14.7s)
+[validation/reverb] thr=0.17 P=0.899 R=0.836 F1=0.866 FA=5.37% FR=16.4% (27.4s)
+[validation/farfield] thr=0.17 P=0.957 R=0.698 F1=0.807 FA=1.79% FR=30.2% (20.3s)
+[sweep] best@FA<=5%: {'thr': np.float64(0.3), 'precision': 0.945054945054945, 'recall': 0.8309178743961353, 'f1': 0.8843187660668381, 'fa': 0.027548209366391185, 'fr': 0.16908212560386474, 'tp': 344, 'fp': 20, 'fn': 70, 'tn': 706}
+[test/clean] thr=0.17 P=0.874 R=0.752 F1=0.808 FA=6.18% FR=24.8% (13.2s)
+[test/snr30] thr=0.17 P=0.877 R=0.846 F1=0.861 FA=6.73% FR=15.4% (15.8s)
+[test/snr20] thr=0.17 P=0.895 R=0.798 F1=0.843 FA=5.36% FR=20.2% (15.0s)
+[test/snr10] thr=0.17 P=0.893 R=0.745 F1=0.812 FA=5.08% FR=25.5% (14.4s)
+[test/snr5] thr=0.17 P=0.926 R=0.692 F1=0.792 FA=3.16% FR=30.8% (15.2s)
+[test/snr0] thr=0.17 P=0.950 R=0.595 F1=0.732 FA=1.79% FR=40.5% (14.4s)
+[test/reverb] thr=0.17 P=0.869 R=0.624 F1=0.727 FA=5.36% FR=37.6% (19.4s)
+[test/farfield] thr=0.17 P=0.891 R=0.554 F1=0.684 FA=3.85% FR=44.6% (21.1s)
+[confusers] n=9126 P=0.000 R=0.000 (recall here = miss rate on confusers; FA=0.72%)
+[stream] {'total_hours': 0.9206, 'n_windows': 33132, 'fires': 341, 'fires_per_hour': 370.407, 'eval_time_s': 167.9, 'thr': 0.17, 'hop_sec': 0.1, 'win_sec': 1.0, 'consec': 2, 'min_active_db': -45.0, 'loop': 1}
+
+Saved: benchmark/bench_exp15.json
+BENCH17_EXIT=0
+[exp15] full bench @0.30 Monday, 28 September, 2026 03:34:44 AM PST
+[validation/clean] thr=0.3 P=0.945 R=0.831 F1=0.884 FA=2.75% FR=16.9% (10.8s)
+[validation/snr30] thr=0.3 P=0.960 R=0.870 F1=0.913 FA=2.07% FR=13.0% (15.3s)
+[validation/snr20] thr=0.3 P=0.975 R=0.843 F1=0.904 FA=1.24% FR=15.7% (14.5s)
+[validation/snr10] thr=0.3 P=0.978 R=0.768 F1=0.861 FA=0.96% FR=23.2% (17.0s)
+[validation/snr5] thr=0.3 P=0.979 R=0.684 F1=0.805 FA=0.83% FR=31.6% (17.4s)
+[validation/snr0] thr=0.3 P=0.970 R=0.626 F1=0.761 FA=1.10% FR=37.4% (15.6s)
+[validation/reverb] thr=0.3 P=0.922 R=0.797 F1=0.855 FA=3.86% FR=20.3% (21.3s)
+[validation/farfield] thr=0.3 P=0.964 R=0.650 F1=0.776 FA=1.38% FR=35.0% (20.3s)
+[sweep] best@FA<=5%: {'thr': np.float64(0.3), 'precision': 0.945054945054945, 'recall': 0.8309178743961353, 'f1': 0.8843187660668381, 'fa': 0.027548209366391185, 'fr': 0.16908212560386474, 'tp': 344, 'fp': 20, 'fn': 70, 'tn': 706}
+[test/clean] thr=0.3 P=0.907 R=0.660 F1=0.764 FA=3.85% FR=34.0% (13.0s)
+[test/snr30] thr=0.3 P=0.898 R=0.802 F1=0.847 FA=5.22% FR=19.8% (15.9s)
+[test/snr20] thr=0.3 P=0.916 R=0.759 F1=0.830 FA=3.98% FR=24.1% (15.3s)
+[test/snr10] thr=0.3 P=0.932 R=0.689 F1=0.792 FA=2.88% FR=31.1% (14.9s)
+[test/snr5] thr=0.3 P=0.952 R=0.627 F1=0.756 FA=1.79% FR=37.3% (15.7s)
+[test/snr0] thr=0.3 P=0.956 R=0.520 F1=0.674 FA=1.37% FR=48.0% (15.4s)
+[test/reverb] thr=0.3 P=0.881 R=0.569 F1=0.691 FA=4.40% FR=43.1% (18.6s)
+[test/farfield] thr=0.3 P=0.932 R=0.494 F1=0.646 FA=2.06% FR=50.6% (21.4s)
+[confusers] n=9126 P=0.000 R=0.000 (recall here = miss rate on confusers; FA=0.34%)
+[stream] {'total_hours': 0.9206, 'n_windows': 33132, 'fires': 219, 'fires_per_hour': 237.886, 'eval_time_s': 166.6, 'thr': 0.3, 'hop_sec': 0.1, 'win_sec': 1.0, 'consec': 2, 'min_active_db': -45.0, 'loop': 1}
+
+Saved: benchmark/bench_exp15_thr30.json
+BENCH30_EXIT=0
+[exp15] all done Monday, 28 September, 2026 03:44:18 AM PST

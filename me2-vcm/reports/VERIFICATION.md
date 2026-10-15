@@ -6,6 +6,14 @@ to this user-authorized initial source publication.
 
 Completed host checks:
 
+- The original exp15 checkpoint has now been recovered and verified against
+  the unchanged selected ONNX on batches 1/2/17. Original logs establish best
+  epoch 42; the preserved config's best_epoch 60 is a historical metadata bug.
+  See experiments/wakeword/exp15_original/CHECKPOINT_EPOCH_CORRECTION.md.
+- Shared wake experiments and integer-sample cooldown regressions are retained.
+  No candidate justified replacement; exp15 remains default. Optional profiles
+  do not change VCM gates, working Pi state or hardware wiring.
+
 - Exact selected and run_043 checkpoints load into their matching architectures:
   488,264 and 327,750 parameters. PyTorch/ONNX logits and all slot heads agree
   on short, intermediate and capacity-limit probes at rtol/atol 2e-4.
@@ -39,4 +47,11 @@ working Pi installation, chime, accounts and wiring are preserved.
 Actual Pi p95, RTF, thread settings and scope must be collected with the posted
 commands. Until returned, no host timing is described as Pi performance. No
 fresh independent speaker recordings are available. Wake training data/consent
-and the selected exp15 original PyTorch checkpoint remain incomplete provenance.
+and public raw-data retrieval remain incomplete; the original exp15 PyTorch
+checkpoint itself has been recovered and verified, not substituted by a reproduction.
+
+Current publication status and test receipts are described in
+PUBLICATION_STATUS.md. CHECKS.json preserves the initial pre-publication
+authentication result; it is not evidence that the public repository is absent.
+PUBLICATION_CHECKS.json records the current staged-export regression counts,
+clean inference-only contract checks and preserved model/config scope.

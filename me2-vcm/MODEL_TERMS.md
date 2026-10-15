@@ -15,5 +15,8 @@ Downloading data from its publisher does not waive its access/consent obligation
 Selected VCM weights were trained from random initialization. The run043 fallback
 was trained locally then fine-tuned from the project's run042, not an external
 pretrained model. The preserved exp15 wake ONNX is published as its exact frozen
-trained artifact; its original PyTorch checkpoint was not found in verified
-sources. A separately documented exp15 reproduction is not the same checkpoint.
+trained artifact. Its original PyTorch checkpoint was recovered and verified
+against that export; a separately documented exp15 reproduction is not the same
+checkpoint. The optional exp15_streamft_v1 experiment fine-tunes the project's
+original exp15, not external pretrained weights. It did not justify replacing
+the default and is retained only as research evidence and a diagnostic candidate.

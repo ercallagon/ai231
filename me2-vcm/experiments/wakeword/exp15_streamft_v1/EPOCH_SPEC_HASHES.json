@@ -1,0 +1,10 @@
+{
+  "epoch_01_windows.json": {
+    "sha256": "e514b1861e1810332c800d17ad01d9a289bb599096ab31ed1b10a2b485c2237f",
+    "examples": 8192
+  },
+  "epoch_02_windows.json": {
+    "sha256": "37e289861e463a142c4ca1719e2ed2686bc3f401e81aff0f0dce9dd125dc9946",
+    "examples": 8192
+  }
+}

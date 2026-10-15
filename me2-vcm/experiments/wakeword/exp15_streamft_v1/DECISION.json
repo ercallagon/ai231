@@ -1,0 +1,30 @@
+{
+  "recommendation": "retain exp15; close experimentation",
+  "validation_nomination": false,
+  "validation_worst_recall_gain": 0.0,
+  "test_recall_veto_pass": false,
+  "test_false_event_veto_pass": false,
+  "development_music_veto_pass": true,
+  "paired": {
+    "raw": {
+      "fixes": 24,
+      "regressions": 37,
+      "both_detect": 226,
+      "both_miss": 98,
+      "paired_delay_median_ms": 0.0,
+      "paired_delay_p95_ms": 0.0
+    },
+    "hp80": {
+      "fixes": 26,
+      "regressions": 45,
+      "both_detect": 219,
+      "both_miss": 95,
+      "paired_delay_median_ms": 0.0,
+      "paired_delay_p95_ms": 0.0
+    }
+  },
+  "default": "exp15",
+  "protected_unchanged": true,
+  "pi_verified": false,
+  "additional_training_queued": false
+}

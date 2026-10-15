@@ -1,0 +1,11 @@
+{
+  "nominated": "pcen2s_v1",
+  "recommendation": "not supported for deployment; optional diagnostic Pi A/B only",
+  "default": "exp15",
+  "music_regression": false,
+  "positive_validation_nonregression": true,
+  "test_recall_nonregression": true,
+  "test_rate_guard": false,
+  "pi_verified": false,
+  "protected_unchanged": true
+}

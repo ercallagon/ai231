@@ -1,0 +1,10 @@
+{
+  "exp": "exp15_mined_lp",
+  "arch": "gru",
+  "onnx_path": "HPC_HOME/sandbox/me2-wakeword-swift/training/experiments/exp15_mined_lp/wakeword_exp15_mined_lp.onnx",
+  "size_mb": 0.825,
+  "torch_onnx_parity_maxdiff": 2.86102294921875e-06,
+  "numpy_torch_feature_maxdiff": 0.0,
+  "parity_pass": true,
+  "feature_pass": true
+}

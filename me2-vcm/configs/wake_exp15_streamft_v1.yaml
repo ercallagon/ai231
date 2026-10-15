@@ -1,0 +1,56 @@
+data:
+  root: data/wakeword
+  raw: data/wakeword/raw
+  processed: data/wakeword/processed
+  manifest_dir: data/wakeword/manifests
+  sample_rate: 16000
+  mono: true
+audio:
+  sample_rate: 16000
+  n_mels: 40
+  n_fft: 512
+  hop_length: 160
+  win_length: 512
+  target_frames: 100
+  fmin: 20
+  fmax: 8000
+  cmvn: true
+  delta: 1
+  input_shape:
+  - 80
+  - 100
+model:
+  arch: wake_gru
+  n_classes: 2
+  channels:
+  - 16
+  - 32
+  - 64
+  gru_hidden: 128
+  dropout: 0.4
+  fc_hidden: 64
+  params_actual: 204738
+  framework_train: pytorch
+  framework_infer: onnx
+inference:
+  threshold: 0.9899999999999995
+  sustain: 2
+  cooldown_seconds: 2.0
+  rms_floor_db: -60.0
+  gate_nonwake: 0.9
+  window_seconds: 1.0
+  hop_seconds: 0.25
+  multiwin: false
+  n_subwin: 1
+  subhop_seconds: 0.25
+  onnx: models/wakeword/exp15_streamft_v1.onnx
+  frontend: legacy
+  intra_op_threads: 1
+  inter_op_threads: 1
+experiment:
+  name: exp15_runtime_window_finetune_v1
+  default: false
+  pi_verified: false
+  gate: single fresh1s score per250ms; two consecutive, integer2s cooldown
+  recommendation: retain exp15; close experimentation
+  frozen_policy_sha256: c1d5b7a6a2c08b1ca159f61228fd95b9c76481143bfcfb41f2999d31c6828a56

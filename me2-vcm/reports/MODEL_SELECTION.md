@@ -2,7 +2,16 @@
 
 The user authorized this frozen candidate as the repository default, with Pi 5 verification explicitly pending. The selectable run_043 fallback is complete. Runtime integration and mock e2e checks passed; no working Pi installation was overwritten. The following records preserve the earlier validation decision and subsequent authorized refinement. Final 0.954 metrics are in RESULTS.md, not the historical 0.95 table below.
 
-# Model selection: frozen validation decision, Pi verification pending
+Current integration supports the selected two-input mel/mask graph, deterministic
+full-context features and safe capacity/rejection handling. Host parity and mock
+integration checks are complete; actual Pi 5 microphone, acoustic, action and
+latency verification remain pending. Statements below that call mask integration
+pending describe the earlier selection stage, not the current repository.
+Exp15 remains the separately selected wake default after the final controlled
+studies; see WAKE_EXP15_STREAMFT.md. Submission fields and remaining limitations
+are collected in SUBMISSION_CHECKLIST.md.
+
+## Historical model-selection and calibration record
 
 ## Authorized calibration revision, 2026-10-15
 

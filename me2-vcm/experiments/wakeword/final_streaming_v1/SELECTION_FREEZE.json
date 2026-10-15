@@ -1,0 +1,184 @@
+{
+  "nominated": "pcen2s_v1",
+  "policies": {
+    "cmvn2s_v1": {
+      "checkpoint_sha256": "3eeecf2e8338d9d166ef5810c30d385b99ea61d005942db67121642ca24f7b31",
+      "frontend": "cmvn2s_v1",
+      "policy": {
+        "threshold": 0.8999999999999996,
+        "metrics": {
+          "raw": {
+            "recall": 0.21779141104294478,
+            "detected": 71,
+            "positive_n": 326,
+            "misses": 255,
+            "negative_events": 1,
+            "negative_hours": 0.5316534548611112,
+            "false_events_per_hour": 1.8809244835270362,
+            "zero_event_95_upper_per_hour": null,
+            "original_negative_events": 1,
+            "original_negative_hours": 0.24720901041666665,
+            "original_false_events_per_hour": 4.045159997665606,
+            "original_zero_event_95_upper_per_hour": null,
+            "generated_negative_events": 0,
+            "generated_negative_hours": 0.28444444444444444,
+            "generated_false_events_per_hour": 0.0,
+            "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+            "unmatched_positive_stream_events": 5,
+            "energy_endpoint_latency_p95_ms": 1173.125,
+            "waveform_end_latency_p95_ms": 776.9375
+          },
+          "hp80": {
+            "recall": 0.15644171779141106,
+            "detected": 51,
+            "positive_n": 326,
+            "misses": 275,
+            "negative_events": 1,
+            "negative_hours": 0.5316534548611112,
+            "false_events_per_hour": 1.8809244835270362,
+            "zero_event_95_upper_per_hour": null,
+            "original_negative_events": 1,
+            "original_negative_hours": 0.24720901041666665,
+            "original_false_events_per_hour": 4.045159997665606,
+            "original_zero_event_95_upper_per_hour": null,
+            "generated_negative_events": 0,
+            "generated_negative_hours": 0.28444444444444444,
+            "generated_false_events_per_hour": 0.0,
+            "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+            "unmatched_positive_stream_events": 9,
+            "energy_endpoint_latency_p95_ms": 1259.5625,
+            "waveform_end_latency_p95_ms": 819.59375
+          }
+        },
+        "feasible": true,
+        "score": [
+          0.15644171779141106,
+          0.18711656441717792,
+          -14,
+          -4.045159997665606
+        ]
+      },
+      "epoch": 2,
+      "test_accessed": false
+    },
+    "pcen2s_v1": {
+      "checkpoint_sha256": "edc51d4831e1c01bc4a0dc2c301cdb45be3bd43056bdabc3f16c883110708d17",
+      "frontend": "pcen2s_v1",
+      "policy": {
+        "threshold": 0.995,
+        "metrics": {
+          "raw": {
+            "recall": 0.42024539877300615,
+            "detected": 137,
+            "positive_n": 326,
+            "misses": 189,
+            "negative_events": 1,
+            "negative_hours": 0.5316534548611112,
+            "false_events_per_hour": 1.8809244835270362,
+            "zero_event_95_upper_per_hour": null,
+            "original_negative_events": 1,
+            "original_negative_hours": 0.24720901041666665,
+            "original_false_events_per_hour": 4.045159997665606,
+            "original_zero_event_95_upper_per_hour": null,
+            "generated_negative_events": 0,
+            "generated_negative_hours": 0.28444444444444444,
+            "generated_false_events_per_hour": 0.0,
+            "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+            "unmatched_positive_stream_events": 4,
+            "energy_endpoint_latency_p95_ms": 1274.75,
+            "waveform_end_latency_p95_ms": 816.7874999999998
+          },
+          "hp80": {
+            "recall": 0.40797546012269936,
+            "detected": 133,
+            "positive_n": 326,
+            "misses": 193,
+            "negative_events": 1,
+            "negative_hours": 0.5316534548611112,
+            "false_events_per_hour": 1.8809244835270362,
+            "zero_event_95_upper_per_hour": null,
+            "original_negative_events": 1,
+            "original_negative_hours": 0.24720901041666665,
+            "original_false_events_per_hour": 4.045159997665606,
+            "original_zero_event_95_upper_per_hour": null,
+            "generated_negative_events": 0,
+            "generated_negative_hours": 0.28444444444444444,
+            "generated_false_events_per_hour": 0.0,
+            "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+            "unmatched_positive_stream_events": 6,
+            "energy_endpoint_latency_p95_ms": 1134.0749999999996,
+            "waveform_end_latency_p95_ms": 753.3374999999999
+          }
+        },
+        "feasible": true,
+        "score": [
+          0.40797546012269936,
+          0.41411042944785276,
+          -10,
+          -4.045159997665606
+        ]
+      },
+      "epoch": 8,
+      "test_accessed": false
+    }
+  },
+  "baseline": {
+    "threshold": 0.8999999999999996,
+    "metrics": {
+      "raw": {
+        "recall": 0.34049079754601225,
+        "detected": 111,
+        "positive_n": 326,
+        "misses": 215,
+        "negative_events": 1,
+        "negative_hours": 0.5319312326388889,
+        "false_events_per_hour": 1.8799422531349426,
+        "zero_event_95_upper_per_hour": null,
+        "original_negative_events": 1,
+        "original_negative_hours": 0.24748678819444445,
+        "original_false_events_per_hour": 4.040619732857513,
+        "original_zero_event_95_upper_per_hour": null,
+        "generated_negative_events": 0,
+        "generated_negative_hours": 0.28444444444444444,
+        "generated_false_events_per_hour": 0.0,
+        "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+        "unmatched_positive_stream_events": 0,
+        "energy_endpoint_latency_p95_ms": 656.8125,
+        "waveform_end_latency_p95_ms": 314.3125
+      },
+      "hp80": {
+        "recall": 0.3067484662576687,
+        "detected": 100,
+        "positive_n": 326,
+        "misses": 226,
+        "negative_events": 1,
+        "negative_hours": 0.5319312326388889,
+        "false_events_per_hour": 1.8799422531349426,
+        "zero_event_95_upper_per_hour": null,
+        "original_negative_events": 1,
+        "original_negative_hours": 0.24748678819444445,
+        "original_false_events_per_hour": 4.040619732857513,
+        "original_zero_event_95_upper_per_hour": null,
+        "generated_negative_events": 0,
+        "generated_negative_hours": 0.28444444444444444,
+        "generated_false_events_per_hour": 0.0,
+        "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+        "unmatched_positive_stream_events": 0,
+        "energy_endpoint_latency_p95_ms": 673.3375,
+        "waveform_end_latency_p95_ms": 353.23749999999995
+      }
+    },
+    "feasible": true,
+    "score": [
+      0.3067484662576687,
+      0.3236196319018405,
+      0,
+      -4.040619732857513
+    ]
+  },
+  "selection": "validation only; no test/development comparisons yet",
+  "test_previously_exposed": true,
+  "pi_verified": false,
+  "finalizer_source_sha256": "a32541ca508c4419d90dbb59459057e4ca91e5272a74dfeed7a6cc2cd61be74a",
+  "confirmation_veto": "No new music false events; exposed-test recall nonregression within2percentage points on raw/HP80; empirical original/generated testFA <=5/hour. A veto retains exp15, never selects another model or refits."
+}

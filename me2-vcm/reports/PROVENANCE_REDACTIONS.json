@@ -1,0 +1,35 @@
+{
+  "policy": "Replace private host/home prefixes with PROJECT_ROOT/HPC_HOME in publication copies only",
+  "original_archives_preserved": true,
+  "line_content_other_than_paths_preserved": true,
+  "json_formatting_may_change": true,
+  "model_weights_unchanged": true,
+  "historical_hashes_refer_to_archived_originals": true,
+  "files": [
+    {
+      "path": "experiments/wakeword/exp15_original/exp15_chain.log",
+      "archived_source_sha256": "0e17e124feda7d4fdd9df8fd9918e7facc385186724e61eee885fdc77b271c40",
+      "publication_sha256": "01cdcc3eae90481fdc04ab13dcdc3e03b0c288affaf9ac620690340e07a32f13"
+    },
+    {
+      "path": "experiments/wakeword/exp15_original/onnx_export.json",
+      "archived_source_sha256": "b6d69d961a62d5b0723bd9fb0f76228acee43dd7ae9bd68ace99c1bf7fb2914a",
+      "publication_sha256": "908c85bcde7e095e29b671798f021700f90eab98e4d15433bafa59674a005e8f"
+    },
+    {
+      "path": "experiments/wakeword/exp15_streamft_v1/PROVENANCE.json",
+      "archived_source_sha256": "fcc14f95ef226b88986bf9dc1df3c2a5eccea62b406e989d169c2b2a77514227",
+      "publication_sha256": "0ddfb352bd9f18aee64e1efe4353ca7a5cb04c8149c1ca5b1aa7e09cd85c43a0"
+    },
+    {
+      "path": "experiments/wakeword/final_streaming_v1/READY.json",
+      "archived_source_sha256": "7635aeda49e87e0a5cf97a57902f9b4c8235d6d40815cd95df583a0d14243624",
+      "publication_sha256": "f151ed340a26344e3744cd561058fd87709a1f2138bd75c6813b6396515f2ba7"
+    },
+    {
+      "path": "logs/training/wake_exp15_streamft_complete.log",
+      "archived_source_sha256": "0c19afffd348c7577fdafd035982b8a637d72a44ec6e1169e688b549173e4951",
+      "publication_sha256": "b187bdc9c00e20a354a88c06d5061f2d2c5d3c8e0c2c30b45314c6885cefe2e8"
+    }
+  ]
+}

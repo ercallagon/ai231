@@ -1,0 +1,32 @@
+{
+  "checkpoint_sha256": "d6d9069df46f01f1ed44a014d34cd37150b210e38a4428423f7e41b73c6254b0",
+  "export_sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
+  "parity_batches": [
+    1,
+    2,
+    17
+  ],
+  "max_abs_errors": [
+    4.76837158203125e-07,
+    2.682209014892578e-07,
+    1.2218952178955078e-06
+  ],
+  "selected_epoch_from_log": 42,
+  "incorrect_archived_config_best_epoch": 60,
+  "source_sha256": "dcb97dfdd1498c6a2d60159077025fbd81b100819ff00853d736e8c04da7bad8",
+  "plan_sha256": "ca970f70c7635a095a4c4a8727d8a31e2a898079d7599c7b25c95818ed9d7737",
+  "protected": {
+    "models/wakeword/wakeword_exp15_mined_lp.onnx": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
+    "configs/wakeword.yaml": "6d08f76b41b0be78ab641b2c578fd0f424e5f0cb2d3e3a04f367d9c0d8c72038",
+    "work/finalize_submit/repository_20261014_v1/me2-vcm/models/vcm/selected.onnx": "edb9c14b384a9ff08f524e93a3c4b4def69dfe4140fbd98f997f2ad0abea3d88",
+    "work/finalize_submit/repository_20261014_v1/me2-vcm/models/vcm/run043.onnx": "2dfde6cb9dc20ac923ac635a92722b2e238464acdc73af63232bf1c916c590b2",
+    "work/finalize_submit/repository_20261014_v1/me2-vcm/configs/hardware.yaml": "1c5c07f13091792ceb95e895c903e1ba2c4eeb8399a07ad2a81a29c6e9808287",
+    "work/wake_final_streaming_20261015_v1/cmvn2s_v1/best.pt": "3eeecf2e8338d9d166ef5810c30d385b99ea61d005942db67121642ca24f7b31",
+    "work/wake_final_streaming_20261015_v1/pcen2s_v1/best.pt": "edc51d4831e1c01bc4a0dc2c301cdb45be3bd43056bdabc3f16c883110708d17"
+  },
+  "pcm_sha256": "07216cc2b064bd286c68839c64bf622cd29466a86a8beb2ccdb14868b4936f1b",
+  "python": "HPC_HOME/.conda/envs/onit/bin/python",
+  "git_head": "fbf01a6710e4b552aa15c11c82588b898a16ca2e",
+  "test_accessed": false,
+  "pi_verified": false
+}

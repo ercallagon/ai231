@@ -1,0 +1,26 @@
+{
+  "known_train_reserved_canonical_voice_overlap": [],
+  "known_train_reserved_PCM_overlap": [],
+  "historical_validation_test_shared_canonical_voice_families": [
+    "piper-en-GB-alan-medium",
+    "piper-en-GB-alba-medium",
+    "piper-en-GB-cori-medium",
+    "piper-en-GB-jenny-dioco-medium",
+    "piper-en-GB-northern-english-male-medium",
+    "piper-en-GB-semaine-medium",
+    "piper-en-US-amy-medium",
+    "piper-en-US-danny-low",
+    "piper-en-US-hfc-female-medium",
+    "piper-en-US-hfc-male-medium",
+    "piper-en-US-joe-medium",
+    "piper-en-US-kristin-medium",
+    "piper-en-US-lessac-medium",
+    "piper-en-US-mike-medium",
+    "piper-en-US-reza-ibrahim-medium",
+    "piper-en-US-ryan-medium",
+    "piper-en-US-sam-medium"
+  ],
+  "evaluation_independence": "NOT independent: previously exposed, synthetic-only positives, validation/test share canonical Piper voice families; historical splits preserved",
+  "unknown_cross_engine_human_ancestry": true,
+  "no_split_overwrites": true
+}

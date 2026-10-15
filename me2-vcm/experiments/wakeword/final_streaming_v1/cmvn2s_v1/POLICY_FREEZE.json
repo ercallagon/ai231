@@ -1,0 +1,60 @@
+{
+  "checkpoint_sha256": "3eeecf2e8338d9d166ef5810c30d385b99ea61d005942db67121642ca24f7b31",
+  "frontend": "cmvn2s_v1",
+  "policy": {
+    "threshold": 0.8999999999999996,
+    "metrics": {
+      "raw": {
+        "recall": 0.21779141104294478,
+        "detected": 71,
+        "positive_n": 326,
+        "misses": 255,
+        "negative_events": 1,
+        "negative_hours": 0.5316534548611112,
+        "false_events_per_hour": 1.8809244835270362,
+        "zero_event_95_upper_per_hour": null,
+        "original_negative_events": 1,
+        "original_negative_hours": 0.24720901041666665,
+        "original_false_events_per_hour": 4.045159997665606,
+        "original_zero_event_95_upper_per_hour": null,
+        "generated_negative_events": 0,
+        "generated_negative_hours": 0.28444444444444444,
+        "generated_false_events_per_hour": 0.0,
+        "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+        "unmatched_positive_stream_events": 5,
+        "energy_endpoint_latency_p95_ms": 1173.125,
+        "waveform_end_latency_p95_ms": 776.9375
+      },
+      "hp80": {
+        "recall": 0.15644171779141106,
+        "detected": 51,
+        "positive_n": 326,
+        "misses": 275,
+        "negative_events": 1,
+        "negative_hours": 0.5316534548611112,
+        "false_events_per_hour": 1.8809244835270362,
+        "zero_event_95_upper_per_hour": null,
+        "original_negative_events": 1,
+        "original_negative_hours": 0.24720901041666665,
+        "original_false_events_per_hour": 4.045159997665606,
+        "original_zero_event_95_upper_per_hour": null,
+        "generated_negative_events": 0,
+        "generated_negative_hours": 0.28444444444444444,
+        "generated_false_events_per_hour": 0.0,
+        "generated_zero_event_95_upper_per_hour": 10.531870312499999,
+        "unmatched_positive_stream_events": 9,
+        "energy_endpoint_latency_p95_ms": 1259.5625,
+        "waveform_end_latency_p95_ms": 819.59375
+      }
+    },
+    "feasible": true,
+    "score": [
+      0.15644171779141106,
+      0.18711656441717792,
+      -14,
+      -4.045159997665606
+    ]
+  },
+  "epoch": 2,
+  "test_accessed": false
+}

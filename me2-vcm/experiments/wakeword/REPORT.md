@@ -20,9 +20,20 @@ Known PCM duplication was removed; near-duplicates and complete archived trainin
 
 ## Reproduction
 
-```bash
-env PYTHONPATH=src CUDA_VISIBLE_DEVICES= OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 python -B work/wake_corrected_test_20261013_v1/evaluate.py
-```
+The original evaluation script and private recording/cache inputs remain in
+the preserved local audit, not in a clean public checkout. The committed
+corrected_test.json contains the resulting clip counts/metrics. Do not describe
+that archived private workflow as publicly reproducible in one command.
 
-The script refuses an already sealed output directory. For reruns, copy this versioned script into a fresh sibling directory under work/.
-PRETEST_SEAL.json, TEST_ROWS.json, predictions, feature arrays and RESULTS.json preserve the evaluation. No thresholds are fitted here.
+The original exp15 Torch checkpoint has since been recovered under
+exp15_original/, with parity against the unchanged deployed graph, original
+training log and an epoch-42 selection correction. This recovery does not resolve
+raw recording access/consent or create an independent real-speaker test.
+Private host prefixes in published provenance/log copies are redacted; see
+reports/PROVENANCE_REDACTIONS.json for original and published hashes.
+
+For runnable public wake-only microphone, replay and CPU checks, use
+docs/WAKE_STREAMFT_AB.md and scripts/wake_streamft_ab.py. Replay needs your own
+authorized recording and labeled timestamps for recall/latency; event logging
+alone does not reproduce the archived clip-classification metrics. No threshold
+fitting is performed by that tool. Physical Pi verification remains pending.

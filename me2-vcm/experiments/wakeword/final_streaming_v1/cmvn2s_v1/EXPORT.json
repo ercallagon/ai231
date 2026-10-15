@@ -1,0 +1,9 @@
+{
+  "onnx_sha256": "9f6070e616bd1c56518c87a83c23618d6ed16cb93eb33abba8d4a91507804279",
+  "parity_batches": [
+    1,
+    2,
+    17
+  ],
+  "pi_verified": false
+}

@@ -1,0 +1,120 @@
+data:
+  root: data/wakeword
+  raw: data/wakeword/raw
+  processed: data/wakeword/processed
+  manifest_dir: data/wakeword/manifests
+  sample_rate: 16000
+  mono: true
+audio:
+  sample_rate: 16000
+  n_mels: 40
+  n_fft: 512
+  hop_length: 160
+  win_length: 512
+  target_frames: 200
+  fmin: 20
+  fmax: 8000
+  cmvn: false
+  delta: 1
+  input_shape:
+  - 80
+  - 200
+model:
+  arch: wake_gru
+  n_classes: 2
+  channels:
+  - 16
+  - 32
+  - 64
+  gru_hidden: 128
+  dropout: 0.4
+  fc_hidden: 64
+  params_actual: 204738
+  framework_train: pytorch
+  framework_infer: onnx
+inference:
+  threshold: 0.995
+  sustain: 2
+  cooldown_seconds: 2.0
+  rms_floor_db: -60.0
+  gate_nonwake: 0.9
+  window_seconds: 2.0
+  hop_seconds: 0.25
+  multiwin: false
+  n_subwin: 1
+  subhop_seconds: 0.25
+  onnx: models/wakeword/final_pcen2s_v1.onnx
+  frontend: pcen2s_v1
+  intra_op_threads: 1
+  inter_op_threads: 1
+training:
+  arm: pcen2s_v1
+  params: 204738
+  seed: 20261015
+  initial_sha256: da02da885305a100eab7858df709546109ae5292b722cda3f32126c2dc056b6b
+  initialization: random, no checkpoint loaded
+  epochs_max: 80
+  minimum_epochs: 40
+  patience: 20
+  batch: 128
+  optimizer: AdamW
+  lr: 0.0003
+  weight_decay: 0.0001
+  selection: validation streaming:<=5FA/h raw/HP80, max worst recall then mean recall
+    then unmatched events
+  gpu: '0'
+  baseline_sha256: ed5a6e6b191a64473565536de42ec0c0cc0ac940dfff03ca72741327f5f38eb6
+calibration:
+  checkpoint_sha256: edc51d4831e1c01bc4a0dc2c301cdb45be3bd43056bdabc3f16c883110708d17
+  frontend: pcen2s_v1
+  policy:
+    threshold: 0.995
+    metrics:
+      raw:
+        recall: 0.42024539877300615
+        detected: 137
+        positive_n: 326
+        misses: 189
+        negative_events: 1
+        negative_hours: 0.5316534548611112
+        false_events_per_hour: 1.8809244835270362
+        zero_event_95_upper_per_hour: null
+        original_negative_events: 1
+        original_negative_hours: 0.24720901041666665
+        original_false_events_per_hour: 4.045159997665606
+        original_zero_event_95_upper_per_hour: null
+        generated_negative_events: 0
+        generated_negative_hours: 0.28444444444444444
+        generated_false_events_per_hour: 0.0
+        generated_zero_event_95_upper_per_hour: 10.531870312499999
+        unmatched_positive_stream_events: 4
+        energy_endpoint_latency_p95_ms: 1274.75
+        waveform_end_latency_p95_ms: 816.7874999999998
+      hp80:
+        recall: 0.40797546012269936
+        detected: 133
+        positive_n: 326
+        misses: 193
+        negative_events: 1
+        negative_hours: 0.5316534548611112
+        false_events_per_hour: 1.8809244835270362
+        zero_event_95_upper_per_hour: null
+        original_negative_events: 1
+        original_negative_hours: 0.24720901041666665
+        original_false_events_per_hour: 4.045159997665606
+        original_zero_event_95_upper_per_hour: null
+        generated_negative_events: 0
+        generated_negative_hours: 0.28444444444444444
+        generated_false_events_per_hour: 0.0
+        generated_zero_event_95_upper_per_hour: 10.531870312499999
+        unmatched_positive_stream_events: 6
+        energy_endpoint_latency_p95_ms: 1134.0749999999996
+        waveform_end_latency_p95_ms: 753.3374999999999
+    feasible: true
+    score:
+    - 0.40797546012269936
+    - 0.41411042944785276
+    - -10
+    - -4.045159997665606
+  epoch: 8
+  test_accessed: false

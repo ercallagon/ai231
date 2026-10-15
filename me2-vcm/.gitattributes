@@ -1,3 +1,5 @@
 # Frozen manifests, source and model checksums must survive Windows checkout.
 # Preserve original bytes, including CSV CRLF and carried-over hardware sources.
 * -text whitespace=cr-at-eol
+# Preserve third-party warning lines in original logs, including trailing spaces.
+*.log -text -whitespace

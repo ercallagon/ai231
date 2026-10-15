@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "chunk_invariance": true,
+    "silence_rejection": true,
+    "training_wave_runtime_score_max_error": 0.0,
+    "full_scoring_hop_p95_ms": 2.1186674013733864,
+    "hop_rtf_p95": 0.008474669605493545,
+    "threads": {
+      "intra": 1,
+      "inter": 1
+    },
+    "scope": "host CPU NOT Pi capture/action latency"
+  },
+  "candidate": {
+    "chunk_invariance": true,
+    "silence_rejection": true,
+    "training_wave_runtime_score_max_error": 0.0,
+    "full_scoring_hop_p95_ms": 2.141708694398403,
+    "hop_rtf_p95": 0.008566834777593613,
+    "threads": {
+      "intra": 1,
+      "inter": 1
+    },
+    "scope": "host CPU NOT Pi capture/action latency"
+  },
+  "exp15_deployed": {
+    "chunk_invariance": true,
+    "silence_rejection": true,
+    "training_wave_runtime_score_max_error": 0.0,
+    "full_scoring_hop_p95_ms": 8.828453253954649,
+    "hop_rtf_p95": 0.035313813015818596,
+    "threads": {
+      "intra": 1,
+      "inter": 1
+    },
+    "scope": "host CPU NOT Pi capture/action latency"
+  }
+}

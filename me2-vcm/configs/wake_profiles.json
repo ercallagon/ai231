@@ -1,0 +1,40 @@
+{
+  "default": "exp15",
+  "pi_verified": false,
+  "profiles": {
+    "exp15": {
+      "config": "configs/wakeword.yaml",
+      "model": "models/wakeword/wakeword_exp15_mined_lp.onnx"
+    },
+    "exp15_calibrated": {
+      "config": "configs/wake_exp15_calibrated.yaml",
+      "model": "models/wakeword/wakeword_exp15_mined_lp.onnx",
+      "experimental": true
+    },
+    "cmvn2s_v1": {
+      "config": "configs/wake_cmvn2s_v1.yaml",
+      "model": "models/wakeword/final_cmvn2s_v1.onnx",
+      "experimental": true
+    },
+    "pcen2s_v1": {
+      "config": "configs/wake_pcen2s_v1.yaml",
+      "model": "models/wakeword/final_pcen2s_v1.onnx",
+      "experimental": true
+    },
+    "final": {
+      "config": "configs/wake_pcen2s_v1.yaml",
+      "model": "models/wakeword/final_pcen2s_v1.onnx",
+      "experimental": true
+    },
+    "exp15_streamft_v1": {
+      "config": "configs/wake_exp15_streamft_v1.yaml",
+      "model": "models/wakeword/exp15_streamft_v1.onnx",
+      "experimental": true
+    },
+    "exp15_fresh_control_v1": {
+      "config": "configs/wake_exp15_fresh_control_v1.yaml",
+      "model": "models/wakeword/wakeword_exp15_mined_lp.onnx",
+      "experimental": true
+    }
+  }
+}

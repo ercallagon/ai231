@@ -1,0 +1,48 @@
+{
+ "exp": "exp15_mined_lp",
+ "seed": 20260926,
+ "device": "cuda:0",
+ "epochs_run": 60,
+ "best_epoch": 60,
+ "args": {
+  "exp": "exp15_mined_lp",
+  "data": "data_v2_mined",
+  "gpu": 0,
+  "lr": 0.0003,
+  "epochs": 60,
+  "patience": 20,
+  "batch": 32,
+  "wd": 0.0001,
+  "cosine_floor": 0.0,
+  "no_cosine": false,
+  "wake_weight": 1.0,
+  "label_smooth": 0.0,
+  "focal": 0.0,
+  "vtlp_prob": 0.3,
+  "spec_prob": 0.5,
+  "shift_frames": 12,
+  "fa_cap": 0.05,
+  "workers": 4,
+  "aug_prob": 0.85,
+  "snr_ext_prob": 0.35,
+  "snr_ext_lo": 0.0,
+  "snr_ext_hi": 10.0,
+  "lp_prob": 0.45,
+  "lp_lo": 3000.0,
+  "lp_hi": 5000.0
+ },
+ "n_params": 204738,
+ "train_classes": {
+  "0": 1931,
+  "1": 12887
+ },
+ "val_classes": {
+  "0": 414,
+  "1": 726
+ },
+ "test_classes": {
+  "0": 415,
+  "1": 728
+ },
+ "elapsed_s": 14833.0
+}

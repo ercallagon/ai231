@@ -1,0 +1,19 @@
+{
+  "initial_checkpoint_sha256": "d6d9069df46f01f1ed44a014d34cd37150b210e38a4428423f7e41b73c6254b0",
+  "architecture": "unchanged WakeGRU204738/1s",
+  "lr": 1e-05,
+  "optimizer": "AdamW",
+  "weight_decay": 0.0001,
+  "max_epochs": 6,
+  "patience": 2,
+  "maximum_gpu_seconds": 1200,
+  "examples_per_epoch": 8192,
+  "batch": 128,
+  "workers": 2,
+  "seed": 20261017,
+  "bn_statistics": "frozen; affine trainable",
+  "gpu": 0,
+  "primary_budget": 64.6499157257202,
+  "source_sha256": "dcb97dfdd1498c6a2d60159077025fbd81b100819ff00853d736e8c04da7bad8",
+  "test_accessed": false
+}

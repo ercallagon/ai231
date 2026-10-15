@@ -1,0 +1,41 @@
+{
+  "exp15_calibrated": {
+    "chunk_invariance": true,
+    "silence_rejection": true,
+    "policy_vectorization_parity": true,
+    "feature_plus_onnx_p95_ms": 2.17686896212399,
+    "window_rtf_p95": 0.00217686896212399,
+    "hop_rtf_p95": 0.00870747584849596,
+    "threads": {
+      "intra": 1,
+      "inter": 1
+    },
+    "scope": "host CPU NOT Pi"
+  },
+  "cmvn2s_v1": {
+    "chunk_invariance": true,
+    "silence_rejection": true,
+    "policy_vectorization_parity": true,
+    "feature_plus_onnx_p95_ms": 4.11674939095974,
+    "window_rtf_p95": 0.00205837469547987,
+    "hop_rtf_p95": 0.01646699756383896,
+    "threads": {
+      "intra": 1,
+      "inter": 1
+    },
+    "scope": "host CPU NOT Pi"
+  },
+  "pcen2s_v1": {
+    "chunk_invariance": true,
+    "silence_rejection": true,
+    "policy_vectorization_parity": true,
+    "feature_plus_onnx_p95_ms": 4.196175746619701,
+    "window_rtf_p95": 0.002098087873309851,
+    "hop_rtf_p95": 0.016784702986478807,
+    "threads": {
+      "intra": 1,
+      "inter": 1
+    },
+    "scope": "host CPU NOT Pi"
+  }
+}

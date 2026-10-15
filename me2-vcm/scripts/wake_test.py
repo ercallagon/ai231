@@ -53,20 +53,17 @@ def _coerce_device(value):
         return value
 
 
-def build_detector(root: str, threshold: float | None):
+def build_detector(root: str, threshold: float | None, config: str | None = None):
     from hey_swift.wakeword.inference import WakeWordDetector
 
-    cfg_path = os.path.join(root, "configs", "wakeword.yaml")
+    cfg_path = os.path.join(root, config or "configs/wakeword.yaml")
     det = WakeWordDetector(cfg_path)
     if threshold is not None:
+        if det.frontend != "legacy":
+            raise ValueError("Experimental wake policy is frozen; do not override its threshold")
         # Override the fire threshold without touching the YAML.
-        det.gate = type(det.gate)(
-            threshold=threshold,
-            sustain=det.gate.sustain,
-            cooldown_seconds=det.gate.cooldown_seconds,
-            rms_floor_db=det.gate.rms_floor_db,
-            hop_seconds=det.gate.hop_seconds,
-        )
+        from dataclasses import replace
+        det.gate = replace(det.gate, threshold=threshold)
     return det
 
 
@@ -83,11 +80,16 @@ def self_test(root: str, det) -> int:
     """Prove the ONNX + feature path work end-to-end (no mic needed)."""
     from hey_swift.wakeword.features import SAMPLE_RATE, mel_from_pcm
 
-    # 1.2 s of 440 Hz sine -- real audio, should be scored without error.
-    t = np.arange(int(1.2 * SAMPLE_RATE)) / SAMPLE_RATE
+    # An owned synthetic probe, not a speech-accuracy test.
+    t = np.arange(det.win) / SAMPLE_RATE
     tone = (0.3 * np.sin(2 * np.pi * 440.0 * t)).astype(np.float32)
-    feat = mel_from_pcm(tone)
-    assert feat.shape == (1, 80, 100), f"bad feature shape {feat.shape}"
+    if det.frontend == "legacy":
+        feat = mel_from_pcm(tone)
+    else:
+        from hey_swift.wakeword.streaming_features import window_features
+        feat = window_features(tone, det.frontend)
+    expected = (1, 80, 100 if det.frontend == "legacy" else 200)
+    assert feat.shape == expected, f"bad feature shape {feat.shape}"
     logits = det.sess.run(None, {det.input_name: feat})[0][0]
     e = np.exp(logits - logits.max())
     p = e / e.sum()
@@ -175,6 +177,7 @@ def run_wav(root: str, det, path: str, ack: bool) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--wav", help="Replay a WAV file instead of the live mic.")
+    ap.add_argument("--config", default="configs/wakeword.yaml", help="Frozen wake YAML; defaults to exp15.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Load the model and run a self-test, then exit (no mic).")
     ap.add_argument("--threshold", type=float, default=None,
@@ -189,7 +192,9 @@ def main() -> int:
     args.device = _coerce_device(args.device)
 
     root = _repo_root()
-    det = build_detector(root, args.threshold)
+    sys.path.insert(0, os.path.join(root, "src"))
+    os.chdir(root)
+    det = build_detector(root, args.threshold, args.config)
     if args.dry_run:
         return self_test(root, det)
     if args.wav:

@@ -1,0 +1,29 @@
+{
+  "sources": {
+    "1:confuser": 7722,
+    "0:tts": 698,
+    "0:tts_added": 5307
+  },
+  "epochs": {
+    "epoch_01_windows": {
+      "examples": 8192,
+      "capture48k": 4066,
+      "tonal_negatives": 383,
+      "neighbor_labels": {
+        "-100": 15016,
+        "0": 5463,
+        "1": 1
+      }
+    },
+    "epoch_02_windows": {
+      "examples": 8192,
+      "capture48k": 4092,
+      "tonal_negatives": 429,
+      "neighbor_labels": {
+        "-100": 15048,
+        "0": 5430,
+        "1": 2
+      }
+    }
+  }
+}

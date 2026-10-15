@@ -1,0 +1,280 @@
+{
+  "recordings": {
+    "20261011_192226_57be1938": {
+      "condition": "music_only",
+      "paths": {
+        "raw": {
+          "seconds": 30.026666666666667,
+          "sha256": "8e6fe22ea2712002afa41d2fda7086cfb94d75f2443e1d0e5f299a22fd462a8f",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [],
+            "count": 0
+          }
+        },
+        "aec": {
+          "seconds": 30.026666666666667,
+          "sha256": "20780e53cc50201678d580398145653255d4b9be7448c3f5c98e6805d05a393a",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [],
+            "count": 0
+          }
+        }
+      }
+    },
+    "20261011_194901_531c6356": {
+      "condition": "speech_over_music",
+      "paths": {
+        "raw": {
+          "seconds": 15.008,
+          "sha256": "04661e1221e012805208ed70d54f48a105459b8ee6358cbbfa1cca9c71904fe7",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [],
+            "count": 0
+          }
+        },
+        "aec": {
+          "seconds": 15.018666666666666,
+          "sha256": "4449044c8d1211458f0c07dc5cd2aa3c872ddf9cea4efc69c835d58b41c709e3",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [],
+            "count": 0
+          }
+        }
+      }
+    },
+    "20261011_204709_c0a63ffa": {
+      "condition": "quiet_speech",
+      "paths": {
+        "raw": {
+          "seconds": 15.018666666666666,
+          "sha256": "64d580a90f4fb1e168edf43ee16511b93e02e9608d95a4d9f63d4dd0fa45ac9d",
+          "baseline": {
+            "events": [
+              {
+                "t": 7.5,
+                "prob": 0.5319937467575073
+              }
+            ],
+            "count": 1
+          },
+          "candidate": {
+            "events": [
+              {
+                "t": 3.0,
+                "prob": 0.9910784363746643
+              },
+              {
+                "t": 7.5,
+                "prob": 0.9977467656135559
+              }
+            ],
+            "count": 2
+          },
+          "exp15_deployed": {
+            "events": [
+              {
+                "t": 7.5,
+                "prob": 0.5397803783416748
+              },
+              {
+                "t": 12.25,
+                "prob": 0.39704257249832153
+              }
+            ],
+            "count": 2
+          }
+        },
+        "aec": {
+          "seconds": 15.002666666666666,
+          "sha256": "13fb855499d3f978c5d92fdb28579011b3baef54e63c269b1a5dcef9910b026a",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [],
+            "count": 0
+          }
+        }
+      }
+    },
+    "20261011_210021_2027daaf": {
+      "condition": "quiet_speech",
+      "paths": {
+        "raw": {
+          "seconds": 15.013333333333334,
+          "sha256": "08a7f1fd76d06754ec1f595fac52bf596682f864b9f96f9fa46abeda6144afa1",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [
+              {
+                "t": 3.25,
+                "prob": 0.9993477463722229
+              }
+            ],
+            "count": 1
+          },
+          "exp15_deployed": {
+            "events": [
+              {
+                "t": 3.5,
+                "prob": 0.8928614258766174
+              }
+            ],
+            "count": 1
+          }
+        },
+        "aec": {
+          "seconds": 15.013333333333334,
+          "sha256": "160dcf290a1002303cfc818d1244ffa3223cd7549833319269a7a5c394367d60",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [
+              {
+                "t": 3.25,
+                "prob": 0.9992057681083679
+              }
+            ],
+            "count": 1
+          },
+          "exp15_deployed": {
+            "events": [
+              {
+                "t": 3.5,
+                "prob": 0.7061910629272461
+              }
+            ],
+            "count": 1
+          }
+        }
+      }
+    },
+    "20261011_210156_0987295e": {
+      "condition": "music_only",
+      "paths": {
+        "raw": {
+          "seconds": 30.032,
+          "sha256": "74ec654e824795c81ffe9659fb8d0e44ca5bfc9e0d813cc3910ee7dd5eb8c7e6",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [],
+            "count": 0
+          }
+        },
+        "aec": {
+          "seconds": 30.026666666666667,
+          "sha256": "35f081de58112b6011afb759f0cf01927a5d03830910e4c2b7cb2ae3dde4e183",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [],
+            "count": 0
+          }
+        }
+      }
+    },
+    "20261011_210235_6e8f0942": {
+      "condition": "speech_over_music",
+      "paths": {
+        "raw": {
+          "seconds": 14.997333333333334,
+          "sha256": "159949bacbad197987bb66d751d9d952c76e1c442d8aecdc33e3fefbb7bf830c",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [
+              {
+                "t": 6.5,
+                "prob": 0.4047972857952118
+              }
+            ],
+            "count": 1
+          }
+        },
+        "aec": {
+          "seconds": 15.018666666666666,
+          "sha256": "a80deb46099d2f0599d34e2796f59eae30bc4ddcecc041baa9c79868ea746c05",
+          "baseline": {
+            "events": [],
+            "count": 0
+          },
+          "candidate": {
+            "events": [],
+            "count": 0
+          },
+          "exp15_deployed": {
+            "events": [
+              {
+                "t": 9.5,
+                "prob": 0.3598417341709137
+              }
+            ],
+            "count": 1
+          }
+        }
+      }
+    }
+  },
+  "limits": "Previously exposed paired Pi recordings. No verified utterance timestamps: event counts are NOT recall/latency. No training or calibration on these recordings; raw/AEC correlated."
+}

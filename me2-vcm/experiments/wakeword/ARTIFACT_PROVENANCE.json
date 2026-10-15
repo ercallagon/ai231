@@ -2,8 +2,11 @@
   "selected": "models/wakeword/wakeword_exp15_mined_lp.onnx",
   "sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
   "parameters": 204738,
-  "original_pytorch_checkpoint": "unavailable_in_verified_sources",
+  "original_pytorch_checkpoint": "experiments/wakeword/exp15_original/best.pt",
   "distinct_reproduction": "exp15_repro is not byte-identical to the selected deployed model and is not claimed as its checkpoint",
   "raw_recordings_published": false,
-  "full_wake_training_data_retrieval": "not_publicly_reproducible_due_to_unresolved_recording_terms"
+  "full_wake_training_data_retrieval": "not_publicly_reproducible_due_to_unresolved_recording_terms",
+  "prior_checkpoint_status": "unavailable_in_verified_sources",
+  "checkpoint_status_correction": "2026-10-15 archived original discovered and verified vs deployed ONNX on batches1/2/17",
+  "original_checkpoint_sha256": "d6d9069df46f01f1ed44a014d34cd37150b210e38a4428423f7e41b73c6254b0"
 }

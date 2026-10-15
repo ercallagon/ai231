@@ -1,0 +1,425 @@
+{
+  "time": 1792070506.9745922,
+  "epoch": 1,
+  "checkpoint_sha256": "fef6a1a0fac71b5c94ce20da81acff6031d47281714f03f29d67541345fec72e",
+  "model_sha256": "562868305685d4945b02bce2d628d80d1643e12b6c771622bd455a3857df3126",
+  "baseline_sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
+  "policies": {
+    "baseline": {
+      "5.0": {
+        "threshold": 0.8999999999999996,
+        "metrics": {
+          "raw": {
+            "detected": 111,
+            "n": 326,
+            "recall": 0.34049079754601225,
+            "original_events": 1,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 4.040619732857513,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 396.25,
+            "latency_p95_ms": 656.8125
+          },
+          "hp80": {
+            "detected": 100,
+            "n": 326,
+            "recall": 0.3067484662576687,
+            "original_events": 1,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 4.040619732857513,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 392.9375,
+            "latency_p95_ms": 673.3375
+          }
+        }
+      },
+      "15.0": {
+        "threshold": 0.8299999999999996,
+        "metrics": {
+          "raw": {
+            "detected": 135,
+            "n": 326,
+            "recall": 0.41411042944785276,
+            "original_events": 3,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 12.121859198572539,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 396.25,
+            "latency_p95_ms": 662.21875
+          },
+          "hp80": {
+            "detected": 126,
+            "n": 326,
+            "recall": 0.38650306748466257,
+            "original_events": 3,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 12.121859198572539,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 399.65625,
+            "latency_p95_ms": 678.9375
+          }
+        }
+      },
+      "30.0": {
+        "threshold": 0.5899999999999997,
+        "metrics": {
+          "raw": {
+            "detected": 184,
+            "n": 326,
+            "recall": 0.5644171779141104,
+            "original_events": 7,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 28.284338130002592,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 404.96875,
+            "latency_p95_ms": 693.8125
+          },
+          "hp80": {
+            "detected": 170,
+            "n": 326,
+            "recall": 0.5214723926380368,
+            "original_events": 5,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 20.203098664287566,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 407.59375,
+            "latency_p95_ms": 688.6374999999998
+          }
+        }
+      },
+      "60.0": {
+        "threshold": 0.34999999999999987,
+        "metrics": {
+          "raw": {
+            "detected": 229,
+            "n": 326,
+            "recall": 0.7024539877300614,
+            "original_events": 14,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 56.568676260005184,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 406.875,
+            "latency_p95_ms": 692.3874999999999
+          },
+          "hp80": {
+            "detected": 211,
+            "n": 326,
+            "recall": 0.647239263803681,
+            "original_events": 8,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 32.3249578628601,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 406.875,
+            "latency_p95_ms": 709.71875
+          }
+        }
+      },
+      "64.6499157257202": {
+        "threshold": 0.2799999999999999,
+        "metrics": {
+          "raw": {
+            "detected": 241,
+            "n": 326,
+            "recall": 0.7392638036809815,
+            "original_events": 16,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 64.6499157257202,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 401.375,
+            "latency_p95_ms": 694.9375
+          },
+          "hp80": {
+            "detected": 220,
+            "n": 326,
+            "recall": 0.6748466257668712,
+            "original_events": 11,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 44.44681706143264,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 402.1875,
+            "latency_p95_ms": 685.4749999999999
+          }
+        }
+      },
+      "120.0": {
+        "threshold": 0.11,
+        "metrics": {
+          "raw": {
+            "detected": 276,
+            "n": 326,
+            "recall": 0.8466257668711656,
+            "original_events": 28,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 113.13735252001037,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 379.21875,
+            "latency_p95_ms": 780.703125
+          },
+          "hp80": {
+            "detected": 266,
+            "n": 326,
+            "recall": 0.8159509202453987,
+            "original_events": 28,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 113.13735252001037,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 378.40625,
+            "latency_p95_ms": 768.78125
+          }
+        }
+      }
+    },
+    "candidate": {
+      "5.0": {
+        "threshold": 0.9999,
+        "metrics": {
+          "raw": {
+            "detected": 37,
+            "n": 326,
+            "recall": 0.11349693251533742,
+            "original_events": 0,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 0.0,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 408.9375,
+            "latency_p95_ms": 552.7249999999998
+          },
+          "hp80": {
+            "detected": 39,
+            "n": 326,
+            "recall": 0.1196319018404908,
+            "original_events": 0,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 0.0,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 445.4375,
+            "latency_p95_ms": 586.5812500000001
+          }
+        }
+      },
+      "15.0": {
+        "threshold": 0.999,
+        "metrics": {
+          "raw": {
+            "detected": 115,
+            "n": 326,
+            "recall": 0.35276073619631904,
+            "original_events": 2,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 8.081239465715026,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 360.9375,
+            "latency_p95_ms": 584.79375
+          },
+          "hp80": {
+            "detected": 108,
+            "n": 326,
+            "recall": 0.3312883435582822,
+            "original_events": 1,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 4.040619732857513,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 377.3125,
+            "latency_p95_ms": 619.3624999999997
+          }
+        }
+      },
+      "30.0": {
+        "threshold": 0.995,
+        "metrics": {
+          "raw": {
+            "detected": 197,
+            "n": 326,
+            "recall": 0.6042944785276073,
+            "original_events": 5,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 20.203098664287566,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 351.125,
+            "latency_p95_ms": 634.9625
+          },
+          "hp80": {
+            "detected": 185,
+            "n": 326,
+            "recall": 0.5674846625766872,
+            "original_events": 2,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 8.081239465715026,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 360.9375,
+            "latency_p95_ms": 631.3499999999997
+          }
+        }
+      },
+      "60.0": {
+        "threshold": 0.9899999999999995,
+        "metrics": {
+          "raw": {
+            "detected": 233,
+            "n": 326,
+            "recall": 0.7147239263803681,
+            "original_events": 14,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 56.568676260005184,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 335.375,
+            "latency_p95_ms": 614.5124999999999
+          },
+          "hp80": {
+            "detected": 220,
+            "n": 326,
+            "recall": 0.6748466257668712,
+            "original_events": 7,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 28.284338130002592,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 365.21875,
+            "latency_p95_ms": 627.6406249999999
+          }
+        }
+      },
+      "64.6499157257202": {
+        "threshold": 0.9899999999999995,
+        "metrics": {
+          "raw": {
+            "detected": 233,
+            "n": 326,
+            "recall": 0.7147239263803681,
+            "original_events": 14,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 56.568676260005184,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 335.375,
+            "latency_p95_ms": 614.5124999999999
+          },
+          "hp80": {
+            "detected": 220,
+            "n": 326,
+            "recall": 0.6748466257668712,
+            "original_events": 7,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 28.284338130002592,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 365.21875,
+            "latency_p95_ms": 627.6406249999999
+          }
+        }
+      },
+      "120.0": {
+        "threshold": 0.9699999999999995,
+        "metrics": {
+          "raw": {
+            "detected": 284,
+            "n": 326,
+            "recall": 0.8711656441717791,
+            "original_events": 25,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 101.01549332143782,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 328.9375,
+            "latency_p95_ms": 614.0749999999999
+          },
+          "hp80": {
+            "detected": 263,
+            "n": 326,
+            "recall": 0.8067484662576687,
+            "original_events": 17,
+            "original_hours": 0.24748678819444445,
+            "original_fa_h": 68.69053545857771,
+            "generated_events": 0,
+            "generated_hours": 0.28444444444444444,
+            "generated_fa_h": 0.0,
+            "unmatched_positive_events": 0,
+            "latency_median_ms": 324.9375,
+            "latency_p95_ms": 616.26875
+          }
+        }
+      }
+    }
+  },
+  "primary_budget": 64.6499157257202,
+  "validation_worst_recall_gain": 0.0,
+  "validation_nomination": false,
+  "baseline_epoch0_winner": true,
+  "shared_policy": {
+    "window_samples": 16000,
+    "hop_samples": 4000,
+    "sustain": 2,
+    "cooldown_samples": 32000,
+    "multiwin": false
+  },
+  "source_sha256": "bd1dbcb7dc9348a992b717c6edfe39e39bf2c76dde5931567e692ea1b070ef26",
+  "test_accessed": false,
+  "test_previously_exposed": true,
+  "pi_verified": false,
+  "veto": "No >2point test recall regression raw/HP; original false events<=1.25baseline (or1ifbaseline0); no extra known music-only dev events. No refit/selection from test."
+}

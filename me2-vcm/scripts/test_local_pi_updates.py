@@ -18,7 +18,12 @@ class Tests(unittest.TestCase):
     def test_routes(self):
         label_files = sorted((ROOT / "models/vcm").glob("*.labels.json"))
         self.assertTrue(label_files, "No packaged runtime labels found")
-        label_sets = [json.loads(path.read_text()) for path in label_files]
+        label_sets = []
+        for path in label_files:
+            labels = json.loads(path.read_text())
+            slots = labels.get("slot_sets", labels.get("slots"))
+            self.assertIsInstance(slots, dict, f"Missing slot labels: {path}")
+            label_sets.append({"intents": labels["intents"], "slot_sets": slots})
         calls = []
         class Service:
             def __init__(self, group): self.group = group
@@ -33,6 +38,11 @@ class Tests(unittest.TestCase):
                 self.assertIn(intent, INTENTS)
                 p = loop._make_prediction({"intent": intent, "accepted": True,
                                           "slots": {} if value is None else {intent: value}})
+                if value == "REJECT":
+                    before = len(calls)
+                    self.assertNotEqual(router.dispatch(p)["status"], "ok")
+                    self.assertEqual(len(calls), before)
+                    continue
                 self.assertEqual(router.dispatch(p)["status"], "ok")
                 self.assertEqual(calls[-1], (INTENTS[intent], intent, p.slot_value))
             count = len(calls)
@@ -151,7 +161,8 @@ class Tests(unittest.TestCase):
             args = SimpleNamespace(log_format="text", device="0", wake_config="w",vcm_config="v",
                 hardware_config="h",wake_onnx="w.onnx",vcm_onnx="v.onnx",vcm_labels="l.json",
                 ack="cue.wav",threshold=None,no_ack=False,live=False,hardware="mock",speak=False,
-                verbose=False,wake_log_interval=2,music_duck_percent=0,playback_tail_seconds=0,once=cycles==1)
+                verbose=False,wake_log_interval=2,music_duck_percent=0,playback_tail_seconds=0,
+                benchmark_log=False,once=cycles==1)
             class Stream:
                 def __init__(self, **kw): self_test.assertFalse(opened[0])
                 def __enter__(self): opened[0] = True; return self

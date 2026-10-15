@@ -1,0 +1,11 @@
+{
+  "epochs": 2,
+  "best_epoch": 0,
+  "best_finetuned_epoch": 1,
+  "improved_vs_initialization": false,
+  "gpu_seconds": 132.8830357445404,
+  "gpu_hours": 0.03691195437348344,
+  "peak_reserved_bytes": 859832320,
+  "reason": "early_stopping",
+  "test_accessed": false
+}

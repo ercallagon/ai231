@@ -5,6 +5,24 @@
 > Old artifact tags, package paths and readiness snapshots below are not current
 > release instructions. Physical Pi 5 verification of the six-second profile is pending.
 
+## Current submission evidence, 2026-10-15
+
+Use [the submission checklist](../reports/SUBMISSION_CHECKLIST.md),
+[frozen results](../reports/RESULTS.md), [architecture](architecture.md),
+[Pi 5 guide](PI5.md) and [publication status](../reports/PUBLICATION_STATUS.md).
+The public repository exists and clean VCM result reproduction has passed.
+The selected six-second model at 0.954, complete run_043 fallback at 0.875 and
+exp15 wake graph are committed. Original exp15 checkpoint/provenance recovery
+is included in the current update; recent trials did not replace exp15.
+Actual Pi measurements, independent real-speaker confirmation and outstanding
+dataset/voice rights limitations must not be represented as complete.
+
+## Historical planning notes
+
+Everything below records the earlier preparation state, including superseded
+run.sh behavior, candidate choices and not-yet-published status. It is retained
+for research history, not as current installation or submission instructions.
+
 Public configuration, asset staging and professor retraining options are
 documented in [public reproduction](public-reproduction.md).
 

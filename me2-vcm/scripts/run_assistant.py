@@ -12,15 +12,21 @@ sys.path.insert(0,str(ROOT/"src"))
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile",choices=("selected","run043"),default="selected")
+    parser.add_argument("--wake-profile",default="exp15")
     args,extra=parser.parse_known_args()
     os.chdir(ROOT)
     import yaml
     from hey_swift.integration.e2e_loop import main as run
     profile=json.loads((ROOT/"configs/assistant_profiles.json").read_text())["profiles"][args.profile]
+    registry=ROOT/"configs/wake_profiles.json"
+    wakes=json.loads(registry.read_text())["profiles"] if registry.exists() else {"exp15":{"config":"configs/wakeword.yaml","model":"models/wakeword/wakeword_exp15_mined_lp.onnx"}}
+    if args.wake_profile not in wakes:
+        parser.error("Unknown wake profile; inspect configs/wake_profiles.json")
+    wake=wakes[args.wake_profile]
     config=yaml.safe_load((ROOT/profile["config"]).read_text())
     command=["--vcm-onnx",str(ROOT/profile["model"]),"--vcm-labels",str(ROOT/profile["labels"]),
-        "--vcm-config",str(ROOT/profile["config"]),"--wake-config",str(ROOT/"configs/wakeword.yaml"),
-        "--wake-onnx",str(ROOT/"models/wakeword/wakeword_exp15_mined_lp.onnx"),
+        "--vcm-config",str(ROOT/profile["config"]),"--wake-config",str(ROOT/wake["config"]),
+        "--wake-onnx",str(ROOT/wake["model"]),
         "--hardware-config",str(ROOT/"configs/hardware.yaml"),"--ack",str(ROOT/"audio/wake_chime.wav")]
     for key,value in config["capture"].items():
         if key in ("command_seconds","end_silence_ms","pre_roll_ms","speech_start_ms","speech_start_timeout"):

@@ -39,6 +39,21 @@ def main():
             result=model.predict(wave)
             assert np.isfinite(result["confidence"])
             print(json.dumps(dict(profile=name,contract="loaded",threads=model.threads)))
+        wake_registry=ROOT/"configs/wake_profiles.json"
+        if wake_registry.exists():
+            from hey_swift.wakeword.inference import WakeWordDetector
+            checked=set()
+            for name,wake in json.loads(wake_registry.read_text())["profiles"].items():
+                key=(wake["config"],wake["model"])
+                if key in checked:continue
+                checked.add(key)
+                detector=WakeWordDetector(str(ROOT/wake["config"]),onnx_path=str(ROOT/wake["model"]))
+                assert detector.sess.get_outputs()[0].shape[-1]==2
+                wave=.1*np.sin(np.arange(detector.win,dtype=np.float32)*2*np.pi*440/16000)
+                pw,pn,_=detector._score_window(wave)
+                assert np.isfinite(pw) and np.isfinite(pn)
+                print(json.dumps(dict(wake_profile=name,contract="loaded",frontend=detector.frontend,
+                    threshold=detector.gate.threshold,physical_pi_verified=False)))
         print("Frozen model contracts verified; physical Pi checks pending")
         return
     if args.output is None:

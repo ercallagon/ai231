@@ -1,0 +1,143 @@
+{
+  "test_uncertainty": {
+    "exp15_calibrated": {
+      "raw": {
+        "original_negative_fa_two_sided95": [
+          0.08257822787668145,
+          18.17283857552186
+        ],
+        "positive_recall_wilson95": [
+          0.23553584739034011,
+          0.324696231466115
+        ]
+      },
+      "hp80": {
+        "original_negative_fa_two_sided95": [
+          0.08257822787668145,
+          18.17283857552186
+        ],
+        "positive_recall_wilson95": [
+          0.2379819415779082,
+          0.3273936217363661
+        ]
+      }
+    },
+    "exp15_default": {
+      "raw": {
+        "original_negative_fa_two_sided95": [
+          206.90384883589363,
+          324.7540317883564
+        ],
+        "positive_recall_wilson95": [
+          0.8328613144313289,
+          0.9000852208079128
+        ]
+      },
+      "hp80": {
+        "original_negative_fa_two_sided95": [
+          152.18986846837802,
+          255.57451469666725
+        ],
+        "positive_recall_wilson95": [
+          0.8271667214418874,
+          0.8954928448817157
+        ]
+      }
+    },
+    "cmvn2s_v1": {
+      "raw": {
+        "original_negative_fa_two_sided95": [
+          11.275461988486402,
+          51.460879328807835
+        ],
+        "positive_recall_wilson95": [
+          0.1750299177020185,
+          0.25661504970895554
+        ]
+      },
+      "hp80": {
+        "original_negative_fa_two_sided95": [
+          11.275461988486402,
+          51.460879328807835
+        ],
+        "positive_recall_wilson95": [
+          0.13707417807764014,
+          0.21227503800822609
+        ]
+      }
+    },
+    "pcen2s_v1": {
+      "raw": {
+        "original_negative_fa_two_sided95": [
+          2.019731604797514,
+          28.621846453936264
+        ],
+        "positive_recall_wilson95": [
+          0.31465275720524377,
+          0.41017082430142693
+        ]
+      },
+      "hp80": {
+        "original_negative_fa_two_sided95": [
+          2.019731604797514,
+          28.621846453936264
+        ],
+        "positive_recall_wilson95": [
+          0.29471871901187296,
+          0.3889569868322438
+        ]
+      }
+    }
+  },
+  "paired_common_detection_latency": {
+    "raw": {
+      "common_detected": 63,
+      "candidate_minus_baseline_median_ms": 250.0,
+      "candidate_minus_baseline_p95_ms": 750.0
+    },
+    "hp80": {
+      "common_detected": 74,
+      "candidate_minus_baseline_median_ms": 250.0,
+      "candidate_minus_baseline_p95_ms": 750.0
+    }
+  },
+  "host_entire_scoring_hop": {
+    "exp15_default": {
+      "model_sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
+      "config_sha256": "6d08f76b41b0be78ab641b2c578fd0f424e5f0cb2d3e3a04f367d9c0d8c72038",
+      "device": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+      "physical_pi5": false,
+      "threads": {
+        "intra": 1,
+        "inter": 1
+      },
+      "scope": "entire scoring hop: feature extraction and ONNX including configured multiwindows; excludes capture/resampling/actions",
+      "p50_ms": 8.333368226885796,
+      "p95_ms": 8.470442146062851,
+      "scoring_hop_rtf_p95": 0.033881768584251404,
+      "seconds": 40.0,
+      "events": [],
+      "generated_noise_input": true,
+      "not_accuracy_or_acoustic_latency": true
+    },
+    "pcen2s_v1": {
+      "model_sha256": "b9217cbc9f8d3af1b44363b9b805a3f5774094bb513cd24bb39496cb0cf44ebe",
+      "config_sha256": "f70ff09606a6856e59445c4bad0532edebaddc0f6d387042b0c58fbd5946bc90",
+      "device": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+      "physical_pi5": false,
+      "threads": {
+        "intra": 1,
+        "inter": 1
+      },
+      "scope": "entire scoring hop: feature extraction and ONNX including configured multiwindows; excludes capture/resampling/actions",
+      "p50_ms": 4.104846157133579,
+      "p95_ms": 4.270763508975506,
+      "scoring_hop_rtf_p95": 0.017083054035902025,
+      "seconds": 40.0,
+      "events": [],
+      "generated_noise_input": true,
+      "not_accuracy_or_acoustic_latency": true
+    }
+  },
+  "interpretation": "Poisson intervals are corpus estimates, not verified real-room rates; repeated recordings/adjacent windows can violate independence. No test-based tuning; model policies frozen."
+}

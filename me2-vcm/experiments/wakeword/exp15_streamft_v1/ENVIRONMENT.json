@@ -1,0 +1,16 @@
+{
+  "python": "3.12.14 | packaged by Anaconda, Inc. | (main, Aug 27 2026, 14:46:43) [GCC 14.3.0]",
+  "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.39",
+  "packages": {
+    "torch": "2.6.0+cu124",
+    "numpy": "2.5.2",
+    "scipy": "1.18.1",
+    "onnx": "1.23.0",
+    "onnxruntime": "1.30.0",
+    "soundfile": "0.14.0",
+    "pyyaml": "6.0.3",
+    "sounddevice": "0.5.6",
+    "pytest": "9.1.1"
+  },
+  "nvidia": "0, NVIDIA A100-SXM4-40GB, 580.159.03\n1, NVIDIA A100-SXM4-40GB, 580.159.03\n2, NVIDIA A100-SXM4-40GB, 580.159.03\n3, NVIDIA A100-SXM4-40GB, 580.159.03\n4, NVIDIA A100-SXM4-40GB, 580.159.03\n5, NVIDIA A100-SXM4-40GB, 580.159.03\n6, NVIDIA A100-SXM4-40GB, 580.159.03\n7, NVIDIA A100-SXM4-40GB, 580.159.03\n"
+}

@@ -1,0 +1,14 @@
+{
+  "original_checkpoint_sha256": "d6d9069df46f01f1ed44a014d34cd37150b210e38a4428423f7e41b73c6254b0",
+  "parity_batches": [
+    1,
+    2,
+    17
+  ],
+  "max_abs_errors": [
+    4.76837158203125e-07,
+    2.682209014892578e-07,
+    1.2218952178955078e-06
+  ],
+  "passed": true
+}

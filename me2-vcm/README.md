@@ -1,4 +1,4 @@
-# Hey Swift: ME2 voice commands on Raspberry Pi 5
+# ME2: Voice Controlled Smart Device (Hey Swift)
 
 This project runs Hey Swift -> command capture -> intent and slots -> rejection
 -> preview/action -> idle listening. The repository default is the frozen
@@ -14,6 +14,16 @@ causal neural encoding, KV-cache, ASR decoding or continuous streaming inference
 
 The complete run_043 fallback (327,750 parameters, two-second features, threshold
 0.875) remains selectable. Exp15 is the separate preserved wakeword model.
+
+| Component | Repository selection | Status |
+| --- | --- | --- |
+| Wake word | exp15 CNN + GRU, 204,738 parameters, threshold 0.30 | Preserved default; recent trials did not justify replacement |
+| Voice commands | Six-second BC8 + TCN + attentive statistics pooling, 488,264 parameters, threshold 0.954 | Frozen repository default; physical Pi 5 verification pending |
+| Voice-command fallback | run_043 BC8, 327,750 parameters, threshold 0.875 | Complete selectable fallback |
+
+Current deck evidence and outstanding requirements are in
+[SUBMISSION_CHECKLIST.md](reports/SUBMISSION_CHECKLIST.md). Owned code is MIT;
+dataset and model terms are separate and include research/education restrictions.
 
 ## Install and verify
 
@@ -52,6 +62,10 @@ Results include full-manifest failures, processed-subset denominators,
 real/synthetic breakdowns, per-family metrics, paired errors and timing scopes.
 The public metadata preserves split membership/order and audio hashes, removes
 unneeded identifying fields and pseudonymizes declared speaker groups.
+The default fetch is about 305 MB of evaluation Parquet, with audio embedded;
+it does not fetch training data or replace model files. Injection bypasses wake
+detection, the microphone and live endpointing. It is supplementary to the
+speaker-to-microphone class benchmark, not an acoustic test substitute.
 
 ## Frozen evaluation and limits
 
@@ -105,9 +119,11 @@ New weights require their own validation calibration. Do not assume threshold
 reported frozen-model results without retraining.
 
 Full wakeword retraining is not publicly reproducible from the current archive:
-recording publication/consent terms and the original PyTorch checkpoint remain
-unresolved. Its exact deployed ONNX, feature source, configuration, corrected
-metrics and a clearly distinct reproduction history are retained.
+recording publication/consent terms remain unresolved. The original exp15
+PyTorch checkpoint has been recovered and verified against the deployed ONNX;
+it is retained with the feature source, configuration, corrected metrics and
+a clearly distinct reproduction history. Its selected epoch is 42, not the
+incorrect best_epoch 60 recorded in the preserved historical config.
 
 ## Evidence
 
@@ -115,9 +131,11 @@ metrics and a clearly distinct reproduction history are retained.
 - experiments/baseline/: run_043 checkpoint, config and comparison evidence.
 - experiments/wakeword/: exact artifact provenance and corrected wake evaluation.
 - logs/training/: complete selected and baseline training logs.
-- experiments/RUN_INDEX.csv: 73 discovered historical trial directories; incompatible
+- experiments/RUN_INDEX.csv: historical trial inventory; incompatible
   protocols and unknown/incomplete results are marked rather than ranked together.
 - reports/MODEL_SELECTION.md: original selection and authorized calibration revision.
+- reports/SUBMISSION_CHECKLIST.md: two-slide fields, evidence and pending Pi checks.
+- reports/PUBLICATION_STATUS.md: current publication scope versus historical receipts.
 - scripts/benchmark_onnx_pi.py: model-only p95/thread measurements.
 - scripts/reproduce.py: injected-file feature/model recognition and RTF on host/Pi.
 - docs/BENCHMARK.md: class laptop-speaker -> Pi-microphone benchmark.
@@ -126,3 +144,12 @@ Host regression tests use mocked calls, SMS, capture and GPIO. Actual Pi p95,
 RTF, live wake/capture behavior and GPIO effects remain pending. Fresh independent
 speaker recordings should be collected only after freezing this release, with
 consent and no further tuning; they are not currently available.
+
+## Experimental Wakeword A/B
+
+exp15 remains the default. Two matched scratch streaming trials and an integer-sample cooldown fix are documented in [WAKE_FINAL_AB.md](docs/WAKE_FINAL_AB.md). Candidates are opt-in; physical Pi 5 verification remains pending.
+
+The final targeted exp15 fine-tune did not justify replacement. Its frozen
+comparison and limitations are in [WAKE_EXP15_STREAMFT.md](reports/WAKE_EXP15_STREAMFT.md).
+[WAKE_STREAMFT_AB.md](docs/WAKE_STREAMFT_AB.md) provides optional wake-only Pi
+diagnostics; no additional training is queued and the working deployment is unchanged.

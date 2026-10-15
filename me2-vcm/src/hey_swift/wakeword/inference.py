@@ -67,6 +67,8 @@ class _State:
     t: float = 0.0
     since_hop: int = 0
     primed: bool = False
+    samples: int = 0
+    last_fire_sample: Optional[int] = None
 
 
 class WakeWordDetector:
@@ -84,26 +86,47 @@ class WakeWordDetector:
             cooldown_seconds=float(inf.get("cooldown_seconds", 2.0)),
             rms_floor_db=float(inf.get("rms_floor_db", RMS_FLOOR_DB)),
             hop_seconds=float(inf.get("hop_seconds", HOP_SECONDS)),
+            multiwin=bool(inf.get("multiwin", True)),
+            n_subwin=int(inf.get("n_subwin", MULTIWIN_N)),
+            subhop_seconds=float(inf.get("subhop_seconds", SUBHOP_SECONDS)),
+            gate_nonwake=float(inf.get("gate_nonwake", GATE_NONWAKE)),
         )
-        self.win = int(WIN_SECONDS * SAMPLE_RATE)
+        self.frontend = inf.get("frontend", "legacy")
+        seconds = float(inf.get("window_seconds", WIN_SECONDS))
+        if (self.frontend == "legacy" and seconds != 1.) or (self.frontend in ("cmvn2s_v1", "pcen2s_v1") and seconds != 2.):
+            raise ValueError("Wake frontend/window mismatch")
+        if self.frontend not in ("legacy", "cmvn2s_v1", "pcen2s_v1"):
+            raise ValueError("Unsupported wake frontend")
+        self.win = int(round(seconds * SAMPLE_RATE))
         self.hop_samples = int(self.gate.hop_seconds * SAMPLE_RATE)
         self.subhop_samples = int(self.gate.subhop_seconds * SAMPLE_RATE)
         self.n_subwin = self.gate.n_subwin if self.gate.multiwin else 1
         self.sustain = max(1, self.gate.sustain)
+        if min(self.hop_samples, self.subhop_samples, self.n_subwin) <= 0 or self.gate.cooldown_seconds < 0:
+            raise ValueError("Invalid wake cadence")
 
-        path = onnx_path or self.cfg.get("model", {}).get("onnx", DEFAULT_ONNX)
+        path = onnx_path or inf.get("onnx") or self.cfg.get("model", {}).get("onnx", DEFAULT_ONNX)
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.intra_op_num_threads = int(inf.get("intra_op_threads", 1))
+        opts.inter_op_num_threads = int(inf.get("inter_op_threads", 1))
         self.sess = ort.InferenceSession(path, sess_options=opts,
                                          providers=["CPUExecutionProvider"])
         self.input_name = self.sess.get_inputs()[0].name
+        expected = [80, 100 if self.frontend == "legacy" else 200]
+        if self.sess.get_inputs()[0].shape[-2:] != expected:
+            raise ValueError("Wake model/frontend input contract mismatch")
         self.buf = np.zeros(0, dtype=np.float32)
         self._state = _State()
 
     # ------------------------------------------------------------------ #
     def _score_window(self, w: np.ndarray):
         """w: (WIN,) float32 -> (p_wake, p_nonwake, rms)."""
-        feat = mel_from_pcm(w)
+        if getattr(self, "frontend", "legacy") == "legacy":
+            feat = mel_from_pcm(w)
+        else:
+            from .streaming_features import window_features
+            feat = window_features(w, self.frontend)
         logits = self.sess.run(None, {self.input_name: feat})[0][0]
         e = np.exp(logits - logits.max())
         p = e / e.sum()
@@ -159,7 +182,8 @@ class WakeWordDetector:
             if self.buf.size > cap:
                 self.buf = self.buf[-cap:]
             offset += take
-            self._state.t += take / SAMPLE_RATE
+            self._state.samples += take
+            self._state.t = self._state.samples / SAMPLE_RATE
 
             if self._state.primed:
                 self._state.since_hop += take
@@ -178,9 +202,12 @@ class WakeWordDetector:
             else:
                 self._state.streak = 0
             if (self._state.streak >= self.sustain
-                    and (self._state.t - self._state.last_fire) >= self.gate.cooldown_seconds):
+                    and (self._state.last_fire_sample is None or
+                         self._state.samples - self._state.last_fire_sample >=
+                         int(round(self.gate.cooldown_seconds * SAMPLE_RATE)))):
                 events.append({"t": self._state.t, "prob": p_wake})
                 self._state.last_fire = self._state.t
+                self._state.last_fire_sample = self._state.samples
                 self._state.streak = 0
         return events, p_last
 
