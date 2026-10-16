@@ -1,9 +1,9 @@
-# ME2 publication status, 2026-10-15
+# ME2 publication status, 2026-10-16
 
 Project: **ME2: Voice Controlled Smart Device (Hey Swift)**, under
 [ercallagon/ai231/me2-vcm](https://github.com/ercallagon/ai231/tree/main/me2-vcm).
 The repository main revision before this update was
-fbf01a6710e4b552aa15c11c82588b898a16ca2e, verified using git ls-remote.
+b6ab05bb580491a754be70c2f979ee48f5ca13e7, previously verified using git ls-remote.
 Use the containing Git commit for the exact revision of this report; this file
 does not invent a future commit hash or claim an unperformed push.
 
@@ -49,9 +49,11 @@ not a substitute for that outcome.
 
 ## Unresolved, explicitly not certified
 
-Physical Pi 5 latency, RTF, live wake/capture, acoustic accuracy and peripherals
-remain pending user testing. Host parity and wheel availability do not establish
-Pi success. Test/holdout were repeatedly exposed. Official wake positives are
+Initial Pi injection/acoustic results and operator GPIO/audio observations have
+been received; see FINAL_CANDIDATE.md for actual counts and provenance gaps.
+Final controlled 800 ms endpoint/A-B and communications recovery remain pending.
+Host parity and wheel availability do not establish Pi success.
+Test/holdout were repeatedly exposed. Official wake positives are
 synthetic; independent real-speaker wake performance is not established.
 Wake raw-data retrieval and some dataset/voice consent/licensing remain incomplete.
 No owned-code MIT grant overrides those source or model terms.

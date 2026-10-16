@@ -120,6 +120,16 @@ def build_report(root, official=None):
         document["measured"]["official_acoustic_benchmark"] = dict(source=str(path), data=value)
         if value:
             lines += ["## Supplied class acoustic benchmark", "", str(path), "```json", json.dumps(value, indent=2), "```", ""]
+            audit = read(official / "SWIFT_AUDIT.json")
+            sources = audit.get("source_sha256", {}) if audit else {}
+            matched = bool(audit) and all(
+                (official / name).is_file() and sources.get(name) == hashlib.sha256((official / name).read_bytes()).hexdigest()
+                for name in ("metrics.json", "trials.csv"))
+            if matched:
+                document["measured"]["supplementary_acoustic_audit"] = audit
+                lines += ["## Supplementary acoustic audit (not rescored)", "", "```json", json.dumps(audit, indent=2), "```", ""]
+            else:
+                document["missing"].append("Matching SWIFT_AUDIT.json: run review_class_benchmark.py; early/extra/zero-audio decisions require review")
         else:
             document["missing"].append("Supplied official benchmark metrics.json missing")
     else:
@@ -128,7 +138,7 @@ def build_report(root, official=None):
         "Annotated acoustic speech-end reference", "Live wake misses/false triggers per hour/raw-AEC/music robustness unless separately benchmarked",
         "GPIO/display/timer, call/SMS, audible TTS/music fallback and API action effects: require explicit physical test evidence",
         "Action initiation/completion and TTS onset latency: not inferred from recognition latency",
-        "Live assistant memory/CPU peaks, power/energy and independent repeated-device uncertainty: not measured by evaluation-worker telemetry"]
+        "Power/energy and independent repeated-device uncertainty; live resources require separate scope review of supplied acoustic telemetry, not evaluation-worker data"]
     lines += ["## Measurement scope", "", "Injected latency = features + ONNX, excluding download/decode/resampling/capture/endpoint wait/decision mapping/actions/TTS. RTF uses actual original waveform duration. First inference is included; one intra-op/inter-op thread. Failures remain in recognition denominators; timing only covers processed recordings.",
               "", "Live latency uses the detector's final voiced-frame read time and includes endpoint waiting; it is not annotated acoustic ground truth. Acceptance alone is not correct recognition.",
               "", "Wilson intervals are descriptive binomial intervals; correlated voices/recordings and prior exposure limit generalization.",

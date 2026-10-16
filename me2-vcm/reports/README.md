@@ -1,5 +1,8 @@
 # ME2 evidence and current status
 
+- [FINAL_CANDIDATE.md](FINAL_CANDIDATE.md): current audit, received Pi evidence,
+  resolved versus pending findings and the final measurement freeze.
+
 - [RESULTS.md](RESULTS.md): frozen six-second VCM at 0.954 versus run_043 at
   0.875, including test/holdout real/synthetic cohorts and full failure counts.
 - [MODEL_SELECTION.md](MODEL_SELECTION.md): validation selection, calibration

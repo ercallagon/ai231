@@ -1,5 +1,9 @@
 # Hey Swift on Raspberry Pi 5
 
+Already installed? Use [the final update/benchmark handoff](FINAL_PI_VALIDATION.md)
+instead of reinstalling or rerunning private setup. Optional `--end-silence-ms 800`
+works with `./swift run`, `live-latency` and `demo`; omission keeps profile defaults.
+
 Use these exact commands over SSH. The public names are **Champion (6s BC8-TCN-ASP)**
 (threshold 0.954) and **Baseline (2s BC8)** (threshold 0.875); select them with
 `--model champion` and `--model baseline`. Historical profile/run identifiers remain

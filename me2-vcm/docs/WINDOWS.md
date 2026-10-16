@@ -6,9 +6,10 @@ its environment. The working Pi installation is not replaced automatically.
 PowerShell:
 
 ```powershell
-Set-Location 'C:\Users\EJ\Documents\ChatGPT\ME2-VCM 2'
-git clone https://github.com/ercallagon/ai231.git ai231
-Set-Location ai231\me2-vcm
+git clone --filter=blob:none --sparse https://github.com/ercallagon/ai231.git ai231
+Set-Location ai231
+git sparse-checkout set me2-vcm
+Set-Location me2-vcm
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-eval.txt
 .\.venv\Scripts\python.exe scripts/reproduce.py verify
@@ -20,28 +21,12 @@ local edits. Reproduction downloads the pinned public data, verifies hashes and
 never trains or fits thresholds. The test/holdout evaluation is previously exposed.
 Do not commit fetched data or result caches.
 
-If HPC cannot push because GitHub authentication is unavailable, download the
-agent-provided Git bundle under work/finalize_submit/ instead. It contains the
-preserved repository history and the initial ME2 commit, with no credentials.
-For a new checkout:
-
-```powershell
-git clone .\ME2_submission_ready.bundle ai231
-Set-Location ai231
-git remote set-url origin https://github.com/ercallagon/ai231.git
-git fetch origin
-git log --oneline origin/main..main
-git diff --name-only origin/main...main
-git push -u origin main
-```
-
-Verify that the difference adds only me2-vcm/. GitHub authentication belongs in
-Git Credential Manager/browser, never in a URL, config committed to Git, or chat.
-If the remote has advanced, stop on a non-fast-forward error; integrate that
-history normally and never force-push over ME1.
-
-For Pi testing, clone/update the published repository on Pi as in PI5.md. If
-using the bundle offline, transfer it with your existing SSH connection, clone
-it on Pi to ~/ai231, and follow the same instructions. Dependency/data downloads
+For Pi testing, update the existing checkout using
+[FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md), or install a separate one with
+[QUICKSTART_PI.md](QUICKSTART_PI.md). Do not create a duplicate installation just
+to update. GitHub authentication belongs in Git Credential Manager/browser,
+never in a URL, committed configuration or chat. Dependency/data downloads
 need internet initially; after caching, a shared hotspot/LAN is sufficient for
 SSH and the acoustic benchmark. See BENCHMARK.md for the separate laptop tool.
+The class benchmark has its own Windows environment and recordings; Pi commands
+using `.venv/bin/python` must be entered in the Pi SSH terminal, not PowerShell.

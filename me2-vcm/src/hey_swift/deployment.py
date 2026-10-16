@@ -6,6 +6,7 @@ import getpass
 import hashlib
 import importlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -390,7 +391,9 @@ def applied_env(env):
 
 def assistant(cfg, state, model="champion", live=False, latency=False,
               confirm_communications=False, speak_no_speech=False,
-              music_start_volume=30, music_volume_limit=50):
+              music_start_volume=30, music_volume_limit=50, end_silence_ms=None):
+    if end_silence_ms is not None and (not math.isfinite(end_silence_ms) or end_silence_ms <= 0):
+        raise SetupError("Endpoint silence must be finite and positive")
     if not 0 <= music_start_volume <= music_volume_limit <= 100:
         raise SetupError("Choose 0 <= music start volume <= music limit <= 100")
     profile = resolve_profile(model)
@@ -402,6 +405,8 @@ def assistant(cfg, state, model="champion", live=False, latency=False,
         logs = ROOT / "work/pi5_test_01" / (PUBLIC[profile] + "_live_" + stamp)
         command = [sys.executable, str(ROOT / "scripts/run_benchmark_assistant.py"),
                    "--profile", model, "--device", device, "--log-dir", str(logs)]
+        if end_silence_ms is not None:
+            command += ["--end-silence-ms", str(end_silence_ms)]
         try:
             subprocess.call(command, cwd=ROOT, env=env)
         except KeyboardInterrupt:
@@ -413,6 +418,8 @@ def assistant(cfg, state, model="champion", live=False, latency=False,
                "--device", device, "--hardware", cfg["hardware"] if live else "mock",
                "--music-start-volume-percent", str(music_start_volume),
                "--music-listen-volume-percent", str(music_volume_limit)]
+    if end_silence_ms is not None:
+        command += ["--end-silence-ms", str(end_silence_ms)]
     if not cfg.get("spotify") and not cfg.get("weather"):
         command.append("--offline")
     if live:
@@ -593,7 +600,7 @@ def session_menu(home):
                     pass
 
 
-def demo(cfg, state, model):
+def demo(cfg, state, model, end_silence_ms=None):
     print("Say Hey Swift, wait for capture readiness, then try the applicable commands:")
     print("What time is it? / Turn on the light / Set a timer for ten seconds /")
     print("Set the temperature to twenty-two degrees / Play music / Pause music /")
@@ -603,7 +610,7 @@ def demo(cfg, state, model):
     if not yes("Start the real voice demo with configured services?"):
         return 1
     try:
-        assistant(cfg, state, model=model, live=True)
+        assistant(cfg, state, model=model, live=True, end_silence_ms=end_silence_ms)
     except KeyboardInterrupt:
         print("\nVoice loop stopped; record your observations below.")
     print("Record only what you actually observed. Enter PASS, FAIL or NOT_RUN.")
@@ -617,6 +624,7 @@ def demo(cfg, state, model):
         observations[check] = value if value in ("PASS", "FAIL", "NOT_RUN") else "NOT_RUN"
     private_json(ROOT / "work/pi5_test_01/DEMO.json", dict(
         created_utc=datetime.now(timezone.utc).isoformat(), model=resolve_profile(model),
+        end_silence_ms_override=end_silence_ms,
         scope="operator-reported physical observations, not an automatically scored acoustic benchmark",
         observations=observations, shared_OS=True))
     print("Observations saved. Run swift.py report to refresh the consolidated report.")
@@ -640,6 +648,8 @@ def main():
         p = sub.add_parser(action)
         p.add_argument("--model", type=resolve_profile, metavar="{champion,baseline}", default="champion",
                        help="Champion or baseline; historical aliases remain compatible")
+        p.add_argument("--end-silence-ms", type=float, default=None,
+                       help="Optional endpoint wait; 800 is the submission trial, omit for profile default")
         if action == "run":
             p.add_argument("--live", action="store_true")
             p.add_argument("--music-start-volume", type=int, default=30,
@@ -704,9 +714,10 @@ def main():
     if args.action == "bluetooth":
         return bluetooth(cfg)
     if args.action == "demo":
-        return demo(cfg, state, args.model)
+        return demo(cfg, state, args.model, end_silence_ms=args.end_silence_ms)
     return assistant(cfg, state, model=args.model, live=getattr(args, "live", False), latency=args.action == "live-latency",
                      confirm_communications=getattr(args, "confirm_communications", False),
                      speak_no_speech=getattr(args, "speak_no_speech", False),
                      music_start_volume=getattr(args, "music_start_volume", 30),
-                     music_volume_limit=getattr(args, "music_limit", 50))
+                     music_volume_limit=getattr(args, "music_limit", 50),
+                     end_silence_ms=getattr(args, "end_silence_ms", None))

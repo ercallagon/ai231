@@ -1,0 +1,69 @@
+{
+  "scope": "Host CPU checks only; temporary test smoke fits, no experiment training, Pi or gate tuning",
+  "baseline_commit": "b6ab05bb580491a754be70c2f979ee48f5ca13e7",
+  "tests": {
+    "focused.xml": {
+      "tests": "37",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "0",
+      "time": "11.227",
+      "sha256": "5e5e83923c3e180f1dbfd9e21870cc4eb48b81a3775892ce58b46fe08269f4d0",
+      "skips": []
+    },
+    "full.xml": {
+      "tests": "241",
+      "errors": "0",
+      "failures": "32",
+      "skipped": "7",
+      "time": "23.698",
+      "sha256": "414e75be7bb9ad766f4435cb7da3e65528e74b4f0bec474fccc8a19d78a537a0",
+      "skips": [
+        "collection skipped",
+        "collection skipped",
+        "collection skipped",
+        "collection skipped",
+        "could not import 'torch': No module named 'torch'",
+        "could not import 'torch': No module named 'torch'",
+        "could not import 'torch': No module named 'torch'"
+      ]
+    },
+    "full_training_env.xml": {
+      "tests": "262",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "4",
+      "time": "78.637",
+      "sha256": "53ebf5cac3a10bc257412b4769afe5c6c95154da45b13d748953ec567729f68d",
+      "skips": [
+        "no exported ONNX at models/vcm/a0_scratch.onnx (run 03_export_onnx.py)",
+        "no exported ONNX (run 03_export_onnx.py)",
+        "raw wake dataset integration check; data not fetched",
+        "raw wake dataset integration check; data not fetched"
+      ]
+    }
+  },
+  "required_cpu_suite": "full_training_env.xml",
+  "runtime_only_environment_limitation": "Initial full-suite invocation lacked torch/sklearn; those 32 dependency failures were rerun in the existing training environment, not hidden or treated as passes",
+  "active_onnx_contracts": "PASS: Champion, Baseline, exp15 and retained optional wake profiles",
+  "protected_artifacts_unchanged": 146,
+  "artifact_groups": "models/configs/data/experiments/logs",
+  "inventory_pattern_scan": "PASS; no flagged paths or token patterns; not universal secret or licensing proof",
+  "pi_status": "Initial injection/acoustic and operator GPIO/audio evidence received; final controlled 800ms endpoint/A-B and call recovery pending",
+  "test_holdout_exposure": "previously exposed evaluation; no evaluation or tuning performed in this preparation",
+  "no_gpu_training": true,
+  "no_real_calls_or_sms": true,
+  "clean_staged_tree_verification": {
+    "source": "clean index export; no research work or data caches copied",
+    "test_counts": {
+      "tests": "262",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "4"
+    },
+    "model_contracts": "PASS",
+    "active_preflight_contracts": "PASS",
+    "protected_hashes_unchanged": 146,
+    "test_receipt_sha256": "57411bab0c449fbe73ff1397c7e65176d3f1e8ba02b17577163bfdcf1d285651"
+  }
+}

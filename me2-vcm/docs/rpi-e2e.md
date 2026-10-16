@@ -3,7 +3,8 @@
 > Historical research guide. Current frozen defaults, installation, rollback and
 > reproduction commands are in README.md, docs/PI5.md and docs/BENCHMARK.md.
 > Old artifact tags, package paths and readiness snapshots below are not current
-> release instructions. Physical Pi 5 verification of the six-second profile is pending.
+> release instructions. See FINAL_PI_VALIDATION.md for the current candidate;
+> initial Pi evidence exists, while final controlled endpoint/A-B remains pending.
 
 Current field-feedback fixes and selective installation commands:
 [Pi Runtime v6](rpi-runtime-v6.md). [Command cheatsheet](command-cheatsheet.md).

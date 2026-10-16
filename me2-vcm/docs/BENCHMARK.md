@@ -1,5 +1,9 @@
 # Class benchmark and supplementary injection
 
+The current end-to-end execution sequence is
+[FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md). Older example gaps below are
+historical; the final controlled comparison explicitly uses a two-second gap.
+
 ## Endpoint trial and clean reruns (2026-10-16)
 
 An explicit `--end-silence-ms 800` on the Pi benchmark launcher selects an

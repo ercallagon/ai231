@@ -1,5 +1,8 @@
 # run_043 Pi Runtime v5
 
+> Historical bundle guide, not the current Git/SSH installation workflow.
+> Use FINAL_PI_VALIDATION.md for the frozen submission candidate and safe update.
+
 Field-feedback updates are documented in [Pi Runtime v6](rpi-runtime-v6.md).
 Apply the selective update to an existing v5 installation; do not re-extract the
 full v5 tar over a locally adjusted chime or account state.

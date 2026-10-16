@@ -1,63 +1,60 @@
 # ME2: Voice Controlled Smart Device (Hey Swift)
 
-**New Raspberry Pi users:** follow [the SSH quickstart](docs/QUICKSTART_PI.md).
-It creates a separate checkout, environment and private setup without importing
-another installation's accounts. Public model names are **Champion (6s BC8-TCN-ASP)**
-and **Baseline (2s BC8)**, selected with `--model champion` and `--model baseline`.
-Historical profile/run identifiers remain in provenance; model hashes and gates are unchanged.
+An offline, scratch-trained wake/intent/slot recognizer for Raspberry Pi 5 (4 GB):
+**Hey Swift -> dynamic capture -> intent + slots -> safe rejection -> action -> listening**.
+Internet services are optional and separate from offline recognition.
 
-After the quickstart installation, the commands are:
+## Start Over SSH
+
+Follow [the SSH quickstart](docs/QUICKSTART_PI.md) for prerequisites, a lean
+`~/swift-clean/me2-vcm` checkout, private setup and opt-in asset downloads.
+After installation, from the Pi project directory:
 
 ```bash
 ./swift setup
 ./swift doctor
 ./swift run --model champion
-./swift evaluate --reset
-./swift live-latency --model champion
-./swift report
 ```
 
-Optional one-field updates, such as a private phone recipient, are documented in
-the [Pi quickstart](docs/QUICKSTART_PI.md#change-one-setting-later).
+`run` previews; `run --live` executes enabled actions. Calls/SMS use configured
+recipients automatically; add `--confirm-communications` for per-action consent.
+Do not say communication commands unless intended. Empty capture is quiet.
+Type `:quieter`, `:volume 10`, `:pause` or `:stop` for music control.
+See [commands](docs/command-cheatsheet.md), [audio](docs/AUDIO.md),
+[troubleshooting](docs/PI_RUNTIME_FEEDBACK.md), and [one-setting updates](docs/QUICKSTART_PI.md#change-one-setting-later).
 
-`run` previews actions; `run --live` and `demo` execute enabled integrations.
-Accepted call/SMS commands act automatically using your configured recipients.
-Use `run --live --confirm-communications` for optional per-action approval.
-Empty captures return quietly to listening; `--speak-no-speech` restores spoken
-feedback. During listening, type `:volume 10`, `:quieter`, `:pause` or `:stop`
-and Enter to control music from the same terminal.
-See [runtime troubleshooting](docs/PI_RUNTIME_FEEDBACK.md) for call recovery and
-Spotify readiness, and [audio settings](docs/AUDIO.md) for independent TTS,
-cue and music controls. The report consolidates frozen recognition, timing, rejection,
-cohort/family/coverage, resource and historical training/wake evidence; missing
-physical/acoustic results stay explicit. See [metric scopes](docs/METRICS.md)
-and [the ARM64 locks/uv decision](docs/DEPENDENCIES.md).
-
-This project runs Hey Swift -> command capture -> intent and slots -> rejection
--> preview/action -> idle listening. The repository default is the frozen
-six-second **BC8 + temporal CNN + attentive statistics pooling** model at
-confidence threshold **0.954**. Physical Pi 5 verification of this version is
-**pending**. Raspberry Pi 5 is the instructor-approved substitute for Pi 4.
-
-The selected classifier has 488,264 parameters and accepts complete recordings
-up to six seconds. It uses deterministic NumPy log-mel features and a padding
-mask. Six seconds is capacity: live capture uses onset, pre-roll and endpoint
-silence. All detector weights were trained from scratch. There is no claim of
-causal neural encoding, KV-cache, ASR decoding or continuous streaming inference.
-
-The complete Baseline (2s BC8; 327,750 parameters, two-second features, threshold
-0.875) remains selectable. Its historical run_043 lineage is retained in provenance.
-Exp15 is the separate preserved wakeword model.
+## Frozen Models
 
 | Component | Repository selection | Status |
 | --- | --- | --- |
 | Wake word | exp15 CNN + GRU, 204,738 parameters, threshold 0.30 | Preserved default; recent trials did not justify replacement |
-| Voice commands | Six-second BC8 + TCN + attentive statistics pooling, 488,264 parameters, threshold 0.954 | Frozen repository default; physical Pi 5 verification pending |
+| Voice commands | Champion: 6s BC8 + TCN + attentive statistics pooling, 488,264 parameters, threshold 0.954 | Frozen default; Pi injection received; final acoustic rerun pending |
 | Voice-command baseline | Baseline (2s BC8), 327,750 parameters, threshold 0.875 | Complete selectable fallback; historical run_043 lineage |
 
-Current deck evidence and outstanding requirements are in
-[SUBMISSION_CHECKLIST.md](reports/SUBMISSION_CHECKLIST.md). Owned code is MIT;
-dataset and model terms are separate and include research/education restrictions.
+BC8 names this BC-ResNet-8-style width configuration, **not eight layers**:
+the backbone has 12 broadcast-residual blocks. Champion adds three temporal
+blocks and masked attentive mean/std pooling. See [architecture](docs/architecture.md).
+Six seconds is capacity, not mandatory waiting. Historical IDs (`selected`,
+`run_043`, `exp15`) remain provenance, not extra public VCM choices. No causal
+encoder, KV-cache, ASR decoder or pretrained detector is claimed.
+
+## Final Pi Measurements
+
+Use [FINAL_PI_VALIDATION.md](docs/FINAL_PI_VALIDATION.md) for safe updates,
+preflight/provenance, injected evaluation, acoustic comparison and retrieval.
+The optional 800 ms endpoint trial preserves the 1200 ms Champion fallback.
+
+```bash
+./swift evaluate --reset
+./swift live-latency --model champion --end-silence-ms 800
+./swift report
+```
+
+Do not reset results during a benchmark. Injection bypasses wake/capture/actions.
+[METRICS.md](docs/METRICS.md) separates model-only, feature+ONNX, decision and
+acoustic timing. Pi injection and an initial acoustic run are available; final
+800 ms Pi retention/latency and controlled A/B remain pending.
+[Candidate audit](reports/FINAL_CANDIDATE.md) lists evidence and limitations.
 
 ## Install and verify
 
@@ -120,25 +117,18 @@ Code is MIT; data and model terms are separate. See data/DATASET_LICENSE.md,
 MODEL_TERMS.md and THIRD_PARTY_NOTICES.md. No raw recordings, private account
 state, songs or downloaded voices are published.
 
-## Pi testing and rollback
+## Rollback
 
-See docs/PI5.md for installation, microphone checks, selectable profiles,
-benchmarking and rollback. The working /home/ej/swift-e2e installation is not
-modified by these commands.
+Use the complete fallback without modifying the working installation:
 
 ```bash
-python scripts/run_assistant.py --profile champion --device 0 --offline
-python scripts/run_assistant.py --profile baseline --device 0 --offline
+./swift run --model baseline
+./swift run --model champion --end-silence-ms 1200
 ```
 
-Actions default to preview/mock; calls/SMS are not required for testing.
-Optional speech/music need separately obtained assets and private configuration.
-Legacy entry points remain available. Spotify account discovery now defaults to
-bundled private state; selecting standalone/auto reuse requires explicit local
-configuration. The new SSH workflow always isolates state and inherited secrets.
-The generated cue is owned by this project; preserve the working Pi's local cue.
-Energy endpointing has no pretrained weights. The pause-tolerant default waits
-1.2 seconds of silence, adding endpoint latency; its Pi behavior is unverified.
+Preview is the default. Calls/SMS are not required for benchmark testing.
+The SSH workflow isolates private setup and inherited secrets; preserve any
+locally adjusted cue. Omitting the endpoint flag retains each profile's policy.
 
 ## Optional scratch retraining
 
@@ -177,16 +167,13 @@ incorrect best_epoch 60 recorded in the preserved historical config.
 - scripts/reproduce.py: injected-file feature/model recognition and RTF on host/Pi.
 - docs/BENCHMARK.md: class laptop-speaker -> Pi-microphone benchmark.
 
-Host regression tests use mocked calls, SMS, capture and GPIO. Actual Pi p95,
-RTF, live wake/capture behavior and GPIO effects remain pending. Fresh independent
-speaker recordings should be collected only after freezing this release, with
-consent and no further tuning; they are not currently available.
+Host regression tests use mocked calls, SMS, capture and GPIO. Pi injection,
+initial acoustic timing and operator GPIO/audio checks have been received;
+the final controlled endpoint comparison and call recovery checks are pending.
+Fresh independent speaker confirmation is unavailable. See the
+[candidate audit](reports/FINAL_CANDIDATE.md) for counts and scope limitations.
 
-## Experimental Wakeword A/B
-
-exp15 remains the default. Two matched scratch streaming trials and an integer-sample cooldown fix are documented in [WAKE_FINAL_AB.md](docs/WAKE_FINAL_AB.md). Candidates are opt-in; physical Pi 5 verification remains pending.
-
-The final targeted exp15 fine-tune did not justify replacement. Its frozen
-comparison and limitations are in [WAKE_EXP15_STREAMFT.md](reports/WAKE_EXP15_STREAMFT.md).
-[WAKE_STREAMFT_AB.md](docs/WAKE_STREAMFT_AB.md) provides optional wake-only Pi
-diagnostics; no additional training is queued and the working deployment is unchanged.
+Opt-in wake trials did not justify replacing exp15; see
+[wake evidence](reports/WAKE_EXP15_STREAMFT.md). They are not extra public VCM
+model choices. The [documentation index](docs/README.md) separates active guides
+from preserved historical recipes. No further training is queued.

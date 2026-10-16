@@ -45,6 +45,13 @@ the encoder invariant to all padding context. No pretrained detector is loaded.
 Loss is weighted intent cross-entropy plus applicable slot cross-entropy,
 not CTC or attention sequence decoding.
 
+BC8 means this repository's BC-ResNet-8-style width configuration, not eight
+layers. The backbone has 12 broadcast-residual blocks: stage repeats 2/2/4/4
+at 64/96/128/160 channels, with 128-channel stem and 256-channel tail.
+Each block combines a frequency depthwise branch/SubSpectralNorm and a
+mean-frequency temporal branch broadcast back to the frequency grid. This is
+an implementation adaptation, not an assertion of an unchanged paper model.
+
 Wake detection uses 1-second windows, a 0.25-second hop and overlapping scoring
 windows. Preserved gates include probability 0.30, sustain 2, cooldown 2 seconds
 and an RMS floor. It is streaming window classification, not a causal

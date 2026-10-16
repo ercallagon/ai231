@@ -1,6 +1,6 @@
-# Raspberry Pi 5 deployment bundle
+# Raspberry Pi Deployment Directory
 
-For the run_043 v5 installation, use the selective code-only update described in
+For a legacy run_043 v5 installation, use the selective code-only update described in
 [`docs/rpi-runtime-v6.md`](../../docs/rpi-runtime-v6.md), not a fresh installation.
 The updater checks baseline hashes, backs up affected files and preserves models,
 calibration, GPIO pins, Spotify state, venv and the locally amplified chime.
@@ -12,15 +12,9 @@ checksum receipts stay under `work/`. Selective patches are assembled under
 Audits, regression logs, backups and installer rehearsals also remain under
 `work/`. The selective packager refuses existing release names.
 
-This directory is staged by `scripts/05_stage_rpi.py` (see `docs/raspberry-pi.md`).
-It contains the lean, CPU-only artifacts needed to run Hey Swift on the Pi:
-
-- `hey-swift.service` — systemd auto-start unit
-- `models/wakeword.onnx` — wake-word detector (~204k params)
-- `models/vcm_<tag>.onnx` — VCM intent+slot model
-- `<tag>.labels.json` — intent order, slot sets, OOS τ
-- `thresholds.json` — wake gates (threshold / sustain / cooldown / RMS)
-- `run_live.py` — thin launcher
-
-Nothing here is committed by default (models are gitignored); stage it fresh
-after each export so the bundle always matches the latest tag.
+The current submission uses the Git checkout and `./swift`, not a fabricated
+standalone payload in this directory. The committed models/configs live under
+`models/` and `configs/`. Start with
+[the SSH quickstart](../../docs/QUICKSTART_PI.md), then
+[final Pi validation](../../docs/FINAL_PI_VALIDATION.md).
+Do not mix legacy bundle instructions with the fresh `swift-clean` workflow.

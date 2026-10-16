@@ -59,7 +59,15 @@ models/vcm/*.pt
 
 # Explicitly curated submission artifacts; no blanket force-add.
 !experiments/
-!experiments/**
+experiments/*
+!experiments/README.md
+!experiments/RUN_INDEX.csv
+!experiments/selected/
+!experiments/selected/**
+!experiments/baseline/
+!experiments/baseline/**
+!experiments/wakeword/
+!experiments/wakeword/**
 !experiments/selected/checkpoint.pt
 !experiments/baseline/checkpoint.pt
 !models/vcm/selected.onnx
@@ -76,3 +84,8 @@ overrides/
 *.ses
 *.session
 *.session-journal
+.ssh/
+.aws/
+.codex/
+*.pem
+*.key

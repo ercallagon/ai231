@@ -33,7 +33,7 @@ marked; historical evidence is not relabeled as Pi measurements.
 | Wake clip accuracy/P/R/F1/confusion | exp15 corrected historical reference in model_reference.json | Exposed, synthetic positives; not Pi streaming |
 | Wake misses/false triggers per hour/raw-AEC/music robustness | Annotated acoustic trials plus negative exposure time | PENDING without evidence; cannot infer from clip FPR/unannotated wake counts |
 | Official class acoustic results/resources | BENCHMARK.md; report --official RESULT_DIRECTORY imports metrics.json | Laptop playback into Pi mic; injection is supplementary |
-| GPIO/display/timer, APIs, Spotify/fallback, TTS, communications | doctor plus guided demo observations | Availability probe is not physical success; each CALL/SMS needs terminal approval |
+| GPIO/display/timer, APIs, Spotify/fallback, TTS, communications | doctor plus guided demo observations | Availability probe is not physical success; enabled live CALL/SMS routes automatically unless --confirm-communications is requested; never test without operator consent |
 | Action initiation/completion, TTS onset, power/energy, live memory | Separate instrumented physical tests | PENDING; never equated with inference/decision latency |
 | Fresh unseen speakers/fresh OS | New consented recordings/separate OS installation | Not supplied by shared-OS dry run; prior exposure disclosed |
 
@@ -46,3 +46,8 @@ holdout is separate, not chosen based on the better result.
 For live comparisons fix placement, gain, noise, thermal conditions and protocol.
 Baseline/champion differ in capacity/frontend/training lineage: this is a system
 comparison rather than an isolated architecture ablation. Freeze scored settings.
+
+Received Pi injection and the initial acoustic run are summarized in
+[FINAL_CANDIDATE.md](../reports/FINAL_CANDIDATE.md); they are not final 800 ms
+endpoint results. Follow [FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md) for
+the prospective provenance record, full denominators and final comparison.

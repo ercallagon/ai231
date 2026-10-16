@@ -1,5 +1,9 @@
 # Raspberry Pi 5 deployment and testing
 
+For the final existing-install update and measurements use
+[FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md). Initial Pi evidence is in
+[FINAL_CANDIDATE.md](../reports/FINAL_CANDIDATE.md); final endpoint/A-B is pending.
+
 Start with [the current SSH quickstart](QUICKSTART_PI.md). It is the canonical
 new-user and separate-checkout dry-run procedure.
 

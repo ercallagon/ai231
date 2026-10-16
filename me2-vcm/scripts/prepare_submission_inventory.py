@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Create a draft publication inventory; no copies, Git staging or evaluation."""
+"""Audit the curated tracked submission with --tracked; legacy archive mode is separate."""
 import argparse
 import csv
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
 
@@ -26,13 +27,59 @@ def candidate(path):
         path.parts[0] == "scripts" and path.name.startswith("_"))
 
 
+def tracked_inventory(root, names=None):
+    root = Path(root)
+    if names is None:
+        names = subprocess.check_output(["git", "ls-files", "-z", "--", "."], cwd=root).decode().split("\0")
+    patterns = {
+        "github_token": re.compile(rb"gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}"),
+        "private_key": re.compile(rb"(?m)^-----BEGIN (?:RSA |OPENSSH |EC )?PRIVATE KEY-----\r?$"),
+        "aws_access_key": re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),
+    }
+    files, issues, groups = [], [], {}
+    for name in sorted(set(n for n in names if n)):
+        path = root / name
+        if not path.resolve().is_relative_to(root.resolve()):
+            issues.append(dict(path=name, kind="outside_project")); continue
+        if not path.is_file():
+            issues.append(dict(path=name, kind="tracked_file_missing")); continue
+        size = path.stat().st_size
+        files.append(dict(path=name, bytes=size, sha256=digest(path)))
+        group = groups.setdefault(Path(name).parts[0], dict(files=0, bytes=0))
+        group["files"] += 1; group["bytes"] += size
+        if any(p in {"work", "__pycache__", ".venv", ".ssh", ".aws", "raw", "backups"} for p in Path(name).parts):
+            issues.append(dict(path=name, kind="private_or_generated_directory"))
+        if Path(name).suffix.lower() in {".pyc", ".mp3", ".parquet", ".arrow", ".tar", ".gz", ".zip", ".env", ".pem", ".key"}:
+            issues.append(dict(path=name, kind="private_or_generated_file_type"))
+        if size > 50 * 1024 * 1024:
+            issues.append(dict(path=name, kind="large_file_requires_review"))
+        content = path.read_bytes()
+        for kind, pattern in patterns.items():
+            if pattern.search(content): issues.append(dict(path=name, kind=kind))
+    return dict(scope="curated_tracked_ME2_files_only", file_count=len(files),
+        total_bytes=sum(x["bytes"] for x in files), groups=groups, files=files,
+        issues=issues, automated_checks_pass=not issues,
+        limitations=["Pattern scan is not proof that every possible secret or unlicensed asset is absent",
+            "Git history and ignored local archives are preserved; only current tracked project paths are inventoried",
+            "Historical recipes and optional candidate evidence are not current deployment defaults"])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--tracked", action="store_true", help="Current curated submission inventory, not research-archive preparation")
     args = parser.parse_args()
     out = Path(args.output).resolve()
     if not out.is_relative_to(ROOT / "work"): parser.error("Intermediate inventory must stay under work/")
     out.mkdir(parents=True, exist_ok=False)
+    if args.tracked:
+        result = tracked_inventory(ROOT)
+        with (out / "inventory.json").open("x") as stream:
+            json.dump(result, stream, indent=2); stream.write("\n")
+        print(json.dumps({k:v for k,v in result.items() if k != "files"}, indent=2))
+        return
+    if not CHAMPION.exists() or not PROTOCOL.exists():
+        parser.error("Historical mode needs the original research archive; use --tracked for this curated checkout")
     candidates = [ROOT / name for name in ("README.md", "LICENSE", ".gitignore", "pyproject.toml",
         "requirements.txt", "requirements-pi.txt", "run.sh", "Makefile")]
     for directory in ("src", "tests", "scripts", "configs", "docs"):

@@ -12,7 +12,7 @@ Pi 4. This is an evidence checklist, not certification of completed Pi testing.
 | Public MIT repository; one-command reproduction | README, LICENSE, run.sh/run.ps1, scripts/reproduce.py; clean-environment VCM result parity in CHECKS.json | MIT covers owned code, not model/data terms. Full public wake retraining is blocked by raw-recording access/consent. |
 | Licensed/citable dataset; DOI/access terms | data/PROVENANCE.json, data/DATASET_LICENSE.md; DOI 10.57967/hf/10723; pinned HF revision | Source-specific restrictions and incomplete cloned-voice consent/licensing remain. Do not imply commercial or universally cleared rights. |
 | Training logs and final checkpoint committed | experiments/selected/checkpoint.pt; full logs/training/selected.jsonl, history/config/source/environment; baseline checkpoint/logs; original exp15 checkpoint/log/parity | Raw data is not published. Checkpoint recovery does not resolve wake-data access. |
-| Pi latency reproduced by posted script | scripts/benchmark_onnx_pi.py; docs/PI5.md; model hash/device/thread/version recording | Actual Pi p95/RTF still pending. Model-only timing is not end-of-speech-to-action latency. |
+| Pi latency reproduced by posted script | scripts/benchmark_onnx_pi.py; docs/PI5.md; initial Pi injection and acoustic upload summarized in FINAL_CANDIDATE.md | Final controlled 800 ms endpoint/A-B pending. Model-only timing is not end-of-speech-to-action latency. |
 | Held-out test; unseen speakers | Frozen manifests, explicit exposure history and reports/evaluation/ | Existing test/holdout were previously examined. Declared groups are not verified humans; see overlap caveats below. Wake positives are TTS. |
 | Comparable-size baseline compared | run_043 327,750 versus selected 488,264 parameters; common frozen evaluation, paired/family errors and selectable profiles | About 1.49x size ratio; capacity/preprocessing/training lineage differ. A system baseline, not a clean architectural ablation. Pi efficiency/acoustic comparison pending. |
 
@@ -105,8 +105,10 @@ experiments are reported separately and did not justify replacing exp15.
 - docs/BENCHMARK.md documents the pinned official laptop-speaker -> Pi-microphone
   benchmark. Injection is supplementary. One-time SSH, levels, device selection
   and wake-take setup are still required; not a zero-manual-setup claim.
-- Physical Pi 5 measurements and live failure checks remain pending. Do not
-  fill slide Pi fields with host numbers or model-only latency as action latency.
+- Initial Pi measurements and operator GPIO/audio checks have been received;
+  see FINAL_CANDIDATE.md for scope and provenance gaps. Final endpoint/A-B and
+  communications recovery checks remain pending. Do not fill slide Pi fields
+  with host numbers or model-only latency as action latency.
 
 ## Slide 2 links and remaining items
 
@@ -116,7 +118,7 @@ Weights are downloadable in models/ and experiments/selected/checkpoint.pt;
 MODEL_TERMS.md governs them separately from owned-code MIT. A tagged GitHub
 release URL is not established by this checklist; confirm if literally required.
 
-Remaining: actual Pi metrics/acoustics, author/team/date, unavailable node ID,
+Remaining: final controlled Pi metrics/acoustics, author/team/date, unavailable node ID,
 qualified human-speaker counts, dataset/voice rights gaps and fresh real-speaker
 confirmation. No further retraining is required merely to begin Pi preview tests.
 Preserve the existing working installation, accounts, wiring and rollback.
