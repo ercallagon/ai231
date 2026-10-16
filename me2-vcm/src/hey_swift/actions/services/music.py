@@ -33,11 +33,14 @@ class MusicStartUncertain(MusicUnavailable):
 class MpvBackend:
     """Control an independently running mpv; state survives CLI invocations."""
 
-    def __init__(self, tracks, endpoint, *, auto_start=False, max_volume_percent=None):
+    def __init__(self, tracks, endpoint, *, auto_start=False, max_volume_percent=None,
+                 initial_volume_percent=None):
         self.tracks = [Path(p).resolve() for p in tracks]
         self.endpoint = endpoint
         self.auto_start = auto_start
         self.max_volume_percent = max_volume_percent
+        self.initial_volume_percent = initial_volume_percent
+        self._session_volume_initialized = False
 
     def is_running(self):
         try:
@@ -59,7 +62,8 @@ class MpvBackend:
         try:
             with Path("logs/mpv.log").open("ab") as log:
                 process = subprocess.Popen(["mpv", "--no-config", "--no-video", "--idle=yes",
-                    "--ao=pulse", "--volume=60", "--input-ipc-server=" + self.endpoint],
+                    "--ao=pulse", "--volume=" + str(self.initial_volume_percent if self.initial_volume_percent is not None else 60),
+                    "--input-ipc-server=" + self.endpoint],
                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
             for _ in range(30):
                 if process.poll() is not None:
@@ -82,9 +86,11 @@ class MpvBackend:
             self.command("set_property", "volume", min(current, self.max_volume_percent), timeout=1)
 
     def reset_session_volume(self):
-        if self.max_volume_percent is None or not self.is_running():
+        volume = self.initial_volume_percent if self.initial_volume_percent is not None else self.max_volume_percent
+        if volume is None or not self.is_running():
             return False
-        self.command("set_property", "volume", self.max_volume_percent, timeout=1)
+        self.command("set_property", "volume", volume, timeout=1)
+        self._session_volume_initialized = True
         return True
 
     def command(self, *command, timeout=5):
@@ -115,6 +121,9 @@ class MpvBackend:
         if intent == "PLAY_MUSIC":
             if self.auto_start:
                 self.ensure_started()
+            if self.initial_volume_percent is not None and not self._session_volume_initialized:
+                self.command("set_property", "volume", self.initial_volume_percent)
+                self._session_volume_initialized = True
             if self.max_volume_percent is not None:
                 self.limit_volume()
             if self.command("get_property", "idle-active"):
@@ -215,7 +224,7 @@ class MusicService:
         message = ("Music is at the listening volume limit."
                    if data.get("volume_limited") else RESPONSES[intent])
         if data.get("volume_limited") and "listening_limit_percent" in data:
-            message = f"Music is limited to {data['listening_limit_percent']} percent so I can hear you."
+            message = f"Music is at the {data['listening_limit_percent']} percent limit."
         if intent == "PLAY_MUSIC" and data.get("fallback"):
             message = "Spotify is unavailable. Playing your offline music."
         return ActionResult(intent, "ok", message, data)
@@ -227,13 +236,15 @@ class SoloistBackend:
                  data_dir="work/soloist-runtime", runner=subprocess.run,
                  auto_start=False, key_file=None, launcher=subprocess.Popen,
                  max_volume_percent=None, operation_timeout=None, startup_timeout=8.,
-                 control_timeout=6., readiness_attempts=20):
+                 control_timeout=6., readiness_attempts=20, initial_volume_percent=None):
         if uri and not re.fullmatch(r"spotify:(?:track|playlist|album):[A-Za-z0-9]+", uri):
             raise ValueError("Use a Spotify track, playlist, or album URI.")
         self.uri, self.binary, self.data_dir, self.runner = uri, binary, data_dir, runner
         self.stop_marker = Path(data_dir) / "swift-music-stopped"
         self.auto_start = auto_start
         self.max_volume_percent = max_volume_percent
+        self.initial_volume_percent = initial_volume_percent
+        self._session_volume_initialized = False
         self.key_file = Path(key_file or Path(data_dir) / "api-key")
         self.launcher = launcher
         self.operation_timeout = operation_timeout
@@ -262,9 +273,11 @@ class SoloistBackend:
             self.ctl("volume", str(min(int(current), self.max_volume_percent)), timeout=1)
 
     def reset_session_volume(self):
-        if self.max_volume_percent is None or not self.is_running():
+        volume = self.initial_volume_percent if self.initial_volume_percent is not None else self.max_volume_percent
+        if volume is None or not self.is_running():
             return False
-        self.ctl("volume", str(self.max_volume_percent), timeout=1)
+        self.ctl("volume", str(volume), timeout=1)
+        self._session_volume_initialized = True
         return True
 
     def ensure_started(self):
@@ -286,7 +299,8 @@ class SoloistBackend:
             with os.fdopen(descriptor, "ab") as log:
                 process = self.launcher([str(Path(self.binary).resolve()), "-n", "Swift Pi", "-k", key,
                     "-D", str(runtime.resolve()), "-C", str((runtime / "cache").resolve()),
-                    "-z", "100", "-i", os.environ.get("VCM_SOLOIST_INITIAL_VOLUME", "60"), "-w", os.environ.get("VCM_SOLOIST_WS", "127.0.0.1:3679")],
+                    "-z", "100", "-i", str(self.initial_volume_percent if self.initial_volume_percent is not None else os.environ.get("VCM_SOLOIST_INITIAL_VOLUME", "60")),
+                    "-w", os.environ.get("VCM_SOLOIST_WS", "127.0.0.1:3679")],
                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
             deadline = time.monotonic() + self.startup_timeout
             if self._operation_deadline is not None:
@@ -373,6 +387,10 @@ class SoloistBackend:
                 fresh = state.get("status") != "paused" or self.stop_marker.exists()
                 if self.uri and fresh:
                     args.append(self.uri)
+                if self.initial_volume_percent is not None and not self._session_volume_initialized:
+                    self.phase = "initial volume"
+                    self.ctl("volume", str(self.initial_volume_percent))
+                    self._session_volume_initialized = True
                 if self.max_volume_percent is not None:
                     self.phase = "listening volume"
                     volume = self.ctl("now", as_json=True).get("volume", 100)

@@ -80,9 +80,16 @@ To compare the earlier revision without overwriting private state, stop the
 assistant and use a detached checkout of that commit, then git switch main
 to return. An older source revision needs its own matching ARTIFACTS.json.
 
-The combined standalone Pi probe is operator-verified. Full assistant cue/TTS
-audibility, music transitions, arbitrary tablet controls, and repeat-run
-behavior after this source patch remain pending Pi verification.
+At initial publication, only the standalone probe was operator-verified.
+Subsequent operator reports confirm audible assistant TTS, music stop,
+consistent TTS after restarting, and unchanged perceived TTS loudness when
+tablet Swift Pi Spotify volume is lowered to zero. The operator also confirmed
+that VCM_SPEECH_CHANNEL_VOLUME=0.1 lowers TTS. These are qualitative observations,
+not measured SPL; no independent Pi HEAD receipt accompanied the reports.
+The final chime level was not explicitly reconfirmed in the latest report.
+Arbitrary global/master controls, call transitions and acoustic benchmark
+results remain unverified. Later music settings now separate a 30% start from
+a 50% ceiling; see docs/AUDIO.md. The earlier 25% value above describes 1100e76.
 
 References:
 https://pipewire.pages.freedesktop.org/wireplumber/daemon/configuration/stream.html

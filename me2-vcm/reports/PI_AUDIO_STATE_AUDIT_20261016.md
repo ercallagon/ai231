@@ -1,5 +1,10 @@
 # Pi Audio and Repeat-Run State Audit
 
+Historical audit for the e2db2a8 update. Later stream-state fixes, operator
+validation and current music defaults are in docs/AUDIO.md and
+reports/PI_STREAM_STATE_FIX_20261016.md. Earlier 25% baseline values below are
+retained as historical evidence, not current defaults.
+
 ## Evidence Boundary
 
 The Pi was not reachable from the sandbox. No fresh Pi sink, stream, mute,

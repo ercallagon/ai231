@@ -192,7 +192,7 @@ The loop does not wait for the full `--command-seconds` unless it has to. The
 runtime closes the wake stream before command capture, reuses the startup-probed
 mic rate, mutes the owned music player during command capture, calibrates
 ambient audio before the chime, and prints the prompt only when the command
-stream is ready. While music is playing, the runtime caps its volume at 25% by
+stream is ready. Music now starts at 30% with a separate 50% ceiling by
 default to reduce speaker bleed into the microphone. This is a demo workaround,
 not acoustic echo cancellation: place the speaker away from and off-axis to the
 mic, and lower the cap if wake recall degrades. After the wake chime it uses

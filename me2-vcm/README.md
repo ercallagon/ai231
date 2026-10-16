@@ -27,7 +27,8 @@ Empty captures return quietly to listening; `--speak-no-speech` restores spoken
 feedback. During listening, type `:volume 10`, `:quieter`, `:pause` or `:stop`
 and Enter to control music from the same terminal.
 See [runtime troubleshooting](docs/PI_RUNTIME_FEEDBACK.md) for call recovery and
-Spotify readiness. The report consolidates frozen recognition, timing, rejection,
+Spotify readiness, and [audio settings](docs/AUDIO.md) for independent TTS,
+cue and music controls. The report consolidates frozen recognition, timing, rejection,
 cohort/family/coverage, resource and historical training/wake evidence; missing
 physical/acoustic results stay explicit. See [metric scopes](docs/METRICS.md)
 and [the ARM64 locks/uv decision](docs/DEPENDENCIES.md).

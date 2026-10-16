@@ -149,7 +149,7 @@ class IntegrationAutoMusic(AutoMusicBackend):
         return data
 
 
-def _common_speech_phrases(music_volume_limit=25):
+def _common_speech_phrases(music_volume_limit=50):
     from itertools import permutations
     from hey_swift.actions.services.device_actions import VALUES
     from hey_swift.actions.services.music import RESPONSES
@@ -161,7 +161,7 @@ def _common_speech_phrases(music_volume_limit=25):
         "This action is not configured.",
         "The action could not be completed. Please check its setup.",
         "Music is at the listening volume limit.",
-        f"Music is limited to {music_volume_limit} percent so I can hear you.",
+        f"Music is at the {music_volume_limit} percent limit.",
         "Spotify is unavailable. Playing your offline music.",
         "Live weather is unavailable. Please check the internet.",
         "Please say a shorter command.", "Please repeat your command.",
@@ -196,7 +196,10 @@ def _common_speech_phrases(music_volume_limit=25):
 
 
 def build_router(*, live=False, hardware="mock", speak=False,
-                 music_volume_limit=25, offline=False, speak_no_speech=False):
+                 music_volume_limit=50, music_start_volume=None, offline=False, speak_no_speech=False):
+    music_start_volume = min(30, music_volume_limit) if music_start_volume is None else music_start_volume
+    if not 0 <= music_start_volume <= music_volume_limit <= 100:
+        raise ValueError("Music start volume must be between zero and the music limit (maximum 100).")
     offline_mode = bool(offline)
     if Path.cwd().resolve() != ROOT:
         raise RuntimeError("Call prepare_workspace() before building the integration runtime.")
@@ -222,17 +225,19 @@ def build_router(*, live=False, hardware="mock", speak=False,
             soloist = IntegrationSoloist(os.environ.get("VCM_SPOTIFY_URI", DEFAULT_SPOTIFY_URI),
                 binary=str(selected["binary"]), data_dir=str(selected["data_dir"]),
                 auto_start=True, key_file=selected["key_file"], profile=selected["profile"],
-                max_volume_percent=music_volume_limit, operation_timeout=25.,
+                max_volume_percent=music_volume_limit, initial_volume_percent=music_start_volume, operation_timeout=25.,
                 startup_timeout=15., control_timeout=3., readiness_attempts=20)
             local = MpvBackend(sorted(Path(os.environ.get("VCM_MUSIC_DIR", str(ROOT / "assets/music"))).glob("*.mp3")),
-                               str(ROOT / "tmp/mpv.sock"), auto_start=True, max_volume_percent=music_volume_limit)
+                               str(ROOT / "tmp/mpv.sock"), auto_start=True, max_volume_percent=music_volume_limit,
+                               initial_volume_percent=music_start_volume)
             music = ManagedMusic(IntegrationAutoMusic(soloist, local,
                                  state_path=ROOT / "state/music-routing.json",
                                  reachable=(lambda: False) if offline_mode or os.environ.get("VCM_SPOTIFY_ENABLED") == "0" else (lambda: True)))
             try:
                 reset = music.backend.reset_active_session_volume()
                 route = music.backend.active or "auto"
-                volume_note = f"{music_volume_limit}% baseline restored" if reset else "baseline applies on first playback"
+                volume_note = (f"{music_start_volume}% start restored; limit {music_volume_limit}%" if reset
+                               else f"{music_start_volume}% on first playback; limit {music_volume_limit}%")
                 print(f"Music_startup: route={route}; {volume_note}.", flush=True)
             except Exception as exc:
                 print(f"Music_startup: route={music.backend.active or 'auto'}; volume baseline unavailable ({type(exc).__name__}).",

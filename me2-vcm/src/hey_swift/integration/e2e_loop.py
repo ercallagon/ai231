@@ -539,12 +539,13 @@ def run(args) -> int:
         "wake_threshold": detector.gate.threshold,
         "vcm_onnx": vcm_onnx,
         "live_actions": bool(args.live),
-        "music_listen_volume_percent": getattr(args, "music_listen_volume_percent", 25),
+        "music_listen_volume_percent": getattr(args, "music_listen_volume_percent", 50),
         "cue_gain_db": getattr(args, "cue_gain_db", 0.),
     })
 
     with build_router(live=args.live, hardware=args.hardware, speak=args.speak,
-                      music_volume_limit=getattr(args, "music_listen_volume_percent", 25),
+                      music_volume_limit=getattr(args, "music_listen_volume_percent", 50),
+                      music_start_volume=getattr(args, "music_start_volume_percent", None),
                       offline=getattr(args, "offline", False),
                       speak_no_speech=getattr(args, "speak_no_speech", False)) as router:
         from hey_swift.integration.terminal import TerminalMusicControls, HELP as TERMINAL_HELP
@@ -587,7 +588,7 @@ def run(args) -> int:
                 _emit({"status": "warming_speech", "message": "Loading local voice before listening."})
                 router.speech.prepare()
                 router.speech.prepare_phrases(_common_speech_phrases(
-                    getattr(args, "music_listen_volume_percent", 25)))
+                    getattr(args, "music_listen_volume_percent", 50)))
                 _emit({"status": "speech_ready"})
             except Exception:
                 _emit({"status": "speech_unavailable", "message": "Speech initialization failed; actions remain available."})
@@ -772,8 +773,10 @@ def main(argv=None) -> int:
     parser.add_argument("--playback-tail-seconds", type=float, default=0.08)
     parser.add_argument("--music-duck-percent", type=float, default=0,
                         help="Percent of previous music volume during capture; default 0 mutes it.")
-    parser.add_argument("--music-listen-volume-percent", type=int, default=25,
-                        help="Maximum music volume while wake detection is listening (default: 25%%).")
+    parser.add_argument("--music-listen-volume-percent", type=int, default=50,
+                        help="Maximum music player volume (default: 50%%; reduce if wake detection suffers).")
+    parser.add_argument("--music-start-volume-percent", type=int, default=None,
+                        help="Initial music volume (default: 30%%, or the lower configured limit).")
     parser.add_argument("--no-ack", action="store_true")
     parser.add_argument("--offline", action="store_true", help="Skip internet weather and Spotify; use bundled local music.")
     parser.add_argument("--endpoint-mode", choices=["energy", "webrtc"], default="energy",
@@ -807,6 +810,8 @@ def main(argv=None) -> int:
         parser.error("--music-duck-percent must be between 0 and 100")
     if not 0 <= args.music_listen_volume_percent <= 100:
         parser.error("--music-listen-volume-percent must be between 0 and 100")
+    if args.music_start_volume_percent is not None and not 0 <= args.music_start_volume_percent <= args.music_listen_volume_percent:
+        parser.error("--music-start-volume-percent must be between zero and the music limit")
     for name in ("command_seconds", "min_command_seconds", "speech_start_timeout",
                  "end_silence_ms", "pre_roll_ms", "vad_frame_ms"):
         value = getattr(args, name)

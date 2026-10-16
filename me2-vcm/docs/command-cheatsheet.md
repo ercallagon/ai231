@@ -32,7 +32,7 @@ restores spoken timeout feedback. Frozen rejection behavior is unchanged.
 | PAUSE | Pause | Selected music player |
 | STOP | Stop | Music, not a universal timer/call cancel command |
 | NEXT | Next song | Selected music player |
-| VOLUME_UP | Volume up | Music only; capped at 25% for wake audibility |
+| VOLUME_UP | Volume up | Music only; default 30 -> 40 -> 50%, then reports limit |
 | VOLUME_DOWN | Volume down | Music only; no system/call volume change |
 | CALL | Make a call | REAL configured recipient; wake paused during owned call |
 | MESSAGE | Send a message | REAL configured message; unknown outcomes must not be retried blindly |
@@ -41,7 +41,7 @@ Terminal music controls (type into the running SSH terminal, then Enter):
 
 | Control | Effect |
 | --- | --- |
-| `:volume 10` | Set selected music player to 10%; cap remains 25% |
+| `:volume 10` | Set selected music player to 10%; default ceiling is 50% |
 | `:quieter` | Decrease music by ten percentage points |
 | `:pause` | Pause selected music player |
 | `:stop` | Stop selected music player |
@@ -52,7 +52,7 @@ between capture operations, have no spoken reply, and leave global/call volume
 alone. This is playback control; no AEC is claimed.
 
 Each new assistant run restores the remembered music player to the configured
-25% baseline while preserving which player is active. Terminal volume changes
+30% start level while preserving which player is active. Terminal volume changes
 last for the current run. Piper TTS has independent per-stream volume (default
 0.5); one-run volume and optional sink overrides are `VCM_SPEECH_CHANNEL_VOLUME=0.65`
 and `VCM_SPEECH_SINK=EXACT_NODE_NAME`. Chime, music, call and global sink levels
@@ -62,7 +62,17 @@ Speech and cue playback use distinct Notification streams and disable restored
 stream volume/mute/target state. Music commands and terminal `:volume` controls
 address the selected player only. A tablet that changes the shared speaker's
 master volume can still change every sound; app isolation cannot override the
-physical output gain. Pi audibility after this update must be checked directly.
+physical output gain. The Pi operator confirmed independent TTS at tablet music
+volume zero, repeat-run consistency, and lower TTS using a 0.1 override.
+
+```bash
+VCM_SPEECH_CHANNEL_VOLUME=0.1 ./swift run --model champion --live
+./swift run --model champion --live --music-start-volume 30 --music-limit 50
+```
+
+These settings apply to one invocation. The TTS default remains 0.5. Both music
+values are percentages, with start <= limit <= 100. Higher music may mask the
+wake word; lower it or use terminal controls if needed. See [audio settings](AUDIO.md).
 
 Advanced flags below belong to `.venv/bin/python scripts/run_assistant.py`,
 not the public `./swift run` wrapper:

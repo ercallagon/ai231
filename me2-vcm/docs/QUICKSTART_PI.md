@@ -154,7 +154,8 @@ data directory and dynamic loopback control port avoid importing/colliding
 with the working deployment. A user-owned process may inspect Soloist's key
 argument; it is never echoed, logged by the wrapper, or entered in shell history.
 Normal runtime reuses only this explicitly configured installation's login.
-Its initial playback level and listening cap are both 25 percent; this is
+Its default initial playback level is 30 percent with a 50 percent music limit;
+two voice volume-up commands increase it to 40 then 50 percent. This is
 half-duplex volume control, not echo cancellation or a global call-volume fix.
 Soloist builds expire; an expired executable needs a fresh official download.
 
@@ -249,11 +250,11 @@ Enter; no wake phrase is required:
 ```
 
 Controls run between capture operations and affect only the selected music
-player. `:volume` accepts whole percentages up to the existing 25% listening
+player. `:volume` accepts whole percentages up to the configured music limit
 cap; `:quieter` decreases by ten points. The selected backend is retained so
 pause/stop/volume commands continue to target the player that owns playback.
 At each new assistant launch, that player's volume is restored to the configured
-25% baseline; terminal changes apply for the current run. This affects only
+30% start level by default; terminal changes apply for the current run. This affects only
 the selected music player, not the speaker sink or call volume.
 This provides a demo recovery path when playback masks Hey Swift; acoustic
 echo cancellation is not implemented.
@@ -281,6 +282,23 @@ its separate peak-limited cue gain still applies. No speaker node is hard-coded.
 These settings isolate application streams, not the physical amplifier: tablet
 changes to Spotify volume affect music, but changes to the shared speaker's
 master/hardware volume still affect speech and cues too.
+
+The Pi operator confirmed TTS remains audible after restarts and when the
+tablet's Swift Pi Spotify volume is zero. `VCM_SPEECH_CHANNEL_VOLUME=0.1` was
+also confirmed to lower TTS independently. These are operator observations,
+not measured sound-pressure levels. See [audio settings](AUDIO.md) for defaults,
+one-run overrides, reset instructions and troubleshooting.
+
+To use quieter music settings for one run while retaining your saved setup:
+
+```bash
+./swift run --model champion --live --music-start-volume 20 --music-limit 40
+```
+
+The defaults are start 30 / limit 50. Higher music may mask Hey Swift; this
+ceiling is configurable, not a verified wake-detection guarantee. Pause/resume
+preserves a lower user-selected volume within the run. A new run restores its
+configured start level. None of these music options changes TTS or cue gain.
 
 With Spotify enabled, live startup warms its saved-login daemon for up to
 15 seconds before listening, without requesting activation or playback.

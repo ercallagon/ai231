@@ -362,7 +362,7 @@ def isolated_env(cfg, state):
                VCM_SPOTIFY_ENABLED="1" if cfg.get("spotify") else "0",
                VCM_SOLOIST_DATA_DIR=str(state / "state/soloist"),
                VCM_SOLOIST_KEY_FILE=str(state / "state/soloist/api-key"), VCM_SOLOIST_WS="127.0.0.1:0",
-               VCM_SOLOIST_INITIAL_VOLUME="25",
+               VCM_SOLOIST_INITIAL_VOLUME="30",
                VCM_SOLOIST_BIN=cfg.get("soloist_binary", str(state / "not-installed")),
                VCM_WEATHER_ENABLED="1" if cfg.get("weather") else "0")
     for key, variable in (("calling_number", "VCM_CALL_NUMBER"), ("messaging_number", "VCM_MESSAGE_NUMBER"),
@@ -389,7 +389,10 @@ def applied_env(env):
 
 
 def assistant(cfg, state, model="champion", live=False, latency=False,
-              confirm_communications=False, speak_no_speech=False):
+              confirm_communications=False, speak_no_speech=False,
+              music_start_volume=30, music_volume_limit=50):
+    if not 0 <= music_start_volume <= music_volume_limit <= 100:
+        raise SetupError("Choose 0 <= music start volume <= music limit <= 100")
     profile = resolve_profile(model)
     device = microphone(cfg)
     env = isolated_env(cfg, state)
@@ -407,7 +410,9 @@ def assistant(cfg, state, model="champion", live=False, latency=False,
             str(logs), "--output", str(logs / "latency.json")], cwd=ROOT)
         return 0
     command = [sys.executable, str(ROOT / "scripts/run_assistant.py"), "--profile", model,
-               "--device", device, "--hardware", cfg["hardware"] if live else "mock"]
+               "--device", device, "--hardware", cfg["hardware"] if live else "mock",
+               "--music-start-volume-percent", str(music_start_volume),
+               "--music-listen-volume-percent", str(music_volume_limit)]
     if not cfg.get("spotify") and not cfg.get("weather"):
         command.append("--offline")
     if live:
@@ -427,7 +432,7 @@ def spotify(cfg, state):
     with applied_env(isolated_env(cfg, state)):
         from .actions.services.music import SoloistBackend
         backend = SoloistBackend(binary=cfg["soloist_binary"], data_dir=str(state / "state/soloist"),
-            auto_start=True, startup_timeout=15, control_timeout=3, max_volume_percent=25,
+            auto_start=True, startup_timeout=15, control_timeout=3, max_volume_percent=50, initial_volume_percent=30,
             operation_timeout=25, readiness_attempts=20)
         try:
             backend.prepare()
@@ -637,6 +642,10 @@ def main():
                        help="Champion or baseline; historical aliases remain compatible")
         if action == "run":
             p.add_argument("--live", action="store_true")
+            p.add_argument("--music-start-volume", type=int, default=30,
+                           help="Music player start percentage (default: 30)")
+            p.add_argument("--music-limit", type=int, default=50,
+                           help="Music player ceiling (default: 50); lower if wake detection suffers")
             p.add_argument("--confirm-communications", action="store_true",
                            help="Optionally require typed approval for each real call/SMS")
             p.add_argument("--speak-no-speech", action="store_true",
@@ -698,4 +707,6 @@ def main():
         return demo(cfg, state, args.model)
     return assistant(cfg, state, model=args.model, live=getattr(args, "live", False), latency=args.action == "live-latency",
                      confirm_communications=getattr(args, "confirm_communications", False),
-                     speak_no_speech=getattr(args, "speak_no_speech", False))
+                     speak_no_speech=getattr(args, "speak_no_speech", False),
+                     music_start_volume=getattr(args, "music_start_volume", 30),
+                     music_volume_limit=getattr(args, "music_limit", 50))

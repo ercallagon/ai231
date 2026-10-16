@@ -100,7 +100,8 @@ No speech/music/call/global volume is changed. Peak limiting cannot create
 unlimited loudness; compare cue RMS and playback routing rather than increasing
 global gain blindly. [PipeWire pw-cat reference](https://docs.pipewire.org/page_man_pw-cat_1.html).
 
-Music's listening cap remains 25%. The response now explains the actual limit
+Historical v6 used a 25% listening cap. The current public runtime starts at
+30% with a separate 50% ceiling; see [audio settings](AUDIO.md). In v6 the response explains the actual limit
 and its purpose. Owned music is muted during capture/TTS and restored before
 volume commands so effects are not overwritten. Loud playback can still mask
 Hey Swift before ducking begins. This is half-duplex/volume control, NOT acoustic

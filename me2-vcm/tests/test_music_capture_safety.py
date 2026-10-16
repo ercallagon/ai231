@@ -63,6 +63,77 @@ def test_music_session_volume_reset_uses_player_baseline_only():
     online.ctl.assert_called_once_with("volume", "25", timeout=1)
 
 
+@pytest.mark.parametrize("kind", ["offline", "spotify"])
+def test_music_start_has_two_increases_and_preserves_lower_resume_volume(kind, tmp_path):
+    from hey_swift.actions.services.music import MpvBackend, SoloistBackend, MusicService
+
+    state = {"volume": 90, "status": "paused"}
+    calls = []
+    if kind == "offline":
+        player = MpvBackend([], "/unused", initial_volume_percent=30, max_volume_percent=50)
+        def command(*args, **kwargs):
+            calls.append(args)
+            if args == ("get_property", "volume"):
+                return state["volume"]
+            if args == ("get_property", "idle-active"):
+                return False
+            if args[:2] == ("set_property", "volume"):
+                state["volume"] = args[2]
+            elif args[:2] == ("set_property", "pause"):
+                state["status"] = "paused" if args[2] else "playing"
+            else:
+                raise AssertionError(args)
+        player.command = command
+    else:
+        player = SoloistBackend(data_dir=tmp_path, initial_volume_percent=30, max_volume_percent=50)
+        def ctl(*args, **kwargs):
+            calls.append(args)
+            if args == ("now",):
+                return {**state, "is_active": True}
+            if args[0] == "volume":
+                state["volume"] = int(args[1])
+            elif args[0] in ("play", "pause"):
+                state["status"] = "playing" if args[0] == "play" else "paused"
+            else:
+                raise AssertionError(args)
+        player.ctl = ctl
+
+    service = MusicService(player)
+    assert service.execute("PLAY_MUSIC").status == "ok"
+    assert state["volume"] == 30
+    for expected in (40, 50):
+        result = service.execute("VOLUME_UP")
+        assert state["volume"] == expected
+        assert result.data["volume_limited"] is False
+    result = service.execute("VOLUME_UP")
+    assert state["volume"] == 50
+    assert result.data["volume_limited"] is True
+    assert result.message == "Music is at the 50 percent limit."
+
+    state["volume"] = 8
+    service.execute("PAUSE")
+    service.execute("PLAY_MUSIC")
+    assert state["volume"] == 8
+    player.is_running = Mock(return_value=True)
+    assert player.reset_session_volume() is True
+    assert state["volume"] == 30
+
+
+def test_public_launcher_forwards_independent_music_start_and_limit(monkeypatch, tmp_path):
+    from hey_swift import deployment
+
+    monkeypatch.setattr(deployment, "microphone", lambda cfg: "0")
+    call = Mock(return_value=0)
+    monkeypatch.setattr(deployment.subprocess, "call", call)
+    cfg = {"enabled": [], "hardware": "mock"}
+    assert deployment.assistant(cfg, tmp_path, music_start_volume=20, music_volume_limit=40) == 0
+    command = call.call_args.args[0]
+    assert command[command.index("--music-start-volume-percent") + 1] == "20"
+    assert command[command.index("--music-listen-volume-percent") + 1] == "40"
+    with pytest.raises(deployment.SetupError):
+        deployment.assistant(cfg, tmp_path, music_start_volume=50, music_volume_limit=40)
+
+
 def test_failed_quieting_returns_to_listening_without_inference_or_action(monkeypatch):
     stub = broken_router()
     devices = SimpleNamespace(execute=Mock())
