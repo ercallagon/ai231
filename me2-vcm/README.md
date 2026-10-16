@@ -20,8 +20,14 @@ After the quickstart installation, the commands are:
 Optional one-field updates, such as a private phone recipient, are documented in
 the [Pi quickstart](docs/QUICKSTART_PI.md#change-one-setting-later).
 
-`run` previews actions; `demo` guides configured real effects with per-call/SMS
-confirmation. The report consolidates frozen recognition, timing, rejection,
+`run` previews actions; `run --live` and `demo` execute enabled integrations.
+Accepted call/SMS commands act automatically using your configured recipients.
+Use `run --live --confirm-communications` for optional per-action approval.
+Empty captures return quietly to listening; `--speak-no-speech` restores spoken
+feedback. During listening, type `:volume 10`, `:quieter`, `:pause` or `:stop`
+and Enter to control music from the same terminal.
+See [runtime troubleshooting](docs/PI_RUNTIME_FEEDBACK.md) for call recovery and
+Spotify readiness. The report consolidates frozen recognition, timing, rejection,
 cohort/family/coverage, resource and historical training/wake evidence; missing
 physical/acoustic results stay explicit. See [metric scopes](docs/METRICS.md)
 and [the ARM64 locks/uv decision](docs/DEPENDENCIES.md).

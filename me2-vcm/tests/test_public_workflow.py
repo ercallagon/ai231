@@ -92,14 +92,14 @@ def test_gpio_self_test_records_operator_confirmed_physical_result(monkeypatch, 
 
 
 def test_wizard_hides_private_numbers(monkeypatch, tmp_path, capsys):
-    answers = iter(["0", "n", "n", "n", "n", "n", "y", "n", "n"])
+    answers = iter(["n", "n", "n", "n", "y", "n", "n"])
     secrets = iter(["+639123456789", "AA:BB:CC:DD:EE:FF"])
     monkeypatch.setattr(public.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(public.getpass, "getpass", lambda prompt="": next(secrets))
     monkeypatch.setattr(public, "devices", lambda: [dict(index=0, name="USB", hostapi="ALSA", inputs=1, outputs=0)])
     cfg = public.wizard(tmp_path)
-    assert cfg["enabled"] == ["calling"]
+    assert cfg["enabled"] == ["calling", "information", "reminders"]
     assert cfg["secrets"]["calling_number"] == "+639123456789"
     output = capsys.readouterr().out
     assert "+639123456789" not in output and "AA:BB:CC:DD:EE:FF" not in output
@@ -107,7 +107,7 @@ def test_wizard_hides_private_numbers(monkeypatch, tmp_path, capsys):
 
 
 def test_session_wizard_does_not_write_profile(monkeypatch, tmp_path):
-    answers = iter(["0", "y", "n", "n", "n", "n", "n", "n", "n"])
+    answers = iter(["n", "n", "n", "n", "n", "n", "n"])
     monkeypatch.setattr(public.sys.stdin, "isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     monkeypatch.setattr(public, "devices", lambda: [dict(index=0, name="USB", hostapi="ALSA", inputs=1, outputs=0)])

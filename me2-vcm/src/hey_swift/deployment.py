@@ -313,7 +313,7 @@ def wizard(home, session=False):
         cfg["spotify_uri"] = DEFAULT_SPOTIFY_URI
         print("Music default: Spotify Top 50 - Philippines. Change later with ./swift config set spotify-uri.")
     for group, label in (("calling", "phone calls"), ("messaging", "SMS")):
-        if yes(f"Enable real {label} (requires compatible phone and terminal confirmation for each action)?"):
+        if yes(f"Enable real {label} (accepted voice commands act automatically in live mode)?"):
             cfg["enabled"].append(group)
             cfg["secrets"][group + "_number"] = hidden("Recipient in international +country format", r"\+[1-9][0-9]{7,14}")
     if set(cfg["enabled"]) & {"calling", "messaging"}:
@@ -355,7 +355,8 @@ def wizard(home, session=False):
 def isolated_env(cfg, state):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("VCM_", "HEY_SWIFT_"))}
     env.update(HEY_SWIFT_RUNTIME_ROOT=str(state), HEY_SWIFT_ENABLED_INTEGRATIONS=",".join(cfg["enabled"]),
-               HEY_SWIFT_CONFIRM_COMMUNICATIONS="1", VCM_SOLOIST_PROFILE="bundled",
+               HEY_SWIFT_CONFIRM_COMMUNICATIONS="0", VCM_SOLOIST_PROFILE="bundled",
+               VCM_SPOTIFY_ENABLED="1" if cfg.get("spotify") else "0",
                VCM_SOLOIST_DATA_DIR=str(state / "state/soloist"),
                VCM_SOLOIST_KEY_FILE=str(state / "state/soloist/api-key"), VCM_SOLOIST_WS="127.0.0.1:0",
                VCM_SOLOIST_INITIAL_VOLUME="25",
@@ -384,10 +385,12 @@ def applied_env(env):
         os.environ.update(previous)
 
 
-def assistant(cfg, state, model="champion", live=False, latency=False):
+def assistant(cfg, state, model="champion", live=False, latency=False,
+              confirm_communications=False, speak_no_speech=False):
     profile = resolve_profile(model)
     device = microphone(cfg)
     env = isolated_env(cfg, state)
+    env["HEY_SWIFT_CONFIRM_COMMUNICATIONS"] = "1" if confirm_communications else "0"
     if latency:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         logs = ROOT / "work/pi5_test_01" / (PUBLIC[profile] + "_live_" + stamp)
@@ -406,6 +409,8 @@ def assistant(cfg, state, model="champion", live=False, latency=False):
         command.append("--offline")
     if live:
         command.append("--live")
+    if speak_no_speech:
+        command.append("--speak-no-speech")
     if cfg.get("speech"):
         command.append("--speak")
     return subprocess.call(command, cwd=ROOT, env=env)
@@ -414,21 +419,24 @@ def assistant(cfg, state, model="champion", live=False, latency=False):
 def spotify(cfg, state):
     if not cfg.get("spotify"):
         raise SetupError("Spotify not enabled")
-    print("Starting a separate Swift Setup device; use Spotify on your phone to select it.")
+    print("Starting this checkout's Swift Pi device and attempting saved-login activation.")
     print("A key may be visible to processes owned by this OS user; no key is printed or put in shell history.")
     with applied_env(isolated_env(cfg, state)):
         from .actions.services.music import SoloistBackend
         backend = SoloistBackend(binary=cfg["soloist_binary"], data_dir=str(state / "state/soloist"),
-            auto_start=True, startup_timeout=15, control_timeout=3, max_volume_percent=25)
-        backend.ensure_started()
-        input("Select Swift Pi in your phone's Spotify device picker, then press Enter: ")
+            auto_start=True, startup_timeout=15, control_timeout=3, max_volume_percent=25,
+            operation_timeout=25, readiness_attempts=20)
         try:
+            backend.prepare()
+            backend._operation_deadline = time.monotonic() + 25.
             backend.ctl("activate", timeout=3)
-            status = backend.ctl("now", as_json=True, timeout=3)
+            status = backend._wait_state(lambda state: state.get("is_active") is True, "device activation")
             print("Spotify responding; active device:", bool(status.get("is_active")))
         except Exception:
-            print("Authorization/activation pending. Check phone selection, Premium/key and the private Soloist log.")
+            print("Authorization/activation pending. For first login select Swift Pi in the phone Spotify picker, then retry ./swift spotify. Check Premium/key and the private Soloist log.")
             return 1
+        finally:
+            backend._operation_deadline = None
     return 0
 
 
@@ -582,7 +590,7 @@ def demo(cfg, state, model):
     print("What time is it? / Turn on the light / Set a timer for ten seconds /")
     print("Set the temperature to twenty-two degrees / Play music / Pause music /")
     print("Set the temperature to thirty degrees (unsupported: must not execute).")
-    print("Only enabled integrations execute. Calls/SMS each require typed confirmation; they are optional.")
+    print("Only enabled integrations execute. Enabled calls/SMS act automatically on accepted voice commands.")
     print("Listen for prompt/response overlap; test music only at the configured listening cap. No AEC is claimed.")
     if not yes("Start the real voice demo with configured services?"):
         return 1
@@ -622,9 +630,14 @@ def main():
     sub.add_parser("doctor")
     for action in ("run", "live-latency", "demo"):
         p = sub.add_parser(action)
-        p.add_argument("--model", choices=("champion", "baseline", "selected", "run043"), default="champion")
+        p.add_argument("--model", type=resolve_profile, metavar="{champion,baseline}", default="champion",
+                       help="Champion or baseline; historical aliases remain compatible")
         if action == "run":
             p.add_argument("--live", action="store_true")
+            p.add_argument("--confirm-communications", action="store_true",
+                           help="Optionally require typed approval for each real call/SMS")
+            p.add_argument("--speak-no-speech", action="store_true",
+                           help="Speak feedback on empty capture; default is console feedback only")
     p = sub.add_parser("evaluate"); p.add_argument("--reset", action="store_true")
     p = sub.add_parser("report"); p.add_argument("--official", type=Path)
     sub.add_parser("spotify"); sub.add_parser("bluetooth")
@@ -680,4 +693,6 @@ def main():
         return bluetooth(cfg)
     if args.action == "demo":
         return demo(cfg, state, args.model)
-    return assistant(cfg, state, model=args.model, live=getattr(args, "live", False), latency=args.action == "live-latency")
+    return assistant(cfg, state, model=args.model, live=getattr(args, "live", False), latency=args.action == "live-latency",
+                     confirm_communications=getattr(args, "confirm_communications", False),
+                     speak_no_speech=getattr(args, "speak_no_speech", False))

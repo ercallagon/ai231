@@ -71,7 +71,8 @@ def test_piper_prewarms_and_reuses_file_backed_wav(monkeypatch, tmp_path):
     speech.close()
 
 
-def test_music_volume_cap_is_applied_before_unpause():
+@pytest.mark.parametrize("current,expected", [(22, 22), (40, 25)])
+def test_music_volume_cap_is_applied_before_unpause(current, expected):
     from hey_swift.actions.services.music import MpvBackend
 
     backend = MpvBackend([], "/unused", max_volume_percent=25)
@@ -82,13 +83,14 @@ def test_music_volume_cap_is_applied_before_unpause():
         if args == ("get_property", "idle-active"):
             return False
         if args == ("get_property", "volume"):
-            return 22
+            return current
         return None
 
     backend.command = command
     backend.execute("PLAY_MUSIC")
-    assert events[:3] == [
-        ("set_property", "volume", 25),
+    assert events[:4] == [
+        ("get_property", "volume"),
+        ("set_property", "volume", expected),
         ("get_property", "idle-active"),
         ("set_property", "pause", False),
     ]

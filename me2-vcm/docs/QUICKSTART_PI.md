@@ -146,8 +146,10 @@ Then authorize it:
 ./swift spotify
 ```
 
-Select **Swift Pi** in the phone Spotify device picker on the same LAN, then
-press Enter in SSH. No browser/password login is automated on the Pi. The new
+This command tries saved-login activation automatically and reports whether it
+succeeded. For first authorization only, select **Swift Pi** in the phone
+Spotify device picker on the same LAN and rerun `./swift spotify`. No password
+login is automated on the Pi. The new
 data directory and dynamic loopback control port avoid importing/colliding
 with the working deployment. A user-owned process may inspect Soloist's key
 argument; it is never echoed, logged by the wrapper, or entered in shell history.
@@ -214,11 +216,59 @@ set ...` to update one value without rebuilding the profile.
 ```
 
 Say Hey Swift, wait for the cue and **capture-ready message**, then speak.
-Preview validates commands without actions. No-speech or over-limit input
-rejects safely. The current conservative endpoint hangover is 1.2 seconds;
+Preview validates commands without actions. Empty captures are logged and return
+quietly to listening. Add `--speak-no-speech` if you want spoken empty-capture
+feedback. Over-limit input rejects safely. The current conservative endpoint hangover is 1.2 seconds;
 there can also be capture-setup delay after the cue, still requiring Pi review.
 No acoustic echo cancellation is claimed. Pause tolerance and music wake
 audibility need physical testing.
+
+For enabled real actions:
+
+```bash
+./swift run --model champion --live
+```
+
+Microphone selection comes from setup; the public `swift run` command does not
+take `--device`. `champion` and `baseline` are the two models. `selected` and
+`run043` remain compatibility aliases for the same models; they add no models.
+Accepted calls and SMS route automatically to the saved recipient. To request
+typed approval instead, add `--confirm-communications`. Recognition rejection
+still prevents actions. Empty captures stay quiet unless `--speak-no-speech`
+is specified. None of these options changes a model or rejection threshold.
+
+While music is playing, type a control into this same SSH terminal and press
+Enter; no wake phrase is required:
+
+```text
+:volume 10
+:quieter
+:pause
+:stop
+:help
+```
+
+Controls run between capture operations and affect only the selected music
+player. `:volume` accepts whole percentages up to the existing 25% listening
+cap; `:quieter` decreases by ten points. Lower levels persist when offline
+playback resumes. They do not change the speaker's global or call volume.
+This provides a demo recovery path when playback masks Hey Swift; acoustic
+echo cancellation is not implemented.
+
+With Spotify enabled, live startup warms its saved-login daemon for up to
+15 seconds before listening, without requesting activation or playback.
+Play music then performs automatic activation and confirms playback within
+a 25-second operation budget (plus bounded cleanup where required).
+Offline fallback still waits for safe online quiescence. A first-attempt
+failure remains diagnostic evidence, not proof that startup timing caused it.
+Keep the `Spotify:` line including its phase when reporting a fallback.
+
+Calls pause wake capture while Bluetooth reports an active or unknown call.
+The optional confirmation wrapper preserves call-state access. Transient
+query failures retry within the guard's five-minute limit; listening resumes
+after confirmed idle and the existing three-second end-tone tail. The runtime
+does not hang up calls. A persistent unknown state or guard timeout still
+stops capture safely; see [diagnostics and rollback](PI_RUNTIME_FEEDBACK.md).
 
 Stop preview with Ctrl+C, then collect the automated comparison below. The
 real demo comes afterward so reset does not archive your new observations.

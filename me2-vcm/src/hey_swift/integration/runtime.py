@@ -70,9 +70,13 @@ class ConfiguredMessaging:
 
 
 class ConfirmedCommunication:
-    """The public workflow requests terminal approval for every real call/SMS."""
+    """Optional per-action terminal approval, preserving call-state access."""
     def __init__(self, service):
         self.service = service
+
+    @property
+    def backend(self):
+        return self.service.backend
 
     def execute(self, intent, slot_value=None, **kwargs):
         import sys
@@ -138,6 +142,7 @@ class IntegrationAutoMusic(AutoMusicBackend):
         if intent == "PLAY_MUSIC" and data.get("fallback") and self.online.last_error:
             data["spotify_diagnostic"] = {
                 "message": self.online.last_error,
+                "phase": self.online.phase,
                 "profile": self.online.profile,
                 "hint": "Check the selected Soloist runtime's login status.",
             }
@@ -191,7 +196,7 @@ def _common_speech_phrases(music_volume_limit=25):
 
 
 def build_router(*, live=False, hardware="mock", speak=False,
-                 music_volume_limit=25, offline=False):
+                 music_volume_limit=25, offline=False, speak_no_speech=False):
     offline_mode = bool(offline)
     if Path.cwd().resolve() != ROOT:
         raise RuntimeError("Call prepare_workspace() before building the integration runtime.")
@@ -203,7 +208,8 @@ def build_router(*, live=False, hardware="mock", speak=False,
                                       phrases_dir=ROOT / "assets/speech"))
               if speak else None)
     if not live:
-        return ActionRouter({group: PreviewService() for group in enabled}, speech=speech)
+        return ActionRouter({group: PreviewService() for group in enabled}, speech=speech,
+                            speak_no_speech=speak_no_speech)
     devices = (ScheduledDevices(PiHardware() if hardware == "pi" else MockHardware(), speech=speech)
                if "devices" in enabled else None)
     try:
@@ -216,13 +222,13 @@ def build_router(*, live=False, hardware="mock", speak=False,
             soloist = IntegrationSoloist(os.environ.get("VCM_SPOTIFY_URI", DEFAULT_SPOTIFY_URI),
                 binary=str(selected["binary"]), data_dir=str(selected["data_dir"]),
                 auto_start=True, key_file=selected["key_file"], profile=selected["profile"],
-                max_volume_percent=music_volume_limit, operation_timeout=15.,
-                startup_timeout=5., control_timeout=2., readiness_attempts=12)
+                max_volume_percent=music_volume_limit, operation_timeout=25.,
+                startup_timeout=15., control_timeout=3., readiness_attempts=20)
             local = MpvBackend(sorted(Path(os.environ.get("VCM_MUSIC_DIR", str(ROOT / "assets/music"))).glob("*.mp3")),
                                str(ROOT / "tmp/mpv.sock"), auto_start=True, max_volume_percent=music_volume_limit)
             music = ManagedMusic(IntegrationAutoMusic(soloist, local,
                                  state_path=ROOT / "state/music-routing.json",
-                                 reachable=(lambda: False) if offline_mode else (lambda: True)))
+                                 reachable=(lambda: False) if offline_mode or os.environ.get("VCM_SPOTIFY_ENABLED") == "0" else (lambda: True)))
             try:
                 music.backend.limit_active_volume()
             except Exception:
@@ -242,7 +248,7 @@ def build_router(*, live=False, hardware="mock", speak=False,
             for name in ("calling", "messaging"):
                 if name in services:
                     services[name] = ConfirmedCommunication(services[name])
-        return ActionRouter(services, speech=speech)
+        return ActionRouter(services, speech=speech, speak_no_speech=speak_no_speech)
     except Exception:
         if devices is not None:
             devices.close()

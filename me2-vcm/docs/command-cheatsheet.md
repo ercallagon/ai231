@@ -1,9 +1,19 @@
-# run_043 Pi Command Cheatsheet
+# Hey Swift Pi Command Cheatsheet
 
 Say "Hey Swift", wait for the complete cue, then speak clearly. These variants
-exist in the corrected training manifest; recognition is not guaranteed. The
-two-second model window is unchanged. Do not rush or silently shorten a command
-after rejection; use duration diagnostics in [v6 guide](rpi-runtime-v6.md).
+exist in the training manifest; recognition is not guaranteed. Champion has
+six-second capacity; Baseline has two-second capacity. Both use dynamic command
+endpointing. Speak clearly without rushing. The public launcher uses the
+microphone chosen during setup:
+
+```bash
+./swift run --model champion --live
+```
+
+Accepted CALL/MESSAGE commands act automatically when enabled in private setup.
+Use `--confirm-communications` to request terminal confirmation instead.
+No-speech captures log a rejection and return quietly; `--speak-no-speech`
+restores spoken timeout feedback. Frozen rejection behavior is unchanged.
 
 | Intent | Suggested Covered Phrase | Supported Values / Effect |
 | --- | --- | --- |
@@ -27,7 +37,22 @@ after rejection; use duration diagnostics in [v6 guide](rpi-runtime-v6.md).
 | CALL | Make a call | REAL configured recipient; wake paused during owned call |
 | MESSAGE | Send a message | REAL configured message; unknown outcomes must not be retried blindly |
 
-Run flags:
+Terminal music controls (type into the running SSH terminal, then Enter):
+
+| Control | Effect |
+| --- | --- |
+| `:volume 10` | Set selected music player to 10%; cap remains 25% |
+| `:quieter` | Decrease music by ten percentage points |
+| `:pause` | Pause selected music player |
+| `:stop` | Stop selected music player |
+| `:help` | Show terminal controls |
+
+These controls avoid requiring a wake while music masks speech. They run
+between capture operations, have no spoken reply, and leave global/call volume
+alone. This is playback control; no AEC is claimed.
+
+Advanced flags below belong to `.venv/bin/python scripts/run_assistant.py`,
+not the public `./swift run` wrapper:
 
 - `--pipewire-source EXACT_USB_SOURCE_NODE_NAME`: shared capture; do not also use --device.
 - `--device 0`: direct ALSA/sounddevice; confirm the venv device list first.
@@ -74,8 +99,8 @@ is included in diagnostics; it does not verify voice-to-action behavior.
 If the runtime reports `Music could not be quieted`, the command was skipped;
 no inference/action occurred. Restore the playback controller and wake again.
 Do not compensate by raising music volume, lowering wake/OOS thresholds, or
-changing the supported spoken slot values. The2s champion still requires a
-complete short utterance; new3s experimental models are not installed.
+changing the supported spoken slot values. Baseline requires a complete short
+utterance within two seconds; Champion permits up to six seconds.
 This is half-duplex playback control, not acoustic echo cancellation. The
 sandbox fix has host tests; the currently installed Pi version may differ.
 

@@ -45,8 +45,9 @@ class Prediction:
 
 class ActionRouter:
     """One long-lived router serializes actions and shares one speech service."""
-    def __init__(self, services, *, speech=None):
+    def __init__(self, services, *, speech=None, speak_no_speech=False):
         self.services, self.speech = dict(services), speech
+        self.speak_no_speech = speak_no_speech
         self._lock = threading.RLock()
         self._closed = False
         self.on_action = None
@@ -95,7 +96,9 @@ class ActionRouter:
                     self.on_action(result.to_dict(), service_finished - dispatch_started)
                 except Exception:
                     pass  # Logging must never fail/retry an action.
-            if not (intent == "CALL" and result.status == "dialing"):
+            quiet_timeout = (result.status == "rejected" and rejection_reason == "no_sustained_speech"
+                             and not self.speak_no_speech)
+            if not quiet_timeout and not (intent == "CALL" and result.status == "dialing"):
                 speech_status = self._say(result.message)
             output = result.to_dict()
             output["_service_finished_monotonic"] = service_finished

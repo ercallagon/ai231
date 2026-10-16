@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -20,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 
-PATCH_VERSION = "pi-flow-v6-quieting-guard-20261012"
+PATCH_VERSION = "pi-flow-v7-demo-controls-20261016"
 LOG_FORMAT = "text"
 
 
@@ -52,7 +53,7 @@ def _emit(event):
             print(f"  Speech output: {action['speech'].get('status')}", flush=True)
         diagnostic = action.get("data", {}).get("spotify_diagnostic")
         if diagnostic:
-            print(f"  Spotify: {diagnostic.get('message')} ({diagnostic.get('profile')})", flush=True)
+            print(f"  Spotify: {diagnostic.get('message')} ({diagnostic.get('profile')}; phase: {diagnostic.get('phase', 'unknown')})", flush=True)
     elif kind == "action_result":
         print(f"Action {event.get('status')} ({event.get('service_seconds', 0):.3f} s): {event.get('message')}", flush=True)
     elif kind == "wake_score":
@@ -432,7 +433,10 @@ def _listen_for_wake(sd, mic, rate, hop, detector, resampler, focus, args, on_id
                 while True:
                     data, overflow = stream.read(hop)
                     mic.healthy()
-                    on_idle()
+                    if on_idle():
+                        # Controls may block on player IPC; reopen to discard buffered audio.
+                        detector.reset(); resampler.reset()
+                        break
                     if focus.suppress_input() or overflow:
                         detector.reset(); resampler.reset()
                         continue
@@ -548,12 +552,20 @@ def run(args) -> int:
 
     with build_router(live=args.live, hardware=args.hardware, speak=args.speak,
                       music_volume_limit=getattr(args, "music_listen_volume_percent", 25),
-                      offline=getattr(args, "offline", False)) as router:
+                      offline=getattr(args, "offline", False),
+                      speak_no_speech=getattr(args, "speak_no_speech", False)) as router:
+        from hey_swift.integration.terminal import TerminalMusicControls, HELP as TERMINAL_HELP
+        controls = TerminalMusicControls(router, emit=_emit)
         benchmark_context = {}
         scheduled_cursor = 0
+        def poll_controls():
+            # Serialize player changes with TTS duck/restore hooks.
+            with focus.lock:
+                return controls.poll()
         def deliver_scheduled():
             nonlocal scheduled_cursor
             scheduled_cursor = _drain_scheduled_events(router, scheduled_cursor)
+            return poll_controls()
         speech_duck = [None]
         def before_speech():
             focus.before_playback()
@@ -586,6 +598,16 @@ def run(args) -> int:
                 _emit({"status": "speech_ready"})
             except Exception:
                 _emit({"status": "speech_unavailable", "message": "Speech initialization failed; actions remain available."})
+        music = router.services.get("music")
+        if args.live and music is not None and not getattr(args, "offline", False) and os.environ.get("VCM_SPOTIFY_ENABLED", "1") != "0":
+            _emit({"event": "warming_music", "message": "Checking this checkout's Spotify daemon; no playback requested."})
+            try:
+                music.backend.online.prepare()
+                _emit({"event": "music_ready", "message": "Spotify control is responding; activation/playback will be checked on Play music."})
+            except Exception:
+                _emit({"event": "music_unavailable", "message": "Spotify startup check failed; Play music will retry, then use local music only when safe."})
+        if sys.stdin.isatty():
+            _emit({"event": "terminal_control", "message": TERMINAL_HELP})
         while True:
             scheduled_cursor = _drain_scheduled_events(router, scheduled_cursor)
             _emit({"status": "listening", "message": "Say Hey Swift, then wait for the chime."})
@@ -701,7 +723,8 @@ def run(args) -> int:
                             router.speech.pause_notifications()
                         wait_for_call_end(router.services["calling"], action_result, emit=_emit,
                                           maximum=getattr(args, "call_guard_seconds", 300.),
-                                          tail=getattr(args, "call_end_tail_seconds", 3.))
+                                          tail=getattr(args, "call_end_tail_seconds", 3.),
+                                          on_idle=poll_controls)
                         if router.speech is not None:
                             router.speech.pause_notifications(False)
                 scheduled_cursor = _drain_scheduled_events(router, scheduled_cursor)
@@ -722,6 +745,7 @@ def run(args) -> int:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--speak-no-speech", action="store_true", help="Speak empty-capture feedback; default is console only")
     parser.add_argument("--vcm-onnx", required=True, help="Promoted VCM ONNX export.")
     parser.add_argument("--vcm-labels", help="Labels JSON. Defaults to the ONNX sibling labels file.")
     parser.add_argument("--vcm-config", default=str(REPO_ROOT / "configs/vcm.yaml"))

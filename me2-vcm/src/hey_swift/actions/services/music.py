@@ -110,7 +110,7 @@ class MpvBackend:
             if self.auto_start:
                 self.ensure_started()
             if self.max_volume_percent is not None:
-                self.command("set_property", "volume", self.max_volume_percent)
+                self.limit_volume()
             if self.command("get_property", "idle-active"):
                 if not self.tracks or any(not p.is_file() for p in self.tracks):
                     raise MusicUnavailable("Add a local music file before starting playback.")
@@ -235,6 +235,7 @@ class SoloistBackend:
         self.control_timeout = control_timeout
         self.readiness_attempts = readiness_attempts
         self._operation_deadline = None
+        self.phase = "idle"
 
     def is_running(self):
         # ctl discovery files are removed on normal shutdown. Probe the local
@@ -326,15 +327,32 @@ class SoloistBackend:
         finally:
             self._operation_deadline = None
 
+    def prepare(self, timeout=15.):
+        """Warm this saved-login daemon without activating, playing or switching sources."""
+        previous = self._operation_deadline
+        self._operation_deadline = time.monotonic() + timeout
+        try:
+            self.phase = "startup"
+            self.ensure_started()
+            self.phase = "saved-login readiness"
+            state = self._wait_state(lambda state: True, self.phase)
+            return {"backend": "spotify", "control_ready": True,
+                    "is_active": state.get("is_active") is True}
+        finally:
+            self._operation_deadline = previous
+
     def _execute(self, intent):
         if intent == "PLAY_MUSIC":
+            self.phase = "startup"
             if self.auto_start:
                 self.ensure_started()
             may_play = False
             try:
+                self.phase = "saved-login readiness"
                 state = self._wait_state(lambda state: True, "saved-login readiness")
                 may_play = state.get("status") == "playing"
                 if state.get("is_active") is not True:
+                    self.phase = "device activation"
                     may_play = True
                     self.ctl("activate")
                     state = self._wait_state(lambda state: state.get("is_active") is True,
@@ -344,11 +362,14 @@ class SoloistBackend:
                 if self.uri and fresh:
                     args.append(self.uri)
                 if self.max_volume_percent is not None:
+                    self.phase = "listening volume"
                     volume = self.ctl("now", as_json=True).get("volume", 100)
                     self.ctl("volume", str(min(int(volume), self.max_volume_percent)))
                 if fresh and self.uri.startswith(("spotify:playlist:", "spotify:album:")):
+                    self.phase = "shuffle"
                     self.ctl("shuffle", "on")
                 may_play = True
+                self.phase = "play dispatch"
                 try:
                     self.ctl(*args)
                 except MusicUnavailable as exc:
@@ -359,6 +380,7 @@ class SoloistBackend:
                     except MusicUnavailable:
                         pass
                     raise MusicStartUncertain("Spotify start acknowledgement is unknown. Check the player before switching music.") from exc
+                self.phase = "playback confirmation"
                 self._wait_state(lambda state: state.get("status") == "playing", "playback confirmation")
                 self.stop_marker.unlink(missing_ok=True)
                 return {"backend": "spotify", "player": "soloist", "playback_confirmed": True}
@@ -450,6 +472,21 @@ class AutoMusicBackend:
         if self.active is not None:
             player = self.online if self.active == "spotify" else self.offline
             player.limit_volume()
+
+    def set_volume(self, percent):
+        """Adjust only the selected player; never alter the OS/call sink gain."""
+        if self.active is None:
+            raise MusicUnavailable("Start your music first.")
+        player = self.online if self.active == "spotify" else self.offline
+        ceiling = getattr(player, "max_volume_percent", None)
+        ceiling = ceiling if ceiling is not None else 100
+        if type(percent) is not int or not 0 <= percent <= ceiling:
+            raise MusicUnavailable(f"Choose a music volume from 0 to {ceiling} percent.")
+        if self.active == "offline":
+            player.command("set_property", "volume", percent, timeout=1)
+        else:
+            player.ctl("volume", str(percent), timeout=1)
+        return {"backend": self.active, "volume_percent": percent}
 
     def execute(self, intent):
         if intent != "PLAY_MUSIC":
