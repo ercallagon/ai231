@@ -6,7 +6,9 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import tempfile
 import urllib.request
 import numpy as np
 from .slot_labels import _slot_label
@@ -82,14 +84,20 @@ def ensure_files(rows,data_root,fetch=False):
             if not fetch:
                 raise FileNotFoundError(str(path)+"; --fetch downloads the pinned data")
             path.parent.mkdir(parents=True,exist_ok=True)
-            temporary=path.with_suffix(".download")
             url="https://huggingface.co/datasets/airimonda/ai231-me2-voice-commands/resolve/"+REVISION+"/"+relative.as_posix()
-            with urllib.request.urlopen(url,timeout=120) as source,temporary.open("xb") as target:
-                for block in iter(lambda:source.read(1024*1024),b""):
-                    target.write(block)
+            fd,temporary_name=tempfile.mkstemp(prefix="."+path.name+".",suffix=".download",dir=path.parent)
+            temporary=Path(temporary_name)
+            try:
+                with os.fdopen(fd,"wb") as target:
+                    with urllib.request.urlopen(url,timeout=120) as source:
+                        for block in iter(lambda:source.read(1024*1024),b""):
+                            target.write(block)
+            except Exception:
+                temporary.unlink(missing_ok=True)
+                raise
             if temporary.stat().st_size!=size or sha(temporary)!=digest:
                 raise ValueError("Download hash mismatch; failed download preserved")
-            temporary.rename(path)
+            temporary.replace(path)
         if path.stat().st_size!=size or sha(path)!=digest:
             raise ValueError("Dataset size/hash mismatch: "+relative.as_posix())
 

@@ -171,6 +171,28 @@ def test_report_marks_missing_results_and_never_reads_credentials(tmp_path):
     assert count_rate(None) == "MISSING" and count_rate(dict(n=0)) == "N/A (n=0)"
 
 
+def test_dataset_fetch_ignores_stale_fixed_download_and_keeps_it(monkeypatch, tmp_path):
+    import hashlib
+    import io
+    from hey_swift.vcm import release_data as data
+
+    payload = b"pinned parquet fixture"
+    relative = "data/test.parquet"
+    monkeypatch.setattr(data, "catalog", lambda: {relative: (len(payload), hashlib.sha256(payload).hexdigest())})
+    monkeypatch.setattr(data.urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(payload))
+    destination = tmp_path / relative
+    destination.parent.mkdir(parents=True)
+    stale = destination.with_suffix(".download")
+    stale.write_bytes(b"partial from an earlier attempt")
+    row = {"parquet": "data/vcm/raw/" + relative}
+
+    data.ensure_files([row], tmp_path, fetch=True)
+
+    assert destination.read_bytes() == payload
+    assert stale.read_bytes() == b"partial from an earlier attempt"
+    assert not list(destination.parent.glob("." + destination.name + ".*.download"))
+
+
 def test_install_refuses_existing_environment(monkeypatch, tmp_path):
     monkeypatch.setattr(public, "ROOT", tmp_path)
     monkeypatch.setattr(public.platform, "machine", lambda: "aarch64")

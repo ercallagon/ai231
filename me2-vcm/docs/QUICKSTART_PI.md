@@ -233,6 +233,8 @@ Stop the live listener. For a clean comparison:
 
 This reuses test_pi.py/reproduce.py and benchmark_onnx_pi.py. Old work/pi5_test_01
 is archived, not deleted; model/data/private-state directories remain intact.
+Pinned Parquet downloads use unique temporary files, so an interrupted fetch does
+not block retry; no manual removal of cached or partial data is needed.
 It evaluates exactly baseline + champion on pinned test (4,693) and holdout
 (202) recordings, reusing cached downloads; the first fetch is about 305 MB.
 It collects intent/slot/joint/rejection/family/cohort/coverage results, paired
