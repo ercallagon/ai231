@@ -145,15 +145,20 @@ summarizer refuses to overwrite an existing summary.
 Model-only cost, without microphone or action side effects:
 
 ```bash
-.venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/selected.onnx --audio-seconds 6 --threads 1 --output work/pi5_test_01/selected_cost.json
-.venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/run043.onnx --audio-seconds 2 --threads 1 --output work/pi5_test_01/run043_cost.json
+if [ ! -e work/pi5_test_01/selected_cost.json ]; then
+  .venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/selected.onnx --audio-seconds 6 --threads 1 --output work/pi5_test_01/selected_cost.json
+else
+  echo "Existing selected_cost.json preserved; inspect before reusing."
+fi
+if [ ! -e work/pi5_test_01/run043_cost.json ]; then
+  .venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/run043.onnx --audio-seconds 2 --threads 1 --output work/pi5_test_01/run043_cost.json
+else
+  echo "Existing run043_cost.json preserved; inspect before reusing."
+fi
 ```
 
-Injected-file recognition and features+ONNX p95/RTF:
-
-```bash
-.venv/bin/python scripts/reproduce.py reproduce --fetch --output work/pi5_test_01/injection
-```
+For injected-file recognition and features+ONNX p95/RTF, use the guarded
+commands below. They reuse work/pi5_test_01 and preserve existing results.
 
 The sparse checkout includes the manifests; this command downloads about 305 MB
 of pinned test/holdout audio on first use, verifies hashes, and reports all
@@ -174,33 +179,44 @@ whichever split gives the smaller latency. For a brief manual latency check,
 30 trials are preliminary and 100 or more are preferable; the complete test
 run is the recommended measurement for submission.
 
-For a fresh selected-model run, stop other assistant/benchmark processes and
-use the following in one Pi SSH session. The unique directory preserves all
-previous logs, including pi5_test_01. Cached pinned downloads are reused.
+Stop other assistant/benchmark processes and use the following in one Pi SSH
+session. Reuse work/pi5_test_01, including existing live logs, summaries and
+source_revision.txt. Only missing measurements are started; pinned audio
+downloads are reused. No new top-level results directory is required.
 
 ```bash
 cd ~/ai231
 git pull --ff-only
 cd me2-vcm
-mkdir -p work
-PI_RUN=$(mktemp -d work/pi5_inference_XXXXXXXX)
-git rev-parse HEAD > "$PI_RUN/source_revision.txt"
-.venv/bin/python -m pip freeze > "$PI_RUN/packages.txt"
+PI_RUN=work/pi5_test_01
+mkdir -p "$PI_RUN"
 set -o pipefail
-.venv/bin/python -u scripts/reproduce.py reproduce --profiles selected --splits test holdout --fetch --output "$PI_RUN/injection" 2>&1 | tee "$PI_RUN/injection.log"
+if [ -f "$PI_RUN/injection/COMPLETE.json" ]; then
+  echo "Completed injection results preserved; check profiles/splits before reusing:"
+  .venv/bin/python -m json.tool "$PI_RUN/injection/COMPLETE.json"
+elif [ -e "$PI_RUN/injection" ]; then
+  echo "Incomplete injection directory exists. Stop and inspect it; do not overwrite."
+else
+  git rev-parse HEAD >> "$PI_RUN/inference_source_revisions.txt"
+  .venv/bin/python -m pip freeze >> "$PI_RUN/inference_packages.log"
+  .venv/bin/python -u scripts/reproduce.py reproduce --profiles selected run043 --splits test holdout --fetch --output "$PI_RUN/injection" 2>&1 | tee -a "$PI_RUN/injection.log"
+fi
 echo "Results directory: $PI_RUN"
 ```
 
 The script prints progress and ends with `Frozen evaluation complete:`; the
 injection/COMPLETE.json file is written only after both splits finish. If the
 command fails, retain the log and partial results; do not rerun into that output
-directory. To compare the fallback too, include `run043` after `--profiles
-selected` before starting a new run. Keep the Pi's power/cooling conditions
+directory. Inspect COMPLETE.json's profiles and splits: an earlier selected-only
+run does not provide a run043 comparison. Keep that valid result and use a
+separate subdirectory only for a missing profile or a deliberate repeat. Existing
+cost JSON should have the expected model hash, scope and thread settings before
+reuse. Keep the Pi's power/cooling conditions
 fixed and avoid concurrent workloads. A single manifest pass measures a
 recording workload, not independent speakers or repeated-device uncertainty.
 
-Retrieve the printed results directory with the scp command below, substituting its
-actual path for work/pi5_test_01. The authoritative output fields are:
+Retrieve work/pi5_test_01 with the scp command below. The authoritative output
+fields are:
 
 | File/field | Meaning |
 | --- | --- |
