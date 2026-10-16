@@ -88,6 +88,22 @@ pretrained weights. Voice/song terms are separate from the project's MIT code.
 The wizard can install the optional speech lock into this venv after approval.
 It does not copy existing account profiles, contacts, login state or assets.
 
+For offline music, the wizard defaults to
+`~/swift-clean/me2-vcm/work/user/music` for this checkout. Copy your authorized
+MP3 files into that directory before enabling music, or enter another directory
+inside this checkout. The setup rejects a directory without `.mp3` files.
+For example, from a second Pi SSH terminal, after confirming the source folder
+contains only files you are authorized to use:
+
+```bash
+mkdir -p ~/swift-clean/me2-vcm/work/user/music
+cp ~/ai231/me2-vcm/integration/assets/*.mp3 ~/swift-clean/me2-vcm/work/user/music/
+```
+
+Then enter the checkout-local destination when the setup wizard asks. This
+keeps runtime music files out of the code checkout's tracked files while
+avoiding a dependency on the older installation after copying.
+
 For Spotify, obtain your key through a phone/browser at the official page:
 https://developer.spotify.com/documentation/soloist/concepts/authentication
 Download the binary only from Spotify's official Downloads and Updates page;

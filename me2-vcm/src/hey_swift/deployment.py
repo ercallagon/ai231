@@ -119,9 +119,14 @@ def wizard(home, session=False):
     if yes("Enable offline MP3 music?"):
         if not yes("Do you have permission to use these local audio files?"):
             raise SetupError("Authorized assets required")
-        directory = Path(input("Directory containing authorized MP3 files: ").strip()).expanduser().resolve()
+        default_music_dir = home / "music"
+        default_music_dir.mkdir(parents=True, exist_ok=True)
+        entered_music_dir = input(
+            f"Directory containing authorized MP3 files [{default_music_dir}]: "
+        ).strip()
+        directory = Path(entered_music_dir or default_music_dir).expanduser().resolve()
         if not list(directory.glob("*.mp3")):
-            raise SetupError("No MP3 files in selected directory")
+            raise SetupError(f"No MP3 files in {directory}; copy authorized files there, then rerun setup")
         cfg["music_dir"] = str(directory)
         cfg["enabled"].append("music")
     if yes("Enable Spotify Soloist?"):
