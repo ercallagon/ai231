@@ -20,6 +20,24 @@ immediately after recognition and before services. Rejections log OUT_OF_SCOPE.
 infer_ms covers input preparation, features and ONNX; audio_ms is actual model
 waveform duration. A preprocessing failure has zero processed audio and should
 not be mistaken for fast model inference. capture_audio_ms is separate.
+The additive `speech_end_to_decision_ms` field measures from the detector's
+last voiced frame read time to the completed intent/slot/rejection decision,
+before service dispatch, debug-file writes or log delivery. It includes endpoint
+waiting. No-speech decisions have null latency. This is a detector estimate,
+not an independently annotated acoustic speech end or the laptop's observation
+of the flushed record. Existing `infer_ms` keeps its original meaning.
+
+After stopping the assistant with Ctrl+C, summarize its saved logs on the Pi:
+
+```bash
+.venv/bin/python scripts/summarize_runtime_latency.py work/pi5_test_01/selected_logs --output work/pi5_test_01/selected_live_latency.json
+```
+
+Retain this supplementary JSON with the official benchmark outputs. It reports
+trial counts, p50/p95 in milliseconds, accepted/rejected timing subsets, missing
+endpoints and rejection reasons. It does not change upstream benchmark scoring.
+Use separate directories for each profile/session and report no-speech failures
+alongside timed trials. See PI5.md for measurement scope and sample-size limits.
 
 ## Windows laptop
 

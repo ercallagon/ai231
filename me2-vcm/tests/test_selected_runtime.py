@@ -76,7 +76,7 @@ def test_capture_preserves_training_length_pause_and_ends_dynamically(monkeypatc
     assert 1.19<=meta["endpoint_wait_seconds"]<=1.25
 
 
-@pytest.mark.parametrize("intent,slot,rejected",[("TEMPERATURE","22",False),("TEMPERATURE","REJECT",True),("OUT_OF_SCOPE",None,True)])
+@pytest.mark.parametrize("intent,slot,rejected",[("TEMPERATURE","22",False),("TEMPERATURE","REJECT",True),("OUT_OF_SCOPE",None,True),(None,None,True)])
 def test_real_wake_capture_model_router_idle_loop(monkeypatch,intent,slot,rejected):
     from hey_swift.integration import e2e_loop as loop
     from hey_swift.integration.router import ActionRouter,INTENTS
@@ -87,6 +87,8 @@ def test_real_wake_capture_model_router_idle_loop(monkeypatch,intent,slot,reject
     import hey_swift.vcm.inference as inference
     import hey_swift.wakeword.inference as wake
     events=[]
+    clock=[10.]
+    monkeypatch.setattr(loop.time,"monotonic",lambda:clock[0])
     def emit_print(text,*args,**kwargs):
         try: events.append(json.loads(text))
         except (ValueError,TypeError): pass
@@ -94,6 +96,7 @@ def test_real_wake_capture_model_router_idle_loop(monkeypatch,intent,slot,reject
     class Service:
         def execute(self,name,value=None,**kwargs):
             assert any(x.get("event")=="benchmark_decision" for x in events)
+            clock[0]+=5.  # Service delay must never inflate decision latency.
             events.append(dict(event="mock_service",intent=name,value=value))
             return ActionResult(name,"ok","mock")
     monkeypatch.setattr(runtime,"build_router",lambda **kwargs:ActionRouter({g:Service() for g in set(INTENTS.values())}))
@@ -105,10 +108,14 @@ def test_real_wake_capture_model_router_idle_loop(monkeypatch,intent,slot,reject
     monkeypatch.setattr(wake,"WakeWordDetector",lambda *args,**kwargs:SimpleNamespace(reset=lambda:None,gate=SimpleNamespace(threshold=.3)))
     actual=model()
     arrays={o.name:np.zeros((1,int(o.shape[-1])),np.float32) for o in actual.sess.get_outputs()}
-    arrays["intent_logits"][0,actual.intent_labels.index(intent)]=12
+    if intent is not None:
+        arrays["intent_logits"][0,actual.intent_labels.index(intent)]=12
     if slot is not None:
         arrays["slot_"+intent][0,actual.slot_sets[intent].index(slot)]=12
-    actual.sess=SimpleNamespace(run=lambda *args,**kwargs:list(arrays.values()))
+    def predict(*args,**kwargs):
+        clock[0]+=.125
+        return list(arrays.values())
+    actual.sess=SimpleNamespace(run=predict)
     monkeypatch.setattr(inference,"VCMInference",lambda *args,**kwargs:actual)
     wakes=[0]
     def listen(*args,**kwargs):
@@ -119,8 +126,9 @@ def test_real_wake_capture_model_router_idle_loop(monkeypatch,intent,slot,reject
     monkeypatch.setattr(loop,"_listen_for_wake",listen)
     def command(*args,before_ready=None,**kwargs):
         if before_ready: before_ready()
-        return wave(),dict(reason="end_silence",speech_started=True,speech_start_sample=0,
-            speech_end_sample=16000,_speech_end_monotonic=0.,overflow=False)
+        return wave(),dict(reason="end_silence",speech_started=intent is not None,speech_start_sample=0,
+            speech_end_sample=16000,_speech_end_monotonic=clock[0]-1.2,overflow=False,
+            speech_end_estimate="last voiced frame read time; not acoustic ground truth")
     monkeypatch.setattr(loop,"_capture_command_vad",command)
     @contextmanager
     def duck(*args,**kwargs): yield lambda:None
@@ -132,7 +140,16 @@ def test_real_wake_capture_model_router_idle_loop(monkeypatch,intent,slot,reject
     assert status==0 and wakes[0]==2
     records=[e for e in events if e.get("event")=="benchmark_decision"]
     assert len(records)==1 and records[0]["accepted"] is not rejected
-    assert records[0]["audio_ms"]==1000.
+    assert records[0]["audio_ms"]==(1000. if intent is not None else 0.)
+    command_event=next(e for e in events if e.get("event")=="command")
+    if intent is None:
+        assert records[0]["speech_end_to_decision_ms"] is None
+        assert command_event["latency"]["speech_end_to_decision_seconds"] is None
+    else:
+        assert records[0]["speech_end_to_decision_ms"]==1325.
+        assert command_event["latency"]["speech_end_to_decision_seconds"]==1.325
+        if not rejected:
+            assert command_event["latency"]["speech_end_to_service_seconds"]>=6.325
     services=[e for e in events if e.get("event")=="mock_service"]
     assert len(services)==(0 if rejected else 1)
     assert sum(e.get("status")=="listening" for e in events)==2

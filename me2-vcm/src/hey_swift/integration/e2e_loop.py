@@ -45,6 +45,7 @@ def _emit(event):
             print(f"  Rejection reason: {vcm['rejection_reason']}", flush=True)
         print(f"  Action: {action.get('status')} — {action.get('message')}", flush=True)
         latency, timing = event.get("latency", {}), action.get("timing", {})
+        print(f"  Decision after speech: {latency.get('speech_end_to_decision_seconds')} s (detector-estimated speech end)", flush=True)
         print(f"  Action after speech: {latency.get('speech_end_to_service_seconds')} s | capture setup: {latency.get('capture_setup_seconds')} s", flush=True)
         print(f"  Timing: model {latency.get('vcm_seconds')} s | service {timing.get('service_seconds', '?')} s | response {timing.get('response_seconds', '?')} s | total after speech {latency.get('speech_end_to_action_seconds')} s", flush=True)
         if action.get("speech"):
@@ -629,6 +630,12 @@ def run(args) -> int:
                                       "rejection_reason": "no_sustained_speech"}
                     vcm_done = time.monotonic()
                     prediction = _make_prediction(vcm_result)
+                    decision_at = time.monotonic()
+                    speech_end = capture_meta.get("_speech_end_monotonic")
+                    speech_end_to_decision = (
+                        decision_at - speech_end
+                        if capture_meta.get("speech_started") and speech_end is not None
+                        else None)
                     if vcm_result.get("rejection_reason") and getattr(args, "rejected_audio_log_dir", None):
                         _save_debug_audio(args.rejected_audio_log_dir, "rejected", wav,
                                           {"capture": capture_meta, "vcm": vcm_result})
@@ -639,6 +646,11 @@ def run(args) -> int:
                         "slot": prediction.slot_value if prediction.accepted else None,
                         "infer_ms": round((vcm_done - vcm_t0) * 1000.0, 1),
                         "audio_ms": round(processed_samples / SAMPLE_RATE * 1000.0, 1),
+                        "speech_end_to_decision_ms": (
+                            round(speech_end_to_decision * 1000.0, 3)
+                            if speech_end_to_decision is not None else None),
+                        "speech_end_estimate": capture_meta.get("speech_end_estimate"),
+                        "decision_latency_scope": "detector_last_voiced_frame_read_to_prediction_ready_before_services",
                     })
                     if args.benchmark_log:
                         print(json.dumps({"event": "benchmark_decision", **benchmark_context,
@@ -661,6 +673,9 @@ def run(args) -> int:
                     "vcm_seconds": round(vcm_done - vcm_t0, 3),
                     "endpoint_wait_seconds": capture_meta.get("endpoint_wait_seconds"),
                     "speech_end_estimate": capture_meta.get("speech_end_estimate"),
+                    "speech_end_to_decision_seconds": (
+                        round(speech_end_to_decision, 6)
+                        if speech_end_to_decision is not None else None),
                     "action_seconds": round(action_done - vcm_done, 3),
                     "speech_end_to_service_seconds": (
                         round(service_finished - speech_end, 3)

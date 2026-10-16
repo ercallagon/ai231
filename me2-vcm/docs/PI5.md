@@ -103,6 +103,45 @@ does not change wiring. No calls/SMS are part of verification.
 
 ## Collect measurements automatically
 
+### Live speech-end to decision latency
+
+Update the checkout with `git -C ~/ai231 pull --ff-only` and stop any other
+microphone listener. In `~/ai231/me2-vcm`, run:
+
+```bash
+git -C ~/ai231 rev-parse HEAD > work/pi5_test_01/live_source_revision.txt
+.venv/bin/python scripts/run_benchmark_assistant.py --profile selected --device 0 --log-dir work/pi5_test_01/selected_logs
+```
+
+This uses mock actions and no TTS/calls/SMS. Say Hey Swift, wait for the cue
+and capture-ready message, then say a command. Collect repeated trials across
+command families. Stop with Ctrl+C, then aggregate the saved decision logs:
+
+```bash
+.venv/bin/python scripts/summarize_runtime_latency.py work/pi5_test_01/selected_logs --output work/pi5_test_01/selected_live_latency.json
+```
+
+Use `all_speech_decisions.p50_ms`/`p95_ms` and `n` for slides, labeled
+**detector-estimated speech-end to recognition decision**. The endpoint is the
+last voiced frame's read time, not independently annotated acoustic ground
+truth. This interval includes endpoint waiting, preprocessing, inference and
+slot/rejection mapping; it excludes services, action completion and TTS.
+The timestamp is taken when the prediction is ready, before optional debug-file
+writes and decision-log delivery. The class benchmark's laptop-observed timing
+is a separate measure and may use a different speech-end reference.
+
+No-speech/legacy records have null latency and are counted separately, never
+as zero. Rejected speech decisions remain in the main latency distribution;
+accepted/rejected subsets are also reported. Counts and rejection reasons must
+accompany the latency. Acceptance is not evidence of correct recognition.
+Use at least 30 trials for an initial check, preferably 100 or more for p95;
+small samples leave tail latency uncertain. Keep profiles, thermal conditions
+and test sessions separate. Old logs cannot recover the new timing field.
+For another session, use fresh log-directory and summary-output names. The
+summarizer refuses to overwrite an existing summary.
+
+### Inference cost and injected recognition
+
 Model-only cost, without microphone or action side effects:
 
 ```bash
