@@ -17,8 +17,6 @@ git clone --filter=blob:none --sparse https://github.com/ercallagon/ai231.git ~/
 cd ~/ai231
 git -C ~/ai231 sparse-checkout set me2-vcm/src me2-vcm/scripts me2-vcm/configs me2-vcm/models me2-vcm/audio me2-vcm/data/manifests
 cd ~/ai231/me2-vcm
-mkdir -p work/pi5_test_01
-git -C ~/ai231 rev-parse HEAD > work/pi5_test_01/source_revision.txt
 python3 -m venv --system-site-packages .venv
 .venv/bin/python -m pip install --only-binary=:all: -r requirements-pi.txt -r requirements-eval.txt
 .venv/bin/python -m sounddevice
@@ -103,154 +101,130 @@ does not change wiring. No calls/SMS are part of verification.
 
 ## Collect measurements automatically
 
-### Live speech-end to decision latency
+### Baseline versus champion: one command
 
-Update the checkout with `git -C ~/ai231 pull --ff-only` and stop any other
-microphone listener. In `~/ai231/me2-vcm`, run:
-
-```bash
-git -C ~/ai231 rev-parse HEAD > work/pi5_test_01/live_source_revision.txt
-.venv/bin/python scripts/run_benchmark_assistant.py --profile selected --device 0 --log-dir work/pi5_test_01/selected_logs
-```
-
-This uses mock actions and no TTS/calls/SMS. Say Hey Swift, wait for the cue
-and capture-ready message, then say a command. Collect repeated trials across
-command families. Stop with Ctrl+C, then aggregate the saved decision logs:
-
-```bash
-.venv/bin/python scripts/summarize_runtime_latency.py work/pi5_test_01/selected_logs --output work/pi5_test_01/selected_live_latency.json
-```
-
-Use `all_speech_decisions.p50_ms`/`p95_ms` and `n` for slides, labeled
-**detector-estimated speech-end to recognition decision**. The endpoint is the
-last voiced frame's read time, not independently annotated acoustic ground
-truth. This interval includes endpoint waiting, preprocessing, inference and
-slot/rejection mapping; it excludes services, action completion and TTS.
-The timestamp is taken when the prediction is ready, before optional debug-file
-writes and decision-log delivery. The class benchmark's laptop-observed timing
-is a separate measure and may use a different speech-end reference.
-
-No-speech/legacy records have null latency and are counted separately, never
-as zero. Rejected speech decisions remain in the main latency distribution;
-accepted/rejected subsets are also reported. Counts and rejection reasons must
-accompany the latency. Acceptance is not evidence of correct recognition.
-Use at least 30 trials for an initial check, preferably 100 or more for p95;
-small samples leave tail latency uncertain. Keep profiles, thermal conditions
-and test sessions separate. Old logs cannot recover the new timing field.
-For another session, use fresh log-directory and summary-output names. The
-summarizer refuses to overwrite an existing summary.
-
-### Inference cost and injected recognition
-
-Model-only cost, without microphone or action side effects:
-
-```bash
-if [ ! -e work/pi5_test_01/selected_cost.json ]; then
-  .venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/selected.onnx --audio-seconds 6 --threads 1 --output work/pi5_test_01/selected_cost.json
-else
-  echo "Existing selected_cost.json preserved; inspect before reusing."
-fi
-if [ ! -e work/pi5_test_01/run043_cost.json ]; then
-  .venv/bin/python scripts/benchmark_onnx_pi.py --model models/vcm/run043.onnx --audio-seconds 2 --threads 1 --output work/pi5_test_01/run043_cost.json
-else
-  echo "Existing run043_cost.json preserved; inspect before reusing."
-fi
-```
-
-For injected-file recognition and features+ONNX p95/RTF, use the guarded
-commands below. They reuse work/pi5_test_01 and preserve existing results.
-
-The sparse checkout includes the manifests; this command downloads about 305 MB
-of pinned test/holdout audio on first use, verifies hashes, and reports all
-processing failures. It bypasses wake detection, room acoustics and causal
-capture. Both commands record one intra-op and one inter-op thread; neither
-claims action or synthesized-speech latency. Model-only RTF uses nominal input
-capacity; injected RTF uses each actual waveform duration. Preserve raw JSON.
-If timing both profiles, use identical thermal, power and thread conditions.
-
-### Fresh inference-latency run for slides
-
-Live speech is not required for **feature preprocessing + model inference**
-latency. Use the entire frozen test manifest (4,693 recordings) and report
-holdout (202 recordings) separately. These counts are attempted recordings;
-only successfully processed recordings have inference timings. Report the
-timed count and full-manifest processing failures alongside p95. Do not choose
-whichever split gives the smaller latency. For a brief manual latency check,
-30 trials are preliminary and 100 or more are preferable; the complete test
-run is the recommended measurement for submission.
-
-Stop other assistant/benchmark processes and use the following in one Pi SSH
-session. Reuse work/pi5_test_01, including existing live logs, summaries and
-source_revision.txt. Only missing measurements are started; pinned audio
-downloads are reused. No new top-level results directory is required.
+Stop other assistant/benchmark processes first. Run on the Pi:
 
 ```bash
 cd ~/ai231
 git pull --ff-only
 cd me2-vcm
-PI_RUN=work/pi5_test_01
-mkdir -p "$PI_RUN"
-set -o pipefail
-if [ -f "$PI_RUN/injection/COMPLETE.json" ]; then
-  echo "Completed injection results preserved; check profiles/splits before reusing:"
-  .venv/bin/python -m json.tool "$PI_RUN/injection/COMPLETE.json"
-elif [ -e "$PI_RUN/injection" ]; then
-  echo "Incomplete injection directory exists. Stop and inspect it; do not overwrite."
-else
-  git rev-parse HEAD >> "$PI_RUN/inference_source_revisions.txt"
-  .venv/bin/python -m pip freeze >> "$PI_RUN/inference_packages.log"
-  .venv/bin/python -u scripts/reproduce.py reproduce --profiles selected run043 --splits test holdout --fetch --output "$PI_RUN/injection" 2>&1 | tee -a "$PI_RUN/injection.log"
-fi
-echo "Results directory: $PI_RUN"
+.venv/bin/python scripts/test_pi.py --reset
 ```
 
-The script prints progress and ends with `Frozen evaluation complete:`; the
-injection/COMPLETE.json file is written only after both splits finish. If the
-command fails, retain the log and partial results; do not rerun into that output
-directory. Inspect COMPLETE.json's profiles and splits: an earlier selected-only
-run does not provide a run043 comparison. Keep that valid result and use a
-separate subdirectory only for a missing profile or a deliberate repeat. Existing
-cost JSON should have the expected model hash, scope and thread settings before
-reuse. Keep the Pi's power/cooling conditions
-fixed and avoid concurrent workloads. A single manifest pass measures a
-recording workload, not independent speakers or repeated-device uncertainty.
+This is the standard command for a clean initial run or a deliberate repeat.
+It archives the entire existing work/pi5_test_01 directory under
+work/pi5_test_01_previous_*/pi5_test_01, then recreates the active directory.
+Nothing is deleted. Models, labels, thresholds, the virtual environment,
+integration state, downloaded audio under data/, and ~/swift-e2e remain intact.
+Only the previous test artifacts leave the active test directory. The runner
+refuses symlinked work/results paths and a second concurrent test_pi.py run.
+Stop older manually launched evaluations too; the lock covers this runner only.
 
-Retrieve work/pi5_test_01 with the scp command below. The authoritative output
-fields are:
+The command evaluates exactly two frozen VCM profiles: baseline run043 and
+current selected model selected, on both test and holdout. It does not run
+training, calibration, wake detection, real actions, calls/SMS or TTS.
+The cached pinned dataset is reused; missing files are downloaded and verified
+(about 305 MB on first use). No live speaking is required. Keep the Pi's
+power/cooling conditions fixed and avoid concurrent workloads.
 
-| File/field | Meaning |
+The test manifest has 4,693 recordings and holdout has 202. These are previously
+exposed evaluation sets. Only successfully processed recordings have inference
+timings; retain full-manifest processing failures and timed counts alongside
+p95. Use test as the primary reported split and holdout as a separate result,
+rather than selecting whichever latency or recognition score is better.
+
+The runner prints progress followed by a two-model timing table and DONE.
+If it fails or you stop it with Ctrl+C, partial outputs and injection.log are
+preserved. Inspect the error; the same --reset command archives those partial
+outputs before a clean retry. Without --reset, an existing results directory
+is refused. A non-Pi-5 machine is refused before any result directory reset.
+If SSH disconnects, reconnect and inspect whether the earlier process is still
+running; do not start overlapping tests.
+
+### Results and timing definition
+
+All new outputs are in work/pi5_test_01:
+
+| File | Contents |
 | --- | --- |
-| injection/test_RESULTS.json: selected.infer_p95_ms | Test feature preprocessing + ONNX p95, ms |
-| injection/test_RESULTS.json: selected.per_clip_rtf_p95 | p95 of each processed clip's processing time / original waveform duration |
-| injection/test_RESULTS.json: selected.infer_scope | Exact measurement scope |
-| injection/test_RESULTS.json: selected.processed_subsets.all | Manifest/processed counts and failures |
-| injection/test_selected_timings.json | One entry per processed recording; feature_ms, model_ms, infer_ms, audio_ms |
-| injection/holdout_RESULTS.json and holdout_selected_timings.json | Separate holdout results and timing entries |
+| SUMMARY.json | Baseline/champion p95, RTF, timed/manifest counts and failures, separately for test/holdout |
+| injection/test_RESULTS.json | Full test recognition, intent/slot/rejection, real/synthetic results and timing metrics |
+| injection/holdout_RESULTS.json | Separate holdout metrics |
+| injection/test_selected_timings.json and test_run043_timings.json | Per-recording feature_ms, model_ms, infer_ms and audio_ms |
+| injection/*_errors.jsonl | Predictions, acceptance and processing status per recording |
+| injection/COMPLETE.json | Both splits/profiles completed, with frozen threshold records |
+| injection.log | Progress and any errors |
+| source_revision.txt, ENVIRONMENT.json | Revision, exact command, environment/dependency versions and archive location |
 
-`infer_ms` starts immediately before feature preprocessing and stops when
-`session.run()` returns model outputs. It excludes file download, audio decode,
+SUMMARY.json verifies result/model hashes to prevent confusing run043 with
+selected. Its profiles.selected.test.infer_p95_ms and per_clip_rtf_p95 are the
+recommended slide timing values. The full test_RESULTS.json contains these
+under selected.infer_p95_ms and selected.per_clip_rtf_p95.
+
+Timing starts immediately before feature preprocessing and stops when ONNX
+session.run() returns model outputs. It excludes download, audio decode,
 resampling, microphone capture, endpoint waiting, post-model decision mapping,
-action services and TTS. The pinned input waveforms are already 16 kHz mono.
-RTF uses each original recording duration, not the model's six-second capacity;
-compute its percentile from per-recording ratios, not p95 time / six seconds.
-The timings include the first inference (no discarded warm-up); the separate
-model-only cost script uses 30 warm-up and 200 measured passes. Record this
-distinction instead of treating the two scripts as equivalent.
+actions and TTS. Pinned waveforms are already 16 kHz mono. RTF is processing
+time divided by each original waveform duration; its p95 is calculated from
+per-recording ratios, not p95 time divided by six seconds. Timing includes the
+first inference; no warm-up samples are discarded in injected evaluation.
+Both models use one intra-op and one inter-op thread.
 
 Suggested slide label: **Pi 5 CPU, 1 intra-op / 1 inter-op thread: feature
 preprocessing + model inference p95 ___ ms; RTF p95 ___; N ___ processed test
-recordings (___ attempted; ___ failures).** Speech-end to decision latency is
-separate and still requires live/acoustic capture. No real action is executed
-by this injection run.
+recordings (___ attempted; ___ failures).** A full-manifest pass is preferable
+to collecting 100 manual samples for this metric, but does not measure
+independent repeated-device uncertainty. Model-only synthetic benchmarks are
+optional diagnostics and are not needed for this standard comparison.
 
-From Windows, retrieve results using the existing LAN/SSH route:
+### Retrieve results
+
+In Windows PowerShell:
 
 ```powershell
+cd "C:\Users\EJ\Documents\ChatGPT\ME2-VCM 2"
 scp -r ej@192.168.100.103:~/ai231/me2-vcm/work/pi5_test_01 .
 ```
 
-Use docs/BENCHMARK.md on GitHub for the separate class acoustic benchmark. The
-sparse checkout omits documentation files. Remaining Pi
-checks: mic handoff/recovery, early/late speech after the cue, long pauses,
-over-limit rejection, speech/music interference, GPIO/timer display effects,
-decision-to-action timing, resource/thermal behavior and optional speech assets.
+Retain the whole results folder. Existing archived Pi evidence remains in
+work/pi5_test_01_previous_* and is not mixed into the new summary. If a folder
+with the same name already exists on Windows, rename/archive that local copy
+before downloading a new run to avoid mixing old and new files.
+
+### Optional live speech-end to decision latency
+
+This is a separate metric. After automated evaluation, run:
+
+```bash
+.venv/bin/python scripts/run_benchmark_assistant.py --profile selected --device 0 --log-dir work/pi5_test_01/selected_logs
+```
+
+The launcher uses mock actions and no TTS/calls/SMS. Say Hey Swift, wait for
+the cue and capture-ready message, then speak. Stop with Ctrl+C and summarize:
+
+```bash
+.venv/bin/python scripts/summarize_runtime_latency.py work/pi5_test_01/selected_logs --output work/pi5_test_01/selected_live_latency.json
+```
+
+Use all_speech_decisions.p50_ms/p95_ms and n, labeled **detector-estimated
+speech-end to recognition decision**. This starts at the last voiced frame's
+read time, not independently annotated acoustic ground truth, and ends at
+prediction readiness before debug-file writes, log delivery or services.
+It includes endpoint waiting, preprocessing, inference and slot/rejection
+mapping. No-speech/legacy records have null latency, counted separately rather
+than as zero. Rejected speech decisions remain in the main distribution;
+accepted/rejected subsets are reported too. Acceptance is not correctness.
+Use at least 30 trials for a preliminary check, preferably 100 or more for p95.
+
+For another live session without repeating injection, use fresh live log and
+summary names under the existing test directory; the summarizer refuses an
+existing output. Old logs cannot recover the new timing field. Use
+docs/BENCHMARK.md for the separate class acoustic benchmark, whose
+laptop-observed latency has a different reference. Sparse checkout omits docs;
+read the guide on GitHub.
+
+Remaining physical checks include mic handoff/recovery, early/late speech after
+the cue, long pauses, over-limit rejection, speech/music interference, GPIO/timer
+effects, decision-to-action timing, resource/thermal behavior and optional
+speech assets. Injection alone does not verify these.

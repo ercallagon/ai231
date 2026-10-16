@@ -7,7 +7,10 @@ File injection is supplementary; --no-audio is restricted to simulation.
 
 ## Pi terminal
 
-Install the sparse Pi checkout as described in PI5.md, then:
+Install the sparse Pi checkout as described in PI5.md. If collecting automated
+injection metrics too, run `scripts/test_pi.py --reset` before live trials;
+reset archives the existing test folder, including any decision logs. Do not
+reset during an active acoustic benchmark. Then run:
 
 ```bash
 cd ~/ai231/me2-vcm
