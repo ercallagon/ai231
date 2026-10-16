@@ -13,7 +13,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
+from urllib.request import urlopen
 
 from .profiles import resolve_profile, PUBLIC
 
@@ -22,6 +24,72 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class SetupError(ValueError):
     """Safe actionable setup message; never include secret values."""
+
+
+SOLOIST_ARM64_URL = "https://soloist-builds.spotifycdn.com/soloist_release_arm64.tar.gz"
+
+
+def download_soloist(home):
+    if platform.machine().lower() not in {"aarch64", "arm64"}:
+        raise SetupError("Automatic Soloist download is only supported on ARM64; use Spotify's official download page")
+    downloads = home / "downloads"
+    binary_dir = home / "bin"
+    downloads.mkdir(parents=True, exist_ok=True, mode=0o700)
+    binary_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    archive = downloads / "soloist_release_arm64.tar.gz"
+    binary = binary_dir / "soloist"
+    if archive.exists() or binary.exists():
+        raise SetupError("Soloist archive or executable already exists in this checkout; inspect it before replacing anything")
+
+    archive_fd, archive_tmp = tempfile.mkstemp(prefix="soloist-", suffix=".download", dir=downloads)
+    binary_tmp = None
+    try:
+        total = 0
+        with os.fdopen(archive_fd, "wb") as output:
+            with urlopen(SOLOIST_ARM64_URL, timeout=30) as response:
+                if not response.geturl().startswith("https://"):
+                    raise SetupError("Spotify download redirected away from HTTPS")
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 512 * 1024 * 1024:
+                        raise SetupError("Soloist archive exceeded the 512 MiB download limit")
+                    output.write(chunk)
+        if total == 0:
+            raise SetupError("Spotify returned an empty Soloist archive")
+        os.link(archive_tmp, archive)
+        print(f"Downloaded Spotify archive: {total / (1024 * 1024):.1f} MiB")
+
+        with tarfile.open(archive, "r:gz") as bundle:
+            members = [member for member in bundle.getmembers()
+                       if member.isfile() and Path(member.name).name == "soloist"]
+            if len(members) != 1:
+                raise SetupError("Official archive did not contain exactly one regular soloist executable")
+            if not 0 < members[0].size <= 512 * 1024 * 1024:
+                raise SetupError("Soloist executable has an invalid or excessive size")
+            source = bundle.extractfile(members[0])
+            if source is None:
+                raise SetupError("Could not read Soloist executable from the archive")
+            binary_fd, binary_tmp = tempfile.mkstemp(prefix="soloist-", dir=binary_dir)
+            with os.fdopen(binary_fd, "wb") as output, source:
+                shutil.copyfileobj(source, output)
+            os.chmod(binary_tmp, 0o700)
+        os.link(binary_tmp, binary)
+        print(f"Soloist executable installed at {binary}")
+        return str(binary)
+    except SetupError:
+        raise
+    except Exception as exc:
+        raise SetupError(f"Soloist download or archive validation failed ({type(exc).__name__})") from None
+    finally:
+        for temporary in (archive_tmp, binary_tmp):
+            if temporary:
+                try:
+                    os.unlink(temporary)
+                except FileNotFoundError:
+                    pass
 
 
 
@@ -134,7 +202,16 @@ def wizard(home, session=False):
         print("https://developer.spotify.com/documentation/soloist/concepts/authentication")
         print("Get the ARM64 binary from https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates")
         print("Use a phone browser/app on this LAN for authorization. No password is requested here.")
-        cfg["soloist_binary"] = existing_path("Path to your officially downloaded Soloist executable", True)
+        default_soloist = home / "bin/soloist"
+        if default_soloist.is_file() and os.access(default_soloist, os.X_OK):
+            if yes(f"Use this checkout's Soloist executable at {default_soloist}?", True):
+                cfg["soloist_binary"] = str(default_soloist)
+            else:
+                cfg["soloist_binary"] = existing_path("Path to your officially downloaded Soloist executable", True)
+        elif yes("Download the official ARM64 Soloist executable into this checkout now?", True):
+            cfg["soloist_binary"] = download_soloist(home)
+        else:
+            cfg["soloist_binary"] = existing_path("Path to your officially downloaded Soloist executable", True)
         cfg["secrets"]["soloist_key"] = hidden("Personal Soloist API key", r"\S+")
         cfg["spotify"] = True
         cfg["enabled"].append("music")

@@ -78,7 +78,7 @@ and API keys use hidden input. Each feature's prerequisites are explicit:
 | LED/display | gpiozero/lgpio, permission to /dev/gpiochip*, tested wiring below |
 | Weather | Internet and selected coordinates; no API key; unavailable honestly offline |
 | Offline music | Your authorized MP3 directory; mpv; no songs are redistributed |
-| Spotify | Official ARM64 Soloist executable, personal Soloist key/Premium, phone Spotify Connect authorization |
+| Spotify | Internet for setup, personal Soloist key/Premium, phone Spotify Connect authorization |
 | Calls | Compatible paired phone/tablet, SIM/call permissions, native PipeWire telephony/HFP gateway, private international-format recipient |
 | SMS | Phone supports MAP, message-access permission, BlueZ OBEX user service, private recipient |
 | Speech | Optional pinned Piper dependencies and your authorized voice .onnx + .onnx.json |
@@ -106,8 +106,14 @@ avoiding a dependency on the older installation after copying.
 
 For Spotify, obtain your key through a phone/browser at the official page:
 https://developer.spotify.com/documentation/soloist/concepts/authentication
-Download the binary only from Spotify's official Downloads and Updates page;
-the project does not redistribute it. Then:
+When you enable Spotify, setup can download the official ARM64 archive directly
+from Spotify into this checkout's ignored `work/user/downloads/` and install the
+executable under `work/user/bin/`. It prints the actual archive size. This
+requires internet on the Pi and does not run during general dependency
+installation. You can instead provide an executable you downloaded from
+Spotify's [official downloads page](https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates).
+The project does not redistribute Soloist. Spotify builds expire after 90 days.
+Then run:
 
 ```bash
 ./swift spotify
