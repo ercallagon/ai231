@@ -63,6 +63,33 @@ def test_microphone_identity_survives_reindex_but_not_ambiguity(monkeypatch):
         public.microphone(configuration())
 
 
+def test_gpio_self_test_records_operator_confirmed_physical_result(monkeypatch, tmp_path):
+    import hey_swift.hardware.devices as hardware_devices
+
+    class FakePiHardware:
+        def __init__(self):
+            self.events = []
+        def led(self, rgb):
+            self.events.append(("led", rgb))
+        def display(self, digits, colon=False):
+            self.events.append(("display", digits, colon))
+        def close(self):
+            self.events.append(("close",))
+
+    config_home = tmp_path / "user"
+    public.private_json(config_home / "profile.json", {"hardware": "pi"})
+    monkeypatch.setattr(public, "ROOT", tmp_path)
+    monkeypatch.setattr(public.time, "sleep", lambda _: None)
+    monkeypatch.setattr(hardware_devices, "PiHardware", FakePiHardware)
+    answers = iter((True, True, True))
+    monkeypatch.setattr(public, "yes", lambda _: next(answers))
+
+    assert public.gpio_self_test(config_home) == 0
+    result = json.loads((config_home / "gpio_check.json").read_text())
+    assert result["status"] == "PASS"
+    assert result["observations"] == {"rgb_sequence": True, "display_1234_colon": True}
+
+
 def test_wizard_hides_private_numbers(monkeypatch, tmp_path, capsys):
     answers = iter(["0", "n", "n", "n", "n", "n", "y", "n", "n"])
     secrets = iter(["+639123456789", "AA:BB:CC:DD:EE:FF"])

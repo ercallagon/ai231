@@ -100,7 +100,21 @@ def diagnose(root, home, cfg=None):
                     return "MAP interface responded; no message sent"
                 check("messaging", message, "MAP availability; phone permission may be needed; no PushMessage")
         if cfg["hardware"] == "pi":
-            check("GPIO/display", lambda: "BCM17/27/22 and BCM23/24 preserved; physical effects not exercised", "physical wiring/effects", pending=True)
+            evidence = home / "gpio_check.json"
+            try:
+                gpio = json.loads(evidence.read_text())
+                status = gpio.get("status")
+                if status not in {"PASS", "FAIL"}:
+                    raise ValueError("No completed physical check")
+                checks.append(dict(
+                    name="GPIO/display", status=status,
+                    scope="operator-confirmed physical LED/display check; not model-to-action validation",
+                    detail={"observations": gpio.get("observations"), "created_utc": gpio.get("created_utc"),
+                            "wiring": gpio.get("wiring"), "driver_error": gpio.get("driver_error")}))
+            except Exception:
+                checks.append(dict(name="GPIO/display", status="PENDING",
+                                   scope="physical wiring/effects",
+                                   detail="Run ./swift gpio and visually confirm both devices"))
     else:
         checks.append(dict(name="first-run setup", status="MISSING", scope="configuration", detail="Run swift.py setup"))
     result = dict(created_utc=datetime.now(timezone.utc).isoformat(), checks=checks,
@@ -111,4 +125,4 @@ def diagnose(root, home, cfg=None):
     for item in checks:
         print(f"{item['status']:7} {item['name']}: {item['scope']}")
     print("Diagnostic report:", destination)
-    return int(any(c["status"] == "MISSING" for c in checks))
+    return int(any(c["status"] in {"MISSING", "FAIL"} for c in checks))

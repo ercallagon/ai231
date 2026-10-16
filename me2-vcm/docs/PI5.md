@@ -9,6 +9,8 @@ The short command set is:
 ./swift install
 ./swift setup
 ./swift doctor
+./swift gpio  # optional physical LED/display check if enabled in setup
+./swift doctor
 ./swift config set call-number
 ./swift run --model champion
 ./swift evaluate --reset

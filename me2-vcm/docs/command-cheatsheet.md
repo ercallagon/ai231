@@ -62,6 +62,13 @@ Phone numbers, MAC address and Spotify key are requested through hidden input;
 never append them as command arguments. Updates retain every other field and
 create a private timestamped profile backup. See [the Pi quickstart](QUICKSTART_PI.md)
 for setup defaults, asset locations and update commands after installation.
+
+## GPIO Physical Check
+
+With the assistant stopped and the documented wiring connected, run
+`./swift gpio`, visually confirm the RGB sequence and `1234` display, then run
+`./swift doctor`. The private confirmation persists across evaluation resets and
+is included in diagnostics; it does not verify voice-to-action behavior.
 # Capture Safety Note (2026-10-12)
 
 If the runtime reports `Music could not be quieted`, the command was skipped;

@@ -57,6 +57,18 @@ to compile random GPIO packages or replace the OS Python. See DEPENDENCIES.md.
 ./swift doctor
 ```
 
+If you enabled the RGB LED/TM1637, run the focused physical check with the
+assistant stopped, confirm what you see, then refresh the combined diagnostics:
+
+```bash
+./swift gpio
+./swift doctor
+```
+
+The check cycles red/green/blue and displays `1234`; it records your visual
+confirmation separately from software-only imports. It does not test voice
+recognition or model-to-action behavior.
+
 Choose private local storage (profile mode 600, directory 700) or session-only
 RAM state. Private files stay under this checkout's ignored work/user; never
 upload or commit that directory. Session mode runs its own terminal menu and

@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from urllib.request import urlopen
 
 from .profiles import resolve_profile, PUBLIC
@@ -485,6 +486,59 @@ def doctor(home):
     return diagnose(ROOT, home, cfg)
 
 
+def gpio_self_test(home):
+    cfg = load_config(home)
+    if cfg.get("hardware") != "pi":
+        raise SetupError("GPIO is not enabled in this checkout; review setup before running a physical test")
+    print("This test briefly cycles the RGB LED and displays 1234 with the colon.")
+    print("It directly drives only the configured LED/display pins; stop the assistant first.")
+    if not yes("Run the physical GPIO/display test now?"):
+        print("GPIO test cancelled; no result recorded.")
+        return 1
+
+    from .hardware.devices import PiHardware
+    hardware = None
+    error = None
+    observed = {"rgb_sequence": False, "display_1234_colon": False}
+    try:
+        hardware = PiHardware()
+        for color in ((1, 0, 0), (0, 1, 0), (0, 0, 1)):
+            hardware.led(color)
+            time.sleep(.7)
+        hardware.led((0, 0, 0))
+        hardware.display("1234", True)
+        observed["rgb_sequence"] = yes("Did the LED visibly show red, green, then blue?")
+        observed["display_1234_colon"] = yes("Does the display currently show 1234 with the colon?")
+    except Exception as exc:
+        error = type(exc).__name__
+    finally:
+        if hardware is not None:
+            try:
+                hardware.led((0, 0, 0))
+                hardware.display("    ")
+            except Exception as exc:
+                error = error or type(exc).__name__
+            try:
+                hardware.close()
+            except Exception as exc:
+                error = error or type(exc).__name__
+
+    if error:
+        print(f"GPIO write failed ({error}); visual confirmation was not requested.")
+    passed = not error and all(observed.values())
+    result = dict(
+        created_utc=datetime.now(timezone.utc).isoformat(),
+        status="PASS" if passed else "FAIL",
+        scope="operator-confirmed physical GPIO/display check; not model-to-action validation",
+        observations=observed,
+        driver_error=error,
+        wiring="RGB BCM17/27/22; TM1637 CLK/DIO BCM23/24",
+    )
+    private_json(home / "gpio_check.json", result)
+    print(f"GPIO/display {result['status']}; result saved privately in this checkout")
+    return 0 if passed else 1
+
+
 def session_menu(home):
     if not Path("/dev/shm").is_dir():
         raise SetupError("Session-only mode requires /dev/shm; persistent private setup is available")
@@ -559,6 +613,7 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("install"); p.add_argument("--uv", action="store_true")
     p = sub.add_parser("setup"); p.add_argument("--session", action="store_true")
+    sub.add_parser("gpio", help="Run and record a physical RGB LED/TM1637 check")
     p = sub.add_parser("config", help="Update one value in this checkout's private setup")
     config_sub = p.add_subparsers(dest="config_action", required=True)
     p = config_sub.add_parser("set")
@@ -586,6 +641,8 @@ def main():
         return 0
     if args.action == "doctor":
         return doctor(home)
+    if args.action == "gpio":
+        return gpio_self_test(home)
     if args.action == "config":
         return update_config(home, args.key, args.value)
     if args.action == "evaluate":
