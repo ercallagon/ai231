@@ -163,6 +163,70 @@ claims action or synthesized-speech latency. Model-only RTF uses nominal input
 capacity; injected RTF uses each actual waveform duration. Preserve raw JSON.
 If timing both profiles, use identical thermal, power and thread conditions.
 
+### Fresh inference-latency run for slides
+
+Live speech is not required for **feature preprocessing + model inference**
+latency. Use the entire frozen test manifest (4,693 recordings) and report
+holdout (202 recordings) separately. These counts are attempted recordings;
+only successfully processed recordings have inference timings. Report the
+timed count and full-manifest processing failures alongside p95. Do not choose
+whichever split gives the smaller latency. For a brief manual latency check,
+30 trials are preliminary and 100 or more are preferable; the complete test
+run is the recommended measurement for submission.
+
+For a fresh selected-model run, stop other assistant/benchmark processes and
+use the following in one Pi SSH session. The unique directory preserves all
+previous logs, including pi5_test_01. Cached pinned downloads are reused.
+
+```bash
+cd ~/ai231
+git pull --ff-only
+cd me2-vcm
+mkdir -p work
+PI_RUN=$(mktemp -d work/pi5_inference_XXXXXXXX)
+git rev-parse HEAD > "$PI_RUN/source_revision.txt"
+.venv/bin/python -m pip freeze > "$PI_RUN/packages.txt"
+set -o pipefail
+.venv/bin/python -u scripts/reproduce.py reproduce --profiles selected --splits test holdout --fetch --output "$PI_RUN/injection" 2>&1 | tee "$PI_RUN/injection.log"
+echo "Results directory: $PI_RUN"
+```
+
+The script prints progress and ends with `Frozen evaluation complete:`; the
+injection/COMPLETE.json file is written only after both splits finish. If the
+command fails, retain the log and partial results; do not rerun into that output
+directory. To compare the fallback too, include `run043` after `--profiles
+selected` before starting a new run. Keep the Pi's power/cooling conditions
+fixed and avoid concurrent workloads. A single manifest pass measures a
+recording workload, not independent speakers or repeated-device uncertainty.
+
+Retrieve the printed results directory with the scp command below, substituting its
+actual path for work/pi5_test_01. The authoritative output fields are:
+
+| File/field | Meaning |
+| --- | --- |
+| injection/test_RESULTS.json: selected.infer_p95_ms | Test feature preprocessing + ONNX p95, ms |
+| injection/test_RESULTS.json: selected.per_clip_rtf_p95 | p95 of each processed clip's processing time / original waveform duration |
+| injection/test_RESULTS.json: selected.infer_scope | Exact measurement scope |
+| injection/test_RESULTS.json: selected.processed_subsets.all | Manifest/processed counts and failures |
+| injection/test_selected_timings.json | One entry per processed recording; feature_ms, model_ms, infer_ms, audio_ms |
+| injection/holdout_RESULTS.json and holdout_selected_timings.json | Separate holdout results and timing entries |
+
+`infer_ms` starts immediately before feature preprocessing and stops when
+`session.run()` returns model outputs. It excludes file download, audio decode,
+resampling, microphone capture, endpoint waiting, post-model decision mapping,
+action services and TTS. The pinned input waveforms are already 16 kHz mono.
+RTF uses each original recording duration, not the model's six-second capacity;
+compute its percentile from per-recording ratios, not p95 time / six seconds.
+The timings include the first inference (no discarded warm-up); the separate
+model-only cost script uses 30 warm-up and 200 measured passes. Record this
+distinction instead of treating the two scripts as equivalent.
+
+Suggested slide label: **Pi 5 CPU, 1 intra-op / 1 inter-op thread: feature
+preprocessing + model inference p95 ___ ms; RTF p95 ___; N ___ processed test
+recordings (___ attempted; ___ failures).** Speech-end to decision latency is
+separate and still requires live/acoustic capture. No real action is executed
+by this injection run.
+
 From Windows, retrieve results using the existing LAN/SSH route:
 
 ```powershell
