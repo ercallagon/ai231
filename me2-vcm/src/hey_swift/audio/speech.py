@@ -33,14 +33,31 @@ class MockSpeech:
         self.messages.append(text)
 
 
-def play_wav(path: Path, *, timeout=60) -> None:
+def _pipewire_command(path, *, volume, sink=None, channel):
+    properties = {
+        "application.name": f"Hey Swift {channel.title()}",
+        "application.id": f"org.hey-swift.{channel}",
+        "media.role": "Notification",
+        "state.restore-props": False,
+        "state.restore-target": False,
+    }
+    return ["pw-play", "--volume", f"{volume:g}",
+            "--properties", json.dumps(properties), "--target", sink or "auto",
+            str(path)]
+
+
+def play_wav(path: Path, *, timeout=60, sink=None) -> None:
     if sys.platform == "win32":
         import winsound
         winsound.PlaySound(str(path), winsound.SND_FILENAME)
     elif sys.platform.startswith("linux"):
         if shutil.which("pw-play"):
-            subprocess.run(["pw-play", str(path)], check=True, timeout=timeout)
+            target = speech_playback_sink(sink if sink is not None else "")
+            subprocess.run(_pipewire_command(path, volume=1., sink=target, channel="cue"),
+                           check=True, timeout=timeout)
         else:
+            if sink:
+                raise SpeechUnavailable("A cue output target requires pw-play.")
             subprocess.run(["aplay", "-q", str(path)], check=True, timeout=timeout)
     else:
         raise SpeechUnavailable("No playback adapter configured for this platform.")
@@ -71,11 +88,7 @@ def play_speech_wav(path: Path, *, timeout=60, volume=None) -> None:
         gain = speech_playback_volume(volume)
         sink = speech_playback_sink()
         if shutil.which("pw-play"):
-            command = ["pw-play", "--volume", f"{gain:g}"]
-            if sink:
-                command.extend(["--target", sink])
-            command.append(str(path))
-            subprocess.run(command,
+            subprocess.run(_pipewire_command(path, volume=gain, sink=sink, channel="speech"),
                            check=True, timeout=timeout)
             return
         if shutil.which("paplay"):

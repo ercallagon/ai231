@@ -336,14 +336,7 @@ def _play_ack(playback, path: Path | None, *, gain_db=0., sink=None) -> None:
             # Match the working speech output: PipeWire default sink, then ALSA.
             from hey_swift.audio.speech import play_wav
             with prepared_cue(path, gain_db) as (cue, metadata):
-                if sink:
-                    import shutil
-                    import subprocess
-                    if not shutil.which("pw-play"):
-                        raise RuntimeError("A cue sink requires pw-play; no ALSA fallback to a different sink")
-                    subprocess.run(["pw-play", "--target", sink, str(cue)], check=True, timeout=3)
-                else:
-                    play_wav(cue, timeout=3)
+                play_wav(cue, timeout=3, sink=sink)
                 _emit({"event": "cue_levels", "sink": sink or "default", **metadata})
         else:
             with prepared_cue(path, gain_db) as (cue, metadata):

@@ -272,6 +272,16 @@ other inherited `VCM_*` variables. With no volume override, every new run starts
 `pw-play` (or `paplay`) is required to apply speech-only gain; the runtime will
 not raise global output volume as a fallback.
 
+Speech and wake cues have distinct `Hey Swift Speech` / `Hey Swift Cue` stream
+identities with the Notification role. Their PipeWire properties disable saved
+volume/mute/channel-map and target restoration; otherwise an old `pw-play`
+setting can override the requested behavior. They follow the current OS default
+output unless explicitly targeted. Cue playback starts at unity stream volume;
+its separate peak-limited cue gain still applies. No speaker node is hard-coded.
+These settings isolate application streams, not the physical amplifier: tablet
+changes to Spotify volume affect music, but changes to the shared speaker's
+master/hardware volume still affect speech and cues too.
+
 With Spotify enabled, live startup warms its saved-login daemon for up to
 15 seconds before listening, without requesting activation or playback.
 Play music then performs automatic activation and confirms playback within

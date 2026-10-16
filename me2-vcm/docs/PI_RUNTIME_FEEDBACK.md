@@ -9,6 +9,19 @@ require the checks below.
 
 ## Findings and Changes
 
+Follow-up: the operator reported that a unity-gain cue with an explicit USB
+target, a new application identity, Notification role and disabled stream state
+restoration was louder than plain `pw-play --volume 1.0`. Both direct/generated
+speech paths had been quiet; the generated WAV RMS was -16.7 dBFS, sink 0.90,
+and USB PCM playback was enabled at 90% (-3.74 dB). This combined probe supports
+stream-state/routing involvement but does not isolate its individual cause.
+Speech and both default/explicit-target cue paths now use distinct application
+identities, Notification role, and `state.restore-props=false` /
+`state.restore-target=false`. Default output follows the current OS selection;
+no Pi-specific output name, global volume, Bluetooth profile or music cap is
+changed. Full assistant audibility and tablet-volume isolation remain Pi checks.
+See `reports/PI_STREAM_STATE_FIX_20261016.md`.
+
 | Observation | Evidence and resulting behavior |
 | --- | --- |
 | Spoken empty-capture feedback interrupts the demo | The router spoke every rejection. Empty captures now log and return quietly; `--speak-no-speech` opts into speech. Other rejection feedback remains. |

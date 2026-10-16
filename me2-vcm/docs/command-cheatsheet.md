@@ -58,6 +58,12 @@ last for the current run. Piper TTS has independent per-stream volume (default
 and `VCM_SPEECH_SINK=EXACT_NODE_NAME`. Chime, music, call and global sink levels
 are controlled separately.
 
+Speech and cue playback use distinct Notification streams and disable restored
+stream volume/mute/target state. Music commands and terminal `:volume` controls
+address the selected player only. A tablet that changes the shared speaker's
+master volume can still change every sound; app isolation cannot override the
+physical output gain. Pi audibility after this update must be checked directly.
+
 Advanced flags below belong to `.venv/bin/python scripts/run_assistant.py`,
 not the public `./swift run` wrapper:
 

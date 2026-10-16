@@ -21,7 +21,13 @@ def test_tts_uses_per_stream_volume_and_validates_override(monkeypatch, tmp_path
     speech.play_speech_wav(tmp_path / "phrase.wav")
     assert [call[0][2] for call in calls] == ["0.5", "0.72"]
     assert all(call[0][0] == "pw-play" and call[0][1] == "--volume" for call in calls)
-    assert calls[1][0][3:5] == ["--target", "alsa_output.usb-test"]
+    assert calls[1][0][calls[1][0].index("--target") + 1] == "alsa_output.usb-test"
+    for command, _ in calls:
+        properties = json.loads(command[command.index("--properties") + 1])
+        assert properties["state.restore-props"] is False
+        assert properties["state.restore-target"] is False
+        assert properties["media.role"] == "Notification"
+        assert properties["application.id"] == "org.hey-swift.speech"
 
     for value in ("nan", "inf", "-0.1", "1.1", "loud"):
         with monkeypatch.context() as scoped:
@@ -87,3 +93,54 @@ def test_tts_refuses_uncontrollable_attenuation_without_global_gain(monkeypatch,
     with pytest.raises(speech.SpeechUnavailable, match="no global audio setting was changed"):
         speech.play_speech_wav(tmp_path / "phrase.wav")
     assert calls == []
+
+
+def test_cue_has_own_identity_and_ignores_speech_gain_and_target(monkeypatch, tmp_path):
+    commands = []
+    monkeypatch.setattr(speech.sys, "platform", "linux")
+    monkeypatch.setattr(speech.shutil, "which", lambda name: "/usr/bin/pw-play" if name == "pw-play" else None)
+    monkeypatch.setattr(speech.subprocess, "run", lambda command, **kwargs: commands.append(command))
+    monkeypatch.setenv("VCM_SPEECH_CHANNEL_VOLUME", "0.1")
+    monkeypatch.setenv("VCM_SPEECH_SINK", "speech-only-target")
+
+    speech.play_wav(tmp_path / "cue.wav")
+    speech.play_wav(tmp_path / "cue.wav", sink="cue-only-target")
+    speech.play_speech_wav(tmp_path / "speech.wav")
+
+    assert [command[2] for command in commands] == ["1", "1", "0.1"]
+    assert [command[command.index("--target") + 1] for command in commands] == [
+        "auto", "cue-only-target", "speech-only-target"]
+    properties = [json.loads(command[command.index("--properties") + 1]) for command in commands]
+    assert [props["application.id"] for props in properties] == [
+        "org.hey-swift.cue", "org.hey-swift.cue", "org.hey-swift.speech"]
+    assert all(props["state.restore-props"] is False and props["state.restore-target"] is False
+               for props in properties)
+
+
+@pytest.mark.parametrize("sink", [None, "cue-only-target"])
+def test_actual_ack_uses_state_isolated_cue_playback(monkeypatch, tmp_path, sink):
+    from hey_swift.integration import e2e_loop
+
+    path = tmp_path / "cue.wav"
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16000)
+        output.writeframes(b"\0\0" * 160)
+    commands = []
+    events = []
+    monkeypatch.setattr(speech.sys, "platform", "linux")
+    monkeypatch.setattr(speech.shutil, "which", lambda name: "/usr/bin/pw-play" if name == "pw-play" else None)
+    monkeypatch.setattr(speech.subprocess, "run", lambda command, **kwargs: commands.append(command))
+    monkeypatch.setattr(e2e_loop, "_emit", events.append)
+
+    e2e_loop._play_ack(object(), path, sink=sink)
+
+    assert len(commands) == 1
+    command = commands[0]
+    properties = json.loads(command[command.index("--properties") + 1])
+    assert properties["application.id"] == "org.hey-swift.cue"
+    assert properties["state.restore-props"] is False
+    assert properties["state.restore-target"] is False
+    assert command[command.index("--target") + 1] == (sink or "auto")
+    assert any(event.get("event") == "ack" and event.get("status") == "ok" for event in events)
