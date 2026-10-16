@@ -273,7 +273,7 @@ class SoloistBackend:
             with os.fdopen(descriptor, "ab") as log:
                 process = self.launcher([str(Path(self.binary).resolve()), "-n", "Swift Pi", "-k", key,
                     "-D", str(runtime.resolve()), "-C", str((runtime / "cache").resolve()),
-                    "-z", "100", "-i", "60", "-w", "127.0.0.1:3679"],
+                    "-z", "100", "-i", os.environ.get("VCM_SOLOIST_INITIAL_VOLUME", "60"), "-w", os.environ.get("VCM_SOLOIST_WS", "127.0.0.1:3679")],
                     stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
             deadline = time.monotonic() + self.startup_timeout
             if self._operation_deadline is not None:
@@ -290,6 +290,11 @@ class SoloistBackend:
         raise MusicUnavailable("Soloist startup timed out. Check its private startup log.")
 
     def read_key(self):
+        session_key = os.environ.get("VCM_SOLOIST_API_KEY")
+        if session_key:
+            if any(c.isspace() for c in session_key):
+                raise MusicUnavailable("Invalid session Soloist key")
+            return session_key
         if self.key_file.stat().st_mode & 0o077:
             raise MusicUnavailable("Set the Soloist API key file permissions to 600.")
         key = self.key_file.read_text().strip()

@@ -1,0 +1,10 @@
+{
+  "models": {
+    "champion": {"legacy_profile": "selected", "historical_run": "bc8_fullcontext_tcn_asp_s42", "parameters": 488264, "threshold": 0.954, "capacity_seconds": 6, "architecture": "scratch BC8 + residual temporal CNN + masked attentive statistics pooling; intent and six slot heads", "model_sha256": "edb9c14b384a9ff08f524e93a3c4b4def69dfe4140fbd98f997f2ad0abea3d88"},
+    "baseline": {"legacy_profile": "run043", "historical_run": "run_043_hf_grouped_v2b_bc8_sourceft_s42", "parameters": 327750, "threshold": 0.875, "capacity_seconds": 2, "architecture": "scratch BC8 with hierarchical intent and slot heads", "model_sha256": "2dfde6cb9dc20ac923ac635a92722b2e238464acdc73af63232bf1c916c590b2"},
+    "wakeword": {"legacy_profile": "exp15", "parameters": 204738, "threshold": 0.30, "capacity_seconds": 1, "architecture": "scratch CNN + GRU", "model_sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b"}
+  },
+  "training": {"source": "experiments/selected/TRAINING_ACCOUNTING.json", "eligible_rows": 25330, "manifest_rows": 25366, "excluded_rows": 36, "seed": 42, "epochs_completed": 72, "selected_epoch": 52, "gpu": "one A100-SXM4-40GB", "allocated_gpu_hours_including_validation_and_host_overhead": 3.6464517561291965, "optimizer": "AdamW lr 0.0003 wd 0.01; ReduceLROnPlateau", "batch_size": 32, "derived_optimizer_steps": 57024},
+  "wake_clip_reference": {"source": "experiments/wakeword/corrected_test.json", "scope": "historical isolated clip features, exposed test; synthetic positives only; not Pi streaming", "n": 1113, "positives": 385, "negatives": 728, "tp": 252, "fp": 28, "fn": 133, "tn": 700, "accuracy": 0.8553459119496856, "precision": 0.9, "recall": 0.6545454545454545, "f1": 0.7578947368421053, "negative_clip_fpr": 0.038461538461538464},
+  "limits": "Previously exposed test/holdout; no independent confirmation. Group IDs do not prove human speaker identity. Single-seed model comparison differs in capacity/frontend/training lineage. Complete-word retention remains manually unverified. No pretrained weights initialize the detectors. Piper voices are optional synthesis assets with separate terms."
+}

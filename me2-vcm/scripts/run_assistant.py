@@ -11,7 +11,8 @@ sys.path.insert(0,str(ROOT/"src"))
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile",choices=("selected","run043"),default="selected")
+    from hey_swift.profiles import resolve_profile
+    parser.add_argument("--profile",type=resolve_profile,default="selected",help="champion or baseline; legacy selected/run043 accepted")
     parser.add_argument("--wake-profile",default="exp15")
     args,extra=parser.parse_known_args()
     os.chdir(ROOT)

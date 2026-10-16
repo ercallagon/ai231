@@ -1,5 +1,6 @@
 {
   "default": "selected",
+  "aliases": {"champion": "selected", "baseline": "run043"},
   "profiles": {
     "selected": {
       "model": "models/vcm/selected.onnx",

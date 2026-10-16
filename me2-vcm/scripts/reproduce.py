@@ -18,7 +18,8 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument("action",choices=("verify","reproduce"),nargs="?",default="verify")
     ap.add_argument("--splits",nargs="+",choices=("val","tune_oos","test","holdout"),default=["test","holdout"])
-    ap.add_argument("--profiles",nargs="+",choices=("selected","run043"),default=["selected","run043"])
+    from hey_swift.profiles import resolve_profile
+    ap.add_argument("--profiles",nargs="+",type=resolve_profile,default=["selected","run043"],help="champion/baseline or historical IDs; output keys remain selected/run043")
     ap.add_argument("--data-root",type=Path,default=ROOT/"data/vcm/raw")
     ap.add_argument("--fetch",action="store_true")
     ap.add_argument("--output",type=Path)
@@ -115,6 +116,15 @@ def main():
         for name,model in models.items():
             out=outputs[name];slots={n:out["slot_"+n] for n in D.tax().slotted_intents}
             m=metrics(out["intent_logits"],slots,valid[name],rows,split,1.,model.tau)
+            # Slot accuracy given the true family, independent of intent prediction.
+            slot_metrics = {}
+            for intent in D.tax().slotted_intents:
+                target = (y == D.tax().intent_to_idx[intent]) & (ys >= 0) & ~unsupported
+                correct_slot = valid[name] & (slots[intent].argmax(1) == ys)
+                n = int(target.sum()); k = int((target & correct_slot).sum())
+                slot_metrics[intent] = dict(n=n, correct=k, rate=k/n if n else None,
+                    failures=int((target & ~valid[name]).sum()))
+            m["slot_accuracy_given_true_family"] = slot_metrics
             probability=softmax(out["intent_logits"],axis=1);pred=probability.argmax(1)
             accepted=valid[name]&(pred!=19)&(probability.max(1)>=model.tau)&~((pred==15)&(slots["TEMPERATURE"].argmax(1)==3))
             joint=valid[name]&(pred==y)

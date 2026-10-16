@@ -7,11 +7,13 @@ from pathlib import Path
 import subprocess
 import sys
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/"src"))
 
 
 def main():
     ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--profile",choices=("selected","run043"),default="selected")
+    from hey_swift.profiles import resolve_profile
+    ap.add_argument("--profile",type=resolve_profile,default="selected",help="champion or baseline; legacy IDs accepted")
     ap.add_argument("--device",default="0")
     ap.add_argument("--log-dir",type=Path,default=Path.home()/"vcm_benchmark")
     args=ap.parse_args()

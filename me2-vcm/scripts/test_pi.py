@@ -13,6 +13,8 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+from hey_swift.profiles import PUBLIC
 PROFILES = ("run043", "selected")
 SPLITS = ("test", "holdout")
 
@@ -37,6 +39,9 @@ def run_logged(command, root, path):
     with path.open("x", buffering=1) as log:
         child = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, bufsize=1)
+        from hey_swift.telemetry import ResourceSampler
+        monitor = ResourceSampler(child.pid, path.parent / "resources.json")
+        monitor.start()
         try:
             for line in child.stdout:
                 print(line, end="", flush=True)
@@ -50,6 +55,7 @@ def run_logged(command, root, path):
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
+            monitor.finish()
 
 
 def summarize(root, output):
@@ -84,7 +90,7 @@ def summarize(root, output):
     for split in SPLITS:
         for name in PROFILES:
             row = summary["profiles"][name][split]
-            print(f"{name:9} {split:8} {row['processed_n']:5}/{row['manifest_n']:<8} "
+            print(f"{PUBLIC[name]:9} {split:8} {row['processed_n']:5}/{row['manifest_n']:<8} "
                   f"{row['infer_p95_ms']:9.2f}  {row['per_clip_rtf_p95']:.5f}", flush=True)
     print("Full recognition/rejection metrics: injection/test_RESULTS.json and holdout_RESULTS.json", flush=True)
     return summary
@@ -133,7 +139,7 @@ def main():
             note="Stop other assistants/benchmarks; raw audio caches are reused. "
                  "No actions, training or threshold fitting. Physical acoustic tests are separate.")
         (output / "ENVIRONMENT.json").write_text(json.dumps(environment, indent=2) + "\n")
-        print("Baseline: run043 | current selected model: selected", flush=True)
+        print("Baseline: baseline (run043) | Champion: champion (selected)", flush=True)
         print("Evaluating frozen test + holdout; results: " + str(output), flush=True)
         code = run_logged(command, ROOT, output / "injection.log")
         if code:

@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 import json
+import os
 import threading
 import time
 from urllib.error import URLError
@@ -43,7 +44,8 @@ class OpenMeteoWeatherProvider:
         self.offline = offline
         self.wait_seconds = wait_seconds
         self.url = "https://api.open-meteo.com/v1/forecast?" + urlencode({
-            "latitude": 14.6488, "longitude": 121.0509,
+            "latitude": float(os.environ.get("VCM_WEATHER_LATITUDE", "14.6488")),
+            "longitude": float(os.environ.get("VCM_WEATHER_LONGITUDE", "121.0509")),
             "current": "temperature_2m,weather_code", "temperature_unit": "celsius",
             "timezone": "Asia/Manila", "timeformat": "unixtime", "forecast_days": 1,
         })
@@ -119,7 +121,7 @@ class OpenMeteoWeatherProvider:
             observed = datetime.fromtimestamp(timestamp, timezone(timedelta(hours=8)))
             if not -timedelta(minutes=15) <= now - observed <= timedelta(hours=2):
                 raise ValueError("Weather timestamp is not current")
-            reading = WeatherReading("Quezon City, Philippines", float(temperature), description, observed)
+            reading = WeatherReading(os.environ.get("VCM_WEATHER_CITY", "Quezon City, Philippines"), float(temperature), description, observed)
         except (URLError, OSError, ValueError, KeyError, TypeError, OverflowError) as exc:
             self._retry_after = time.monotonic() + 30
             raise WeatherUnavailable("Unable to obtain current Quezon City weather") from exc

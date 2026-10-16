@@ -1,0 +1,30 @@
+{
+  "uv_version": "0.13.1",
+  "target": "Debian 13 ARM64 CPython 3.13",
+  "resolution": "aarch64-unknown-linux-gnu, hashes, binary-only",
+  "wheel_download_verification": "pip --require-hashes --only-binary, cp313/abi3, manylinux_2_28_aarch64/manylinux2014_aarch64",
+  "wheels": [
+    "cffi-2.1.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+    "colorzero-2.0-py2.py3-none-any.whl",
+    "dbus_next-0.2.3-py3-none-any.whl",
+    "flatbuffers-25.12.19-py2.py3-none-any.whl",
+    "gpiozero-2.0.1.post3-py3-none-any.whl",
+    "numpy-2.5.4-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+    "onnxruntime-1.30.0-cp313-cp313-manylinux_2_28_aarch64.whl",
+    "packaging-26.3-py3-none-any.whl",
+    "pathvalidate-3.3.1-py3-none-any.whl",
+    "piper_tts-1.8.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.manylinux_2_28_aarch64.whl",
+    "protobuf-7.36.2-cp310-abi3-manylinux2014_aarch64.whl",
+    "pyarrow-23.0.1-cp313-cp313-manylinux_2_28_aarch64.whl",
+    "pycparser-3.11-py3-none-any.whl",
+    "pyyaml-6.0.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl",
+    "scipy-1.18.1-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl",
+    "setuptools-84.0.0-py3-none-any.whl",
+    "sounddevice-0.5.6-py3-none-any.whl",
+    "soundfile-0.13.1-py2.py3-none-manylinux_2_28_aarch64.whl"
+  ],
+  "target_execution": "PENDING Pi SSH dry run",
+  "lgpio": "OS apt package excluded from lock; actual Pi import pending",
+  "uv_venv_flag_probe": "PASS on host /usr/bin/python3 3.12.3; not target ABI verification",
+  "decision": "hashed requirements locks committed; pip default, uv optional until target imports pass"
+}

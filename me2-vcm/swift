@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+SWIFT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$#" -eq 0 ]; then set -- --help; fi
+case "$1" in
+  install|--help|-h) exec /usr/bin/python3 "$SWIFT_ROOT/scripts/swift.py" "$@" ;;
+esac
+if [ ! -x "$SWIFT_ROOT/.venv/bin/python" ]; then
+  echo "Run ./swift install first in this checkout." >&2
+  exit 1
+fi
+exec "$SWIFT_ROOT/.venv/bin/python" "$SWIFT_ROOT/scripts/swift.py" "$@"

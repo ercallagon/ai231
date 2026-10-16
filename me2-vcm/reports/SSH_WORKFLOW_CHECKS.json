@@ -1,0 +1,12 @@
+{
+  "scope": "Public SSH deployment workflow; host checks are not Pi verification",
+  "host_regressions": {"passed": 76, "coverage": "profile aliases and immutable hashes/gates, private/session wizard, credential isolation, explicit communication approval, selective integrations, runtime capture/router, music safety, fixture injection/slot metrics, report missing-data handling, reset/archive and latency summaries"},
+  "clean_environment": {"python": "3.12.3 host, not ARM target", "locked_packages_installed": 16, "torch_present": false, "frozen_artifact_and_model_contract_verification": "PASS", "report_generation_without_target_results": "PASS, explicitly missing"},
+  "arm64_python313": {"base_and_speech_wheel_downloads_with_hashes": "PASS", "binary_only": true, "source_builds": false, "actual_target_imports": "PENDING"},
+  "uv": {"version": "0.13.1", "host_system_interpreter_venv_flags": "PASS", "pi_lgpio_ABI": "PENDING", "policy": "pip default; uv optional; scoped committed hash locks"},
+  "preserved": {"champion_model_sha256": "edb9c14b384a9ff08f524e93a3c4b4def69dfe4140fbd98f997f2ad0abea3d88", "baseline_model_sha256": "2dfde6cb9dc20ac923ac635a92722b2e238464acdc73af63232bf1c916c590b2", "wakeword_model_sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b", "thresholds": [0.954, 0.875, 0.30], "hardware_BCM": {"RGB": [17,27,22], "TM1637": [23,24]}},
+  "no_training_or_calibration": true,
+  "no_real_calls_or_SMS": true,
+  "pi_dry_run": "PENDING user SSH outputs from separate ~/swift-clean checkout/venv/state; working deployments untouched",
+  "limitations": ["Shared OS, audio/Bluetooth state and hardware: not fresh-OS testing", "Physical audio, authorization/pairing, GPIO and demo effects require Pi/phone observation", "Exposed test/holdout and synthetic wake positives remain disclosed", "Independent-speaker and annotated acoustic latency evidence unavailable"]
+}

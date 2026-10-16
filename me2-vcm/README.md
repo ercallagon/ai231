@@ -1,5 +1,27 @@
 # ME2: Voice Controlled Smart Device (Hey Swift)
 
+**New Raspberry Pi users:** follow [the SSH quickstart](docs/QUICKSTART_PI.md).
+It creates a separate checkout, environment and private setup without importing
+another installation's accounts. Public names are **champion** (legacy selected)
+and **baseline** (legacy run043); all original model hashes and gates remain.
+
+After the quickstart installation, the commands are:
+
+```bash
+./swift setup
+./swift doctor
+./swift run --model champion
+./swift evaluate --reset
+./swift live-latency --model champion
+./swift report
+```
+
+`run` previews actions; `demo` guides configured real effects with per-call/SMS
+confirmation. The report consolidates frozen recognition, timing, rejection,
+cohort/family/coverage, resource and historical training/wake evidence; missing
+physical/acoustic results stay explicit. See [metric scopes](docs/METRICS.md)
+and [the ARM64 locks/uv decision](docs/DEPENDENCIES.md).
+
 This project runs Hey Swift -> command capture -> intent and slots -> rejection
 -> preview/action -> idle listening. The repository default is the frozen
 six-second **BC8 + temporal CNN + attentive statistics pooling** model at
@@ -93,12 +115,15 @@ benchmarking and rollback. The working /home/ej/swift-e2e installation is not
 modified by these commands.
 
 ```bash
-python scripts/run_assistant.py --profile selected --device 0 --offline
-python scripts/run_assistant.py --profile run043 --device 0 --offline
+python scripts/run_assistant.py --profile champion --device 0 --offline
+python scripts/run_assistant.py --profile baseline --device 0 --offline
 ```
 
 Actions default to preview/mock; calls/SMS are not required for testing.
 Optional speech/music need separately obtained assets and private configuration.
+Legacy entry points remain available. Spotify account discovery now defaults to
+bundled private state; selecting standalone/auto reuse requires explicit local
+configuration. The new SSH workflow always isolates state and inherited secrets.
 The generated cue is owned by this project; preserve the working Pi's local cue.
 Energy endpointing has no pretrained weights. The pause-tolerant default waits
 1.2 seconds of silence, adding endpoint latency; its Pi behavior is unverified.

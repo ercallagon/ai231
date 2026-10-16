@@ -13,12 +13,12 @@ reset archives the existing test folder, including any decision logs. Do not
 reset during an active acoustic benchmark. Then run:
 
 ```bash
-cd ~/ai231/me2-vcm
-.venv/bin/python scripts/run_benchmark_assistant.py --profile selected --device 0 --log-dir work/pi5_test_01/selected_logs
+cd ~/swift-clean/me2-vcm
+.venv/bin/python scripts/run_benchmark_assistant.py --profile champion --device 0 --log-dir work/pi5_test_01/official_champion_logs
 ```
 
 The launcher uses preview actions, no synthesized speech and offline services;
-it writes wake/decision records to the selected_logs directory. Each record is flushed
+it writes wake/decision records to the official_champion_logs directory. Each record is flushed
 immediately after recognition and before services. Rejections log OUT_OF_SCOPE.
 infer_ms covers input preparation, features and ONNX; audio_ms is actual model
 waveform duration. A preprocessing failure has zero processed audio and should
@@ -33,7 +33,7 @@ of the flushed record. Existing `infer_ms` keeps its original meaning.
 After stopping the assistant with Ctrl+C, summarize its saved logs on the Pi:
 
 ```bash
-.venv/bin/python scripts/summarize_runtime_latency.py work/pi5_test_01/selected_logs --output work/pi5_test_01/selected_live_latency.json
+.venv/bin/python scripts/summarize_runtime_latency.py work/pi5_test_01/official_champion_logs --output work/pi5_test_01/selected_live_latency.json
 ```
 
 Retain this supplementary JSON with the official benchmark outputs. It reports
@@ -52,9 +52,9 @@ cd vcm-benchmark
 git checkout ab39857cf73dd067d068fed388c321ab160dc191
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-scp ej@192.168.100.103:~/ai231/me2-vcm/data/vcm/raw/data/holdout-00000-of-00001.parquet .\holdout_frozen.parquet
+scp ej@192.168.100.103:~/swift-clean/me2-vcm/data/vcm/raw/data/holdout-00000-of-00001.parquet .\holdout_frozen.parquet
 if ((Get-FileHash .\holdout_frozen.parquet -Algorithm SHA256).Hash -ne 'c36227c81eee4eac63de62cee94631ee9e73952ccf8e16c27912eb049508eb6e') { throw 'Holdout checksum mismatch' }
-.\.venv\Scripts\python.exe benchmark.py --mode ssh --host ej@192.168.100.103 --proc run_assistant.py --log-dir /home/ej/ai231/me2-vcm/work/pi5_test_01/selected_logs --wake-word "Hey Swift" --size full --seed 42 --wake-gap 0.8 --holdout .\holdout_frozen.parquet --model pi:~/ai231/me2-vcm/models/vcm/selected.onnx
+.\.venv\Scripts\python.exe benchmark.py --mode ssh --host ej@192.168.100.103 --proc run_assistant.py --log-dir /home/ej/swift-clean/me2-vcm/work/pi5_test_01/official_champion_logs --wake-word "Hey Swift" --size full --seed 42 --wake-gap 0.8 --holdout .\holdout_frozen.parquet --model pi:~/swift-clean/me2-vcm/models/vcm/selected.onnx
 ```
 
 Initial setup asks for speaker/microphone selection, SSH authentication, three
@@ -80,7 +80,7 @@ config.json, plan.json and the Pi decision log. Label results as previously
 exposed class holdout, not pristine unseen-speaker confirmation. Report wake
 false triggers, command OOS false accepts and recognition separately.
 
-For run_043 repeat under the same frozen conditions with --profile run043 on
+For run_043 repeat under the same frozen conditions with --profile baseline on
 Pi and its ONNX path on the laptop; this changes capture policy as documented.
 No test result may be used to adjust model weights or the frozen threshold.
 No real calls/SMS or music playback is needed for benchmark execution.

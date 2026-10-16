@@ -44,7 +44,7 @@ def communication_values():
 
 
 def spotify_paths(bundle_root):
-    """Prefer the existing standalone configuration instead of cloning its login.
+    """Use bundled state unless standalone/auto reuse was explicitly selected.
 
     A fresh deployment with no standalone installation uses bundled paths.
     Explicit environment paths override the selected profile.
@@ -59,7 +59,7 @@ def spotify_paths(bundle_root):
         and (candidate / "work/soloist-runtime/api-key").is_file()), project)
     standalone_binary = selected_project / "work/tools/soloist/soloist"
     standalone_data = selected_project / "work/soloist-runtime"
-    profile = os.environ.get("VCM_SOLOIST_PROFILE", "auto")
+    profile = os.environ.get("VCM_SOLOIST_PROFILE", "bundled")
     if profile not in {"auto", "standalone", "bundled"}:
         raise ValueError("VCM_SOLOIST_PROFILE must be auto, standalone, or bundled.")
     if profile == "auto":

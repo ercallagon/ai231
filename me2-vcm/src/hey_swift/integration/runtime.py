@@ -69,6 +69,18 @@ class ConfiguredMessaging:
         return service.execute(intent, slot_value)
 
 
+class ConfirmedCommunication:
+    """The public workflow requests terminal approval for every real call/SMS."""
+    def __init__(self, service):
+        self.service = service
+
+    def execute(self, intent, slot_value=None, **kwargs):
+        import sys
+        if not sys.stdin.isatty() or input(f"Type {intent} to authorize this real action: ").strip() != intent:
+            return ActionResult(intent, "cancelled", "Communication was not authorized.")
+        return self.service.execute(intent, slot_value, **kwargs)
+
+
 class ScheduledDevices(DeviceActions):
     """Router speaks command results; workers speak completion through same TTS."""
     def _say(self, message):
@@ -183,40 +195,55 @@ def build_router(*, live=False, hardware="mock", speak=False,
     offline_mode = bool(offline)
     if Path.cwd().resolve() != ROOT:
         raise RuntimeError("Call prepare_workspace() before building the integration runtime.")
-    speech = (SpeechService(PiperSpeech(ROOT / "assets/voices/en_US-amy-medium.onnx",
+    enabled_text = os.environ.get("HEY_SWIFT_ENABLED_INTEGRATIONS")
+    enabled = set(GROUPS) if enabled_text is None else set(filter(None, enabled_text.split(",")))
+    if enabled - set(GROUPS):
+        raise ValueError("Unknown enabled integration")
+    speech = (SpeechService(PiperSpeech(Path(os.environ.get("VCM_VOICE_MODEL", str(ROOT / "assets/voices/en_US-amy-medium.onnx"))),
                                       phrases_dir=ROOT / "assets/speech"))
               if speak else None)
     if not live:
-        return ActionRouter({group: PreviewService() for group in GROUPS}, speech=speech)
-    devices = ScheduledDevices(PiHardware() if hardware == "pi" else MockHardware(), speech=speech)
+        return ActionRouter({group: PreviewService() for group in enabled}, speech=speech)
+    devices = (ScheduledDevices(PiHardware() if hardware == "pi" else MockHardware(), speech=speech)
+               if "devices" in enabled else None)
     try:
         communications = communication_values()
-        selected = spotify_paths(ROOT)
-        soloist = IntegrationSoloist(os.environ.get("VCM_SPOTIFY_URI", DEFAULT_SPOTIFY_URI),
-            binary=str(selected["binary"]), data_dir=str(selected["data_dir"]),
-            auto_start=True, key_file=selected["key_file"], profile=selected["profile"],
-            max_volume_percent=music_volume_limit, operation_timeout=15.,
-            startup_timeout=5., control_timeout=2., readiness_attempts=12)
-        offline = MpvBackend(sorted((ROOT / "assets/music").glob("*.mp3")),
-                             str(ROOT / "tmp/mpv.sock"), auto_start=True,
-                             max_volume_percent=music_volume_limit)
-        music = ManagedMusic(IntegrationAutoMusic(soloist, offline,
-                             state_path=ROOT / "state/music-routing.json",
-                             reachable=(lambda: False) if offline_mode else (lambda: True)))
-        try:
-            music.backend.limit_active_volume()
-        except Exception:
-            pass
-        weather = OpenMeteoWeatherProvider(offline=offline_mode)
-        services = {
-            "information": InformationService(weather_provider=weather),
-            "devices": devices, "music": music,
-            "reminders": ReminderService(JsonReminderStore(ROOT / "state/reminders.json")),
-            "calling": CallingService(communications["call_number"]),
-            "messaging": ConfiguredMessaging(communications["phone_mac"], communications["message_number"]),
-        }
-        weather.prefetch()
+        services = {}
+        if devices is not None:
+            services["devices"] = devices
+        if "music" in enabled:
+            selected = spotify_paths(ROOT)
+            soloist = IntegrationSoloist(os.environ.get("VCM_SPOTIFY_URI", DEFAULT_SPOTIFY_URI),
+                binary=str(selected["binary"]), data_dir=str(selected["data_dir"]),
+                auto_start=True, key_file=selected["key_file"], profile=selected["profile"],
+                max_volume_percent=music_volume_limit, operation_timeout=15.,
+                startup_timeout=5., control_timeout=2., readiness_attempts=12)
+            local = MpvBackend(sorted(Path(os.environ.get("VCM_MUSIC_DIR", str(ROOT / "assets/music"))).glob("*.mp3")),
+                               str(ROOT / "tmp/mpv.sock"), auto_start=True, max_volume_percent=music_volume_limit)
+            music = ManagedMusic(IntegrationAutoMusic(soloist, local,
+                                 state_path=ROOT / "state/music-routing.json",
+                                 reachable=(lambda: False) if offline_mode else (lambda: True)))
+            try:
+                music.backend.limit_active_volume()
+            except Exception:
+                pass
+            services["music"] = music
+        if "information" in enabled:
+            weather = OpenMeteoWeatherProvider(offline=offline_mode or os.environ.get("VCM_WEATHER_ENABLED") == "0")
+            services["information"] = InformationService(weather_provider=weather)
+            weather.prefetch()
+        if "reminders" in enabled:
+            services["reminders"] = ReminderService(JsonReminderStore(ROOT / "state/reminders.json"))
+        if "calling" in enabled:
+            services["calling"] = CallingService(communications["call_number"])
+        if "messaging" in enabled:
+            services["messaging"] = ConfiguredMessaging(communications["phone_mac"], communications["message_number"])
+        if os.environ.get("HEY_SWIFT_CONFIRM_COMMUNICATIONS") == "1":
+            for name in ("calling", "messaging"):
+                if name in services:
+                    services[name] = ConfirmedCommunication(services[name])
         return ActionRouter(services, speech=speech)
     except Exception:
-        devices.close()
+        if devices is not None:
+            devices.close()
         raise
