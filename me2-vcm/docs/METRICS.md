@@ -7,7 +7,7 @@ marked; historical evidence is not relabeled as Pi measurements.
 
 | Metric/evidence | Method and output | Scope/limits |
 | --- | --- | --- |
-| Architecture, parameters, model bytes/hashes/gates | data/model_reference.json; actual ONNX hashes/sizes; doctor contracts | Champion/baseline alias selected/run043; exp15 separate |
+| Architecture, parameters, model bytes/hashes/gates | data/model_reference.json; actual ONNX hashes/sizes; doctor contracts | Champion (6s BC8-TCN-ASP) / Baseline (2s BC8); legacy profile IDs remain provenance; exp15 separate |
 | Training seed, optimizer, steps, epochs, selected epoch, GPU hours | model_reference.json references committed TRAINING_ACCOUNTING.json/logs | Archived accounting; allocated wall time includes validation/host overhead |
 | Dataset source, DOI, licence, recordings/hours/cohorts/groups | data/PROVENANCE.json and DATASET_LICENSE.md; report table | Original-waveform hours; declared groups are not verified humans |
 | Full-manifest intent accuracy | injection/*_RESULTS.json: overall_intent | Processing failures remain incorrect in denominator |

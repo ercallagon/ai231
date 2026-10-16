@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the frozen run043/selected comparison in work/pi5_test_01 on Pi 5."""
+"""Run the frozen Baseline/Champion comparison in work/pi5_test_01 on Pi 5."""
 import argparse
 from datetime import datetime, timezone
 import fcntl
@@ -14,7 +14,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from hey_swift.profiles import PUBLIC
+from hey_swift.profiles import PUBLIC, DISPLAY
 PROFILES = ("run043", "selected")
 SPLITS = ("test", "holdout")
 
@@ -139,7 +139,7 @@ def main():
             note="Stop other assistants/benchmarks; raw audio caches are reused. "
                  "No actions, training or threshold fitting. Physical acoustic tests are separate.")
         (output / "ENVIRONMENT.json").write_text(json.dumps(environment, indent=2) + "\n")
-        print("Baseline: baseline (run043) | Champion: champion (selected)", flush=True)
+        print(f"Comparison: {DISPLAY['run043']} | {DISPLAY['selected']}", flush=True)
         print("Evaluating frozen test + holdout; results: " + str(output), flush=True)
         code = run_logged(command, ROOT, output / "injection.log")
         if code:

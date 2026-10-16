@@ -18,7 +18,7 @@ import tempfile
 import time
 from urllib.request import urlopen
 
-from .profiles import resolve_profile, PUBLIC
+from .profiles import resolve_profile, PUBLIC, DISPLAY
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -646,20 +646,27 @@ def main():
     if args.action == "config":
         return update_config(home, args.key, args.value)
     if args.action == "evaluate":
+        print(f"Stage 1/3: frozen {DISPLAY['run043']} vs {DISPLAY['selected']} test/holdout scoring.", flush=True)
         code = subprocess.call([sys.executable, str(ROOT / "scripts/test_pi.py"), *( ["--reset"] if args.reset else [])], cwd=ROOT)
         if code:
             return code
         costs = {}
+        print("Stage 2/3: model-only CPU timing (30 warmups, 200 iterations, one thread).", flush=True)
         for name, capacity in (("baseline", "2"), ("champion", "6")):
             profile = resolve_profile(name)
             path = ROOT / "work/pi5_test_01" / (name + "_cost.json")
+            display_name = DISPLAY[profile]
+            print(f"Benchmarking {display_name} ONNX model ({capacity}s nominal capacity)...", flush=True)
             code = subprocess.call([sys.executable, str(ROOT / "scripts/benchmark_onnx_pi.py"),
                 "--model", str(ROOT / "models/vcm" / (profile + ".onnx")), "--audio-seconds", capacity,
                 "--threads", "1", "--output", str(path)], cwd=ROOT)
             if code:
                 return code
             costs[name] = json.loads(path.read_text())
+            print(f"{display_name}: model-only p95 {costs[name]['p95_ms']:.2f} ms; nominal RTF p95 "
+                  f"{costs[name]['nominal_model_only_rtf_p95']:.5f}.", flush=True)
         (ROOT / "work/pi5_test_01/model_costs.json").write_text(json.dumps(costs, indent=2) + "\n")
+        print("Stage 3/3: refreshing diagnostics and consolidated report.", flush=True)
         doctor(home)
     if args.action in ("evaluate", "report"):
         from .submission_report import build_report

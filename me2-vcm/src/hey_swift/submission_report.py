@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+from .profiles import DISPLAY
 
 
 def read(path):
@@ -60,7 +61,7 @@ def build_report(root, official=None):
             continue
         document["measured"][split] = results
         document["evidence"][str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
-        lines += [f"### {split}", "", "| Metric | Champion | Baseline |", "| --- | --- | --- |"]
+        lines += [f"### {split}", "", f"| Metric | {DISPLAY['selected']} | {DISPLAY['run043']} |", "| --- | --- | --- |"]
         for label, key in keys:
             values = [count_rate(results.get(name, {}).get(key)) for name in ("selected", "run043")]
             lines.append(f"| {label} | {values[0]} | {values[1]} |")
@@ -79,10 +80,11 @@ def build_report(root, official=None):
             expected = reference.get("models", {}).get(public_name, {}).get("model_sha256")
             if expected and m.get("model_sha256") != expected:
                 document["missing"].append(split + "/" + name + ": result model hash differs from frozen profile; comparison requires review")
-            lines += ["", f"{name} full/processed denominators: " + json.dumps(m.get("processed_subsets", {})),
+            display_name = DISPLAY[name]
+            lines += ["", f"{display_name} (profile `{name}`) full/processed denominators: " + json.dumps(m.get("processed_subsets", {})),
                       "", "Duration/long-input cohorts: " + json.dumps(m.get("duration_cohorts", {})),
                       "", f"Timing scope: {m.get('infer_scope', 'MISSING')}; Pi-identified: {m.get('physical_pi_verified', 'MISSING')}; threads: {m.get('threads', 'MISSING')}.",
-                      "", f"#### {name} per-family errors", "", "| Intent | Intent | Accepted intent+slot | P / R / F1 | False rejects | Processing failures |", "| --- | --- | --- | --- | ---: | ---: |"]
+                      "", f"#### {display_name} per-family errors", "", "| Intent | Intent | Accepted intent+slot | P / R / F1 | False rejects | Processing failures |", "| --- | --- | --- | --- | ---: | ---: |"]
             for family, row in m.get("families", {}).items():
                 lines.append(f"| {family} | {count_rate(row['intent'])} | {count_rate(row['accepted_joint'])} | {row['precision']:.3f} / {row['recall']:.3f} / {row['f1']:.3f} | {row['false_reject']} | {row['failures']} |")
             lines += ["", "Confusion matrix: see corresponding profile.confusion in " + str(path.relative_to(root)) + "; last column is processing failure."]

@@ -18,7 +18,7 @@ def main():
     ap=argparse.ArgumentParser(description=__doc__)
     ap.add_argument("action",choices=("verify","reproduce"),nargs="?",default="verify")
     ap.add_argument("--splits",nargs="+",choices=("val","tune_oos","test","holdout"),default=["test","holdout"])
-    from hey_swift.profiles import resolve_profile
+    from hey_swift.profiles import resolve_profile, DISPLAY
     ap.add_argument("--profiles",nargs="+",type=resolve_profile,default=["selected","run043"],help="champion/baseline or historical IDs; output keys remain selected/run043")
     ap.add_argument("--data-root",type=Path,default=ROOT/"data/vcm/raw")
     ap.add_argument("--fetch",action="store_true")
@@ -30,6 +30,8 @@ def main():
     from hey_swift.vcm.archived_metric_core import metrics
     from scipy.special import softmax
     profiles=json.loads((ROOT/"configs/assistant_profiles.json").read_text())["profiles"]
+    if args.action == "reproduce":
+        print(f"Loading frozen comparison models: {DISPLAY['run043']} | {DISPLAY['selected']}.", flush=True)
     models={name:VCMInference(str(ROOT/profiles[name]["config"]),str(ROOT/profiles[name]["model"]),str(ROOT/profiles[name]["labels"])) for name in args.profiles}
     if args.action=="verify":
         for path,digest in json.loads((ROOT/"ARTIFACTS.json").read_text())["sha256"].items():
@@ -62,7 +64,9 @@ def main():
     args.output.mkdir(parents=True,exist_ok=False)
     for split in args.splits:
         rows=D.manifest(split)
+        print(f"[{split}] Preparing audio for {len(rows)} clips (fetches only if cache is missing).", flush=True)
         D.ensure_files(rows,args.data_root,args.fetch)
+        print(f"[{split}] Audio ready; scoring both models.", flush=True)
         outputs,valid,statuses,times={},{},{},{}
         duration=np.zeros(len(rows))
         for name,model in models.items():
@@ -71,6 +75,7 @@ def main():
             statuses[name]=["not_processed"]*len(rows)
             times[name]=[]
         parity={name:0 for name in models}
+        progress_every=max(1, int(np.ceil(len(rows) / 10)))
         for done,(i,wave) in enumerate(D.waves(rows,args.data_root),1):
             duration[i]=len(wave)/16000
             for name,model in models.items():
@@ -104,8 +109,9 @@ def main():
                         expected &= model.slot_sets[intent][sid]!="REJECT"
                     assert bool(expected)==actual["accepted"] and intent==actual["intent"]
                     parity[name]+=1
-            if done%500==0:
-                print(json.dumps(dict(split=split,completed=done,total=len(rows))),flush=True)
+            if done % progress_every == 0 or done == len(rows):
+                percent=100.0*done/max(1,len(rows))
+                print(f"[{split}] {done}/{len(rows)} clips ({percent:.0f}%); both comparison models", flush=True)
         summary={}
         y,ys,unsupported=D.labels(rows,split)
         known=np.ones(len(rows),bool)
@@ -171,7 +177,7 @@ def main():
     (args.output/"COMPLETE.json").write_text(json.dumps(dict(splits=args.splits,profiles=args.profiles,
         thresholds_frozen=True,thresholds={n:r.tau for n,r in models.items()},trained=False,actions_executed=False,
         previously_exposed_evaluation=True),indent=2)+"\n")
-    print("Frozen evaluation complete: "+str(args.output))
+    print("Frozen test/holdout scoring complete: "+str(args.output), flush=True)
 
 
 if __name__=="__main__":

@@ -1,8 +1,9 @@
 # Hey Swift on Raspberry Pi 5
 
-Use these exact commands over SSH. Public model names are **champion** (six-second
-BC8/TCN/pooling, threshold 0.954) and **baseline** (run_043 BC8, threshold 0.875).
-They alias the existing selected/run043 artifacts; no model bytes or gates change.
+Use these exact commands over SSH. The public names are **Champion (6s BC8-TCN-ASP)**
+(threshold 0.954) and **Baseline (2s BC8)** (threshold 0.875); select them with
+`--model champion` and `--model baseline`. Historical profile/run identifiers remain
+in provenance. No model bytes or gates change.
 The separate exp15 wakeword stays at its existing gate. Six seconds is command
 capacity, not mandatory listening time.
 
@@ -237,7 +238,9 @@ It evaluates exactly baseline + champion on pinned test (4,693) and holdout
 It collects intent/slot/joint/rejection/family/cohort/coverage results, paired
 errors, feature/model timings, model-only timings, CPU/RSS/temperature sampling,
 and source/environment/model hashes. No calibration, training or real action
-occurs. The report is work/pi5_test_01/REPORT.md with REPORT.json and raw evidence.
+occurs. It prints three stage markers and about ten progress updates per split,
+then reports each model-only timing. The report is work/pi5_test_01/REPORT.md
+with REPORT.json and raw evidence.
 Run this before live/demo evidence collection: --reset archives old demo/live
 logs too. If you already performed a demo, its archived file is retained and
 may be reviewed separately; repeat the guided checks for the active report.

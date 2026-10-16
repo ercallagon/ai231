@@ -9,7 +9,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from hey_swift import deployment as public
-from hey_swift.profiles import resolve_profile
+from hey_swift.profiles import resolve_profile, DISPLAY
 from hey_swift.submission_report import build_report, count_rate
 
 
@@ -26,6 +26,7 @@ def test_aliases_preserve_profiles_hashes_and_thresholds():
         profile = registry["profiles"][legacy]
         assert hashlib.sha256((ROOT / profile["model"]).read_bytes()).hexdigest() == refs[name]["model_sha256"]
         assert yaml.safe_load((ROOT / profile["config"]).read_text())["oos"]["confidence_threshold"] == refs[name]["threshold"]
+    assert DISPLAY == {"selected": "Champion (6s BC8-TCN-ASP)", "run043": "Baseline (2s BC8)"}
 
 
 def test_isolation_scrubs_existing_credentials(monkeypatch, tmp_path):

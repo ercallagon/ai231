@@ -20,8 +20,9 @@ The short command set is:
 
 The quickstart explains clone paths, OS prerequisites, private/session secrets,
 Spotify phone authorization, Bluetooth pairing, real demo and rollback. Use
-`--model baseline` for the preserved run_043 model. Historical selected/run043
-names, model files, hashes and frozen gates are compatible aliases.
+`--model baseline` for **Baseline (2s BC8)**. Its historical run_043 lineage and
+the champion's selected profile remain in provenance; model files, hashes and
+frozen gates are unchanged.
 
 Setup defaults asset paths and offers automatic opt-in downloads for Soloist
 and the reviewed Amy Piper voice. To replace one saved number later, run

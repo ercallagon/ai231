@@ -2,8 +2,9 @@
 
 **New Raspberry Pi users:** follow [the SSH quickstart](docs/QUICKSTART_PI.md).
 It creates a separate checkout, environment and private setup without importing
-another installation's accounts. Public names are **champion** (legacy selected)
-and **baseline** (legacy run043); all original model hashes and gates remain.
+another installation's accounts. Public model names are **Champion (6s BC8-TCN-ASP)**
+and **Baseline (2s BC8)**, selected with `--model champion` and `--model baseline`.
+Historical profile/run identifiers remain in provenance; model hashes and gates are unchanged.
 
 After the quickstart installation, the commands are:
 
@@ -37,14 +38,15 @@ mask. Six seconds is capacity: live capture uses onset, pre-roll and endpoint
 silence. All detector weights were trained from scratch. There is no claim of
 causal neural encoding, KV-cache, ASR decoding or continuous streaming inference.
 
-The complete run_043 fallback (327,750 parameters, two-second features, threshold
-0.875) remains selectable. Exp15 is the separate preserved wakeword model.
+The complete Baseline (2s BC8; 327,750 parameters, two-second features, threshold
+0.875) remains selectable. Its historical run_043 lineage is retained in provenance.
+Exp15 is the separate preserved wakeword model.
 
 | Component | Repository selection | Status |
 | --- | --- | --- |
 | Wake word | exp15 CNN + GRU, 204,738 parameters, threshold 0.30 | Preserved default; recent trials did not justify replacement |
 | Voice commands | Six-second BC8 + TCN + attentive statistics pooling, 488,264 parameters, threshold 0.954 | Frozen repository default; physical Pi 5 verification pending |
-| Voice-command fallback | run_043 BC8, 327,750 parameters, threshold 0.875 | Complete selectable fallback |
+| Voice-command baseline | Baseline (2s BC8), 327,750 parameters, threshold 0.875 | Complete selectable fallback; historical run_043 lineage |
 
 Current deck evidence and outstanding requirements are in
 [SUBMISSION_CHECKLIST.md](reports/SUBMISSION_CHECKLIST.md). Owned code is MIT;
