@@ -1,6 +1,6 @@
 # Final Submission Candidate Audit
 
-Status: frozen models; final Pi 5 rerun pending. Read alongside
+Status: frozen models; Champion Pi 5 acoustic run completed 2026-10-17. Read alongside
 [RESULTS.md](RESULTS.md), [MODEL_SELECTION.md](MODEL_SELECTION.md), and
 [the final handoff](../docs/FINAL_PI_VALIDATION.md). The containing Git commit,
 not a historical run ID, identifies this candidate. No retraining, gate fitting,
@@ -24,6 +24,23 @@ system or an unmodified paper model. The upstream ONNX profiler's 499,784 count
 is not the training code's learned-parameter count; disclose counting scope.
 
 ## Received Pi Evidence
+
+The final Champion-only acoustic benchmark and trial-level audit are summarized
+in [PI5_ACOUSTIC_CHAMPION_20261017.md](PI5_ACOUSTIC_CHAMPION_20261017.md).
+It recorded 170/186 (91.4%) accepted-correct supported intent+slot decisions,
+including 74/86 real and 96/100 synthetic; OOS false accepts were 2/16. The
+detector-estimated speech-end-to-decision p95 was 926.7 ms (n=194); feature
+preparation+inference p95 was 116.5 ms (n=194). The acoustic run was Champion
+only; frozen injected test remains the Baseline/Champion comparison. The
+runtime default endpoint is 800 ms, the tested setting, with 1200 ms available
+as an explicit pause-tolerance override.
+
+Limitations: 4/16 no-wake controls produced a wake event, all rejected before
+action; the sample is small. Nine external laptop-to-Pi timing values were
+negative, so the report's 1.776 s p95 is not presented as a valid command-end
+latency. Four trial intervals had multiple decisions. The benchmark output did
+not include an execution-time model/config hash or Git revision. See the linked
+report for exact provenance and the generated report's OOS narrative correction.
 
 Uploaded injection: work/pi5_review/REPORT.md, test_RESULTS.json and
 holdout_RESULTS.json in the private research workspace. Raw cost/environment
@@ -49,7 +66,7 @@ exposed evaluations**, not independent unseen confirmation. Real/synthetic
 grouping follows frozen source metadata, not predictions. Neither high synthetic
 accuracy nor 86 supported real holdout examples establishes broad generalization.
 
-Initial class acoustic run: laptop runs/20261016-201135; 202 wake-present and
+Earlier class acoustic run: laptop runs/20261016-201135; 202 wake-present and
 16 no-wake trials, seed 42, screened wake takes 2/3, ECHO Spot playback, two-second
 gap, 1200 ms endpoint, preview actions. Preserved source file SHA-256:
 
@@ -88,11 +105,11 @@ an execution-time hash. The new preflight closes that provenance gap prospective
 
 | Finding / metric | Addressed | Still required / tradeoff |
 | --- | --- | --- |
-| Endpoint dominates decision delay | Optional explicit 800 ms setting across public launchers; default preserved | Final Pi p95 target <1 s; may split pauses >800 ms |
+| Endpoint dominates decision delay | 800 ms is now the runtime default and was used in the Champion Pi run | Detector-estimated p95 926.7 ms; no paired endpoint comparison; pauses >800 ms may split |
 | Model inference vs action latency confused | Distinct model-only, feature+ONNX, detector-end and external scopes | Do not call 116 ms speech-end latency |
 | Missing vs zero timing conflated | Supplementary audit separates them | Initial nine zero-audio decisions were not missing fields |
-| Early/multiple decisions | Full diagnostics and unique logs; audit preserves original scoring | 17 multi-decision trials, 20 extras, 24 negative external latencies need controlled repeat |
-| Wake detection claim | Explicit wake events distinguished from proxy command receipt | Reported 92.1% is a proxy; explicit 182/202; screened takes bias wake recall |
+| Early/multiple decisions | Full diagnostics and unique logs; audit preserves original scoring | Four final-run intervals had multiple events; nine external latency values were negative; scorer uses first event |
+| Wake detection claim | Explicit wake events distinguished from proxy command receipt | Two wake takes were pre-screened; 4/16 no-wake controls triggered, all rejected; not a wake-hour estimate |
 | Capture/no-speech failures | Added peak/noise/onset diagnostics, not weakened onset gate | Pi reproduction with fixed gain/placement; noise alone not established cause |
 | Speech/music isolation | Operator confirmed stable independent TTS across restarts and tablet volume changes | Not acoustic echo cancellation; loud music can still mask wake |
 | GPIO/action path | Operator reported successful visible actions for 22 phrases | Not proof of actual calls/SMS or call-end recovery |
@@ -137,18 +154,21 @@ experiments. Pi and complete-word listening verification remain separate.
 Two-slide fields: source/DOI/licences, utterance and duration accounting,
 architecture/parameters, seeds/splits/logs/checkpoints, comparable-size baseline,
 test recognition/source/family/rejection metrics and reproducible commands are
-in the repository. Pi cost/resource scope must identify its actual source. Final
-controlled Pi endpoint/latency and acoustic A/B evidence are pending. No fresh-OS,
+in the repository. Pi cost/resource scope must identify its actual source. The
+acoustic baseline comparison was not run; frozen injected test supplies the
+Baseline/Champion comparison. No fresh-OS,
 unseen-speaker, AEC or successful telephony recovery claim is justified.
 
 ## Freeze And Decision
 
 Retain Champion as the published recognition default with Baseline selectable;
-this is not a new model promotion. Final interaction settings are experimental
-until measured. Require artifact integrity, complete denominators and no
+this is not a new model promotion. The measured endpoint is 800 ms; other
+interaction settings still require their own evidence. Require artifact
+integrity, complete denominators and no
 unexplained scoring corruption or material retention regression. Sub-second
 decision p95 is a target; no numerical accuracy/false-trigger acceptance cutoff
-was pre-agreed, so do not invent one after seeing results. Return final evidence
-before marking submission complete or populating final deck numbers. Afterwards
-limit changes to evidence/reports/deck unless a material issue is explained with
-its retesting requirements first.
+was pre-agreed, so do not invent one after seeing results. The final deck now
+includes the measured evidence; licensing, team/author confirmation and device
+limitations remain visible in the checklist. Afterwards limit changes to
+evidence/reports/deck unless a material issue is explained with its retesting
+requirements first.

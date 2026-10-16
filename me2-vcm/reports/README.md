@@ -13,7 +13,7 @@
   older receipts are historical, not the present authentication/status check.
 - [PUBLICATION_CHECKS.json](PUBLICATION_CHECKS.json): current staged-export
   regression and clean inference-only verification receipt.
-- [VERIFICATION.md](VERIFICATION.md): host checks and pending hardware tests.
+- [VERIFICATION.md](VERIFICATION.md): host checks, Pi evidence and remaining device tests.
 - [WAKE_EXP15_STREAMFT.md](WAKE_EXP15_STREAMFT.md): final short fine-tune;
   no replacement justified, exp15 retained. Earlier scratch frontend trials are
   under experiments/wakeword/final_streaming_v1/.
@@ -25,4 +25,5 @@ are different metrics. Official wake positives are synthetic; exposed evaluation
 is not independent human-speaker confirmation. Pi recordings are not published.
 
 Historical 20261013 comparisons remain archived and do not override current
-defaults. Physical Pi 5 validation of this release is still pending.
+defaults. The Champion acoustic Pi 5 run is documented separately; fresh-speaker,
+music/AEC, call-recovery and some physical action checks remain outstanding.

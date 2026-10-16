@@ -27,11 +27,15 @@ uv pip compile requirements-speech.txt --python-version 3.13 --python-platform a
 References: https://docs.astral.sh/uv/reference/platforms/ and
 https://docs.astral.sh/uv/pip/compile/. uv venv supports system-site packages;
 --no-managed-python prevents substituting an interpreter that cannot import
-Debian's lgpio ABI. The host flag probe used /usr/bin/python3 3.12.3; actual
-ARM64/Python3.13/lgpio execution is pending the Pi dry run.
+Debian's lgpio ABI. The host flag probe used /usr/bin/python3 3.12.3. A fresh
+Pi 5 checkout was installed and `./swift doctor` verified Python 3.13
+core/audio/ONNX/GPIO imports plus the OS-provided lgpio ABI. The optional uv
+installer path was not separately exercised on Pi; doctor does not prove GPIO
+actuation or optional Spotify, calling or messaging behavior.
 
-**Decision:** commit hashed requirements locks; retain pip as default pending
-target validation. uv remains optional via `swift.py install --uv` when uv is
+**Decision:** commit hashed requirements locks and retain pip as the default;
+the Pi 5 pip installation/import checks passed. uv remains optional via
+`swift.py install --uv` when uv is
 on PATH, in a separate new checkout/environment. Do not run uv sync over all
 training extras: scoped requirements locks cover only Pi inference/evaluation.
 A root uv.lock is unnecessary for this scoped installer. Record tool versions;

@@ -3,7 +3,8 @@
 > Historical research guide. Current frozen defaults, installation, rollback and
 > reproduction commands are in README.md, docs/PI5.md and docs/BENCHMARK.md.
 > Old artifact tags, package paths and readiness snapshots below are not current
-> release instructions. Physical Pi 5 verification of the six-second profile is pending.
+> release instructions. Champion Pi 5 acoustic evidence is in
+> ../reports/PI5_ACOUSTIC_CHAMPION_20261017.md; remaining limits are listed there.
 
 ## Current submission evidence, 2026-10-15
 

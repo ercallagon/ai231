@@ -40,7 +40,9 @@ music volume. A regression executes the real loop, router, scheduled-device
 service and speech hooks with simulated capture, playback and hardware. It
 checks the LED-before-speech order, one spoken response at zero music volume,
 and restoration afterward. Playback resumes after feedback; a permanent stop
-requires STOP. Actual Pi audibility and acoustic interference remain pending.
+requires STOP. The operator later confirmed audible TTS at a fixed TTS-only
+volume across restarts; music/AEC acoustic interference and wake robustness
+remain unmeasured by this runtime regression report.
 
 ## Spotify: Improvements and Uncertainty
 

@@ -4,16 +4,17 @@ The current end-to-end execution sequence is
 [FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md). Older example gaps below are
 historical; the final controlled comparison explicitly uses a two-second gap.
 
-## Endpoint trial and clean reruns (2026-10-16)
+## Endpoint policy and completed Pi 5 Champion run (2026-10-17)
 
-An explicit `--end-silence-ms 800` on the Pi benchmark launcher selects an
-experimental 0.8-second endpoint wait. Omitting it retains the frozen profile's
-capture policy (Champion: 1.2 seconds). Model weights, preprocessing, labels and
-rejection thresholds do not change. Use the same explicit endpoint policy for
-both models in a comparison; do not mix it with the earlier default-policy run.
+The runtime default is now an 800 ms endpoint wait, matching the completed
+Champion Pi 5 acoustic run. Model weights, preprocessing, labels and rejection
+thresholds are unchanged. The comparable-size Baseline is evaluated against
+Champion on the frozen injected test set; the class acoustic benchmark was
+Champion-only, not an acoustic Baseline A/B.
 This is input endpointing, not the model's six-second capacity or the laptop's
 wake-to-command gap. A modeled 0.6-second internal pause is preserved with 800 ms;
-a modeled 1.08-second pause is NOT. Retain 1200 ms for slower/paused commands.
+a modeled 1.08-second pause is NOT. Use `--end-silence-ms 1200` for longer pauses.
+The completed run is not a paired comparison of 550, 800 and 1200 ms settings.
 Host simulations do not verify complete-word retention on the Pi.
 
 Prepare Windows first with the Pi assistant stopped. Record wake takes, choose
@@ -68,10 +69,9 @@ decision or playback/log timestamp mismatch; full diagnostics are needed before
 attributing it to room noise. Upstream selects the first decision in a trial
 interval, so repeated decisions can also affect recognition scoring.
 
-Rollback the endpoint experiment by omitting `--end-silence-ms` or explicitly
-using 1200 for Champion. No installation/setup rerun, model replacement or
-global audio-volume reset is required. Pi audibility, pause retention, actual
-endpoint p95 and room-noise behavior remain physical verification tasks.
+Use the 1200 ms override for longer pauses. No installation/setup rerun, model
+replacement or global audio-volume reset is required. Complete-word retention
+and noisy-room behavior remain limitations. See [the measured Champion result](../reports/PI5_ACOUSTIC_CHAMPION_20261017.md).
 
 Reviewed upstream: https://github.com/airimonda/vcm-benchmark at commit
 ab39857cf73dd067d068fed388c321ab160dc191. Its parser/schema host suite passed

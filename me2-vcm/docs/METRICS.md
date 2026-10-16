@@ -47,7 +47,12 @@ For live comparisons fix placement, gain, noise, thermal conditions and protocol
 Baseline/champion differ in capacity/frontend/training lineage: this is a system
 comparison rather than an isolated architecture ablation. Freeze scored settings.
 
-Received Pi injection and the initial acoustic run are summarized in
-[FINAL_CANDIDATE.md](../reports/FINAL_CANDIDATE.md); they are not final 800 ms
-endpoint results. Follow [FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md) for
-the prospective provenance record, full denominators and final comparison.
+The 2026-10-17 acoustic Champion run is summarized in
+[PI5_ACOUSTIC_CHAMPION_20261017.md](../reports/PI5_ACOUSTIC_CHAMPION_20261017.md).
+Its feature preparation+inference p95 is 116.5 ms; detector-estimated
+speech-end-to-decision p95 is 926.7 ms (includes endpoint wait and is not
+annotated acoustic ground truth). The benchmark's laptop-to-Pi response timing
+contains negative values and is not used as a clean latency headline. Baseline
+is compared with Champion on frozen injected test data, not acoustically.
+Follow [FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md) for provenance and
+repeatable commands.

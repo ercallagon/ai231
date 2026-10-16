@@ -2,9 +2,8 @@
 
 > Historical research guide. Current frozen defaults, installation, rollback and
 > reproduction commands are in README.md, docs/PI5.md and docs/BENCHMARK.md.
-> Old artifact tags, package paths and readiness snapshots below are not current
-> release instructions. See FINAL_PI_VALIDATION.md for the current candidate;
-> initial Pi evidence exists, while final controlled endpoint/A-B remains pending.
+> This archived guide contains historical commands and thresholds. Current
+> runtime endpoint default is 800 ms; see FINAL_PI_VALIDATION.md and BENCHMARK.md.
 
 Current field-feedback fixes and selective installation commands:
 [Pi Runtime v6](rpi-runtime-v6.md). [Command cheatsheet](command-cheatsheet.md).
@@ -14,7 +13,7 @@ bounded recovery, call guard, cue-only gain and confirmed Spotify activation.
 For the current run_043 runtime-only safety/offline update, follow
 [Pi Runtime v5](rpi-runtime-v5.md). That guide includes installation, the complete
 offline run command, reproducible fixed-response generation, latency semantics,
-and the distinction between sandbox tests and pending physical Pi checks.
+and the distinction between host checks and remaining physical Pi checks.
 
 Canonical runtime code now lives under `src/hey_swift/`, not `work/`.
 
@@ -272,7 +271,7 @@ path) plus the existing `scripts/test_local_pi_updates.py`.
 
 Sandbox-verified: bundle structure, preflight contract, CPU ONNX load/shapes,
 gate fail-closed, router rejection safety, and the slot-translation regression
-suite. **Pi-only (pending):** live microphone capture, speech/music
+suite. **Still pending on Pi:** independent-speaker performance, music/AEC
 interference, end-to-end command latency, ALSA/PipeWire mixing, GPIO side
 effects, and physical TEMPERATURE/BRIGHTNESS actuation. Host timings are not Pi
 latency.

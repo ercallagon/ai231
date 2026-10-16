@@ -778,7 +778,8 @@ def main(argv=None) -> int:
     parser.add_argument("--speech-start-timeout", type=float, default=3.0)
     parser.add_argument("--speech-start-ms", type=float, default=120.0,
                         help="Consecutive above-threshold audio required to start a command (default: 120 ms).")
-    parser.add_argument("--end-silence-ms", type=float, default=550.0)
+    parser.add_argument("--end-silence-ms", type=float, default=800.0,
+                        help="Silence before endpoint (default: 800 ms; longer pauses may split a command).")
     parser.add_argument("--pre-roll-ms", type=float, default=200.0)
     parser.add_argument("--vad-frame-ms", type=float, default=40.0)
     parser.add_argument("--vad-noise-seconds", type=float, default=0.16)

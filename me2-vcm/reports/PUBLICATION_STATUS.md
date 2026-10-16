@@ -1,9 +1,9 @@
-# ME2 publication status, 2026-10-16
+# ME2 publication status, 2026-10-17
 
 Project: **ME2: Voice Controlled Smart Device (Hey Swift)**, under
 [ercallagon/ai231/me2-vcm](https://github.com/ercallagon/ai231/tree/main/me2-vcm).
 The repository main revision before this update was
-b6ab05bb580491a754be70c2f979ee48f5ca13e7, previously verified using git ls-remote.
+393f892ee389cdbb935d4b9eb118e65acd9e32bb, previously verified using git ls-remote.
 Use the containing Git commit for the exact revision of this report; this file
 does not invent a future commit hash or claim an unperformed push.
 
@@ -42,17 +42,24 @@ the exp15 config's best_epoch 60 is corrected by its log/history and parity reco
 the original file is not rewritten to conceal the discrepancy. Earlier VCM
 0.95-gate tables are not the current 0.954 policy results; use RESULTS.md.
 
-Fresh-checkout inference contracts, relevant regressions and staged-file checks
-are required before committing this update. The publication command's terminal
-result and Git history establish whether commit/push succeeded; this report is
-not a substitute for that outcome.
+For this update, the endpoint/runtime subset passed 25 tests. All tests outside
+the training-only modules passed; the full suite could not import 31 training
+tests because this checkout environment lacks `torch` and `scikit-learn`. The
+previous full training-environment receipt remains available but predates this
+small runtime-default change. The generated deck's OOXML and two-slide structure
+were validated; a visual render was unavailable in this environment. The
+publication command's terminal result and Git history establish whether
+commit/push succeeded; this report is not a substitute for that outcome.
 
 ## Unresolved, explicitly not certified
 
-Initial Pi injection/acoustic results and operator GPIO/audio observations have
-been received; see FINAL_CANDIDATE.md for actual counts and provenance gaps.
-Final controlled 800 ms endpoint/A-B and communications recovery remain pending.
-Host parity and wheel availability do not establish Pi success.
+Champion acoustic Pi 5 results at an 800 ms endpoint are recorded in
+PI5_ACOUSTIC_CHAMPION_20261017.md. Frozen injected test remains the comparable
+Baseline/Champion evaluation; no acoustic Baseline run is claimed. Remaining
+limitations include no execution-time model hash/Git revision in the acoustic
+benchmark export, negative external timing values, no independent-speaker
+confirmation, and unverified call recovery. These limitations are disclosed;
+no host result is substituted for a Pi measurement.
 Test/holdout were repeatedly exposed. Official wake positives are
 synthetic; independent real-speaker wake performance is not established.
 Wake raw-data retrieval and some dataset/voice consent/licensing remain incomplete.

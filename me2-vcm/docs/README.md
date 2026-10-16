@@ -3,7 +3,7 @@
 Current public workflow:
 
 - [SSH quickstart](QUICKSTART_PI.md): install, private/session setup and one-setting updates.
-- [Final Pi validation](FINAL_PI_VALIDATION.md): safe update, integrity, injection, acoustic A/B and evidence retrieval.
+- [Final Pi validation](FINAL_PI_VALIDATION.md): safe update, integrity, injected comparison, Champion acoustic run and evidence retrieval.
 - [Commands](command-cheatsheet.md): supported intents/values and demo controls.
 - [Metrics](METRICS.md): definitions, denominators and measurement scopes.
 - [Class benchmark](BENCHMARK.md): pinned external schema and compatibility notes.

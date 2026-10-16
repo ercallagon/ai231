@@ -1,8 +1,9 @@
 # Verification status
 
 The selected six-second profile at threshold 0.954 is the repository default.
-Pi 5 hardware/acoustic verification is explicitly pending and is not a blocker
-to this user-authorized initial source publication.
+Champion Pi 5 acoustic verification is available in
+PI5_ACOUSTIC_CHAMPION_20261017.md. This does not certify unseen speakers,
+music/AEC robustness, call recovery or all physical actions.
 
 Completed host checks:
 
@@ -31,6 +32,10 @@ Completed host checks:
   Python 3.13 aarch64 wheels for documented Pi core/audio/GPIO/evaluation
   dependencies were resolved/downloaded successfully. This checks wheel
   availability, not execution on that architecture.
+- The operator installed the fresh `swift-clean` Pi checkout and `./swift doctor`
+  passed actual imports for the core/audio/ONNX/GPIO stack and Piper; the
+  documented RGB/display check was operator-confirmed. This is not evidence that
+  optional Spotify, call or messaging actions were exercised.
 - Optional retraining command was checked in planning mode only. This task
   did not launch training or use SLURM.
 
@@ -38,15 +43,17 @@ Full source regression and clean-export reproduction receipts are retained in
 the task's work/finalize_submit/ directory; final commit audit records their
 exact counts and results. Some hardware/data-dependent tests skip on HPC.
 
-Remaining device checks: stable 48 kHz mic acquisition/resampling, capture
-handoff/recovery, pre-roll/quiet speech, new pause-tolerant endpoint latency,
-six-second/over-limit behavior, wake false triggers during music, GPIO/timer
-side effects, action responsiveness and optional speech assets. The original
+Remaining device checks: independent-speaker performance, wake false triggers
+per hour, music/AEC robustness, complete-word retention through long pauses,
+call-end recovery and fresh-OS reproducibility. The 2026-10-17 acoustic run
+measured the 800 ms endpoint, six-second model behavior, processed inference and
+detector-estimated decision latency under its stated conditions. The original
 working Pi installation, chime, accounts and wiring are preserved.
 
-Actual Pi p95, RTF, thread settings and scope must be collected with the posted
-commands. Until returned, no host timing is described as Pi performance. No
-fresh independent speaker recordings are available. Wake training data/consent
+Actual Pi p95, RTF, thread settings and scope are in
+PI5_ACOUSTIC_CHAMPION_20261017.md. Do not conflate feature+inference with the
+detector-estimated speech-end metric or external response timing. No fresh
+independent speaker recordings are available. Wake training data/consent
 and public raw-data retrieval remain incomplete; the original exp15 PyTorch
 checkpoint itself has been recovered and verified, not substituted by a reproduction.
 

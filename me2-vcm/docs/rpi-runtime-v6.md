@@ -4,7 +4,9 @@
 > reproduction commands are in README.md, docs/PI5.md and docs/BENCHMARK.md.
 > Old artifact tags, package paths and readiness snapshots below are not current
 > release instructions. See FINAL_PI_VALIDATION.md for the current candidate;
-> initial Pi evidence exists, while final controlled endpoint/A-B remains pending.
+> Champion-only Pi 5 acoustic results are recorded in
+> reports/PI5_ACOUSTIC_CHAMPION_20261017.md. This historical runtime guide is not
+> the acoustic Baseline/Champion comparison; Baseline is compared on frozen test.
 
 ## Scope and Evidence
 

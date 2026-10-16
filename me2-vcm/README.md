@@ -28,7 +28,7 @@ See [commands](docs/command-cheatsheet.md), [audio](docs/AUDIO.md),
 | Component | Repository selection | Status |
 | --- | --- | --- |
 | Wake word | exp15 CNN + GRU, 204,738 parameters, threshold 0.30 | Preserved default; recent trials did not justify replacement |
-| Voice commands | Champion: 6s BC8 + TCN + attentive statistics pooling, 488,264 parameters, threshold 0.954 | Frozen default; Pi injection received; final acoustic rerun pending |
+| Voice commands | Champion: 6s BC8 + TCN + attentive statistics pooling, 488,264 learned parameters, threshold 0.954 | Frozen default; Pi 5 injected comparison and Champion acoustic benchmark recorded |
 | Voice-command baseline | Baseline (2s BC8), 327,750 parameters, threshold 0.875 | Complete selectable fallback; historical run_043 lineage |
 
 BC8 names this BC-ResNet-8-style width configuration, **not eight layers**:
@@ -42,18 +42,23 @@ encoder, KV-cache, ASR decoder or pretrained detector is claimed.
 
 Use [FINAL_PI_VALIDATION.md](docs/FINAL_PI_VALIDATION.md) for safe updates,
 preflight/provenance, injected evaluation, acoustic comparison and retrieval.
-The optional 800 ms endpoint trial preserves the 1200 ms Champion fallback.
+The live default is 800 ms, measured in the Champion Pi 5 acoustic run. Use an
+explicit longer endpoint (for example 1200 ms) when commands contain long pauses;
+this trades responsiveness for pause tolerance and was not compared in a paired
+endpoint experiment.
 
 ```bash
 ./swift evaluate --reset
-./swift live-latency --model champion --end-silence-ms 800
+./swift live-latency --model champion
 ./swift report
 ```
 
 Do not reset results during a benchmark. Injection bypasses wake/capture/actions.
 [METRICS.md](docs/METRICS.md) separates model-only, feature+ONNX, decision and
-acoustic timing. Pi injection and an initial acoustic run are available; final
-800 ms Pi retention/latency and controlled A/B remain pending.
+acoustic timing. The frozen-test comparison includes Baseline and Champion; the
+class acoustic benchmark was Champion-only. See
+[the acoustic report](reports/PI5_ACOUSTIC_CHAMPION_20261017.md) for results and
+caveats. No acoustic Baseline comparison is claimed.
 [Candidate audit](reports/FINAL_CANDIDATE.md) lists evidence and limitations.
 
 ## Install and verify
@@ -161,16 +166,18 @@ incorrect best_epoch 60 recorded in the preserved historical config.
 - experiments/RUN_INDEX.csv: historical trial inventory; incompatible
   protocols and unknown/incomplete results are marked rather than ranked together.
 - reports/MODEL_SELECTION.md: original selection and authorized calibration revision.
-- reports/SUBMISSION_CHECKLIST.md: two-slide fields, evidence and pending Pi checks.
+- reports/SUBMISSION_CHECKLIST.md: two-slide fields, evidence and remaining limits.
 - reports/PUBLICATION_STATUS.md: current publication scope versus historical receipts.
+- reports/PI5_ACOUSTIC_CHAMPION_20261017.md and reports/ME2_submission_deck.pptx:
+  final Champion acoustic evidence and editable two-slide submission deck.
 - scripts/benchmark_onnx_pi.py: model-only p95/thread measurements.
 - scripts/reproduce.py: injected-file feature/model recognition and RTF on host/Pi.
 - docs/BENCHMARK.md: class laptop-speaker -> Pi-microphone benchmark.
 
 Host regression tests use mocked calls, SMS, capture and GPIO. Pi injection,
-initial acoustic timing and operator GPIO/audio checks have been received;
-the final controlled endpoint comparison and call recovery checks are pending.
-Fresh independent speaker confirmation is unavailable. See the
+Champion acoustic results at the 800 ms default, and operator GPIO/audio checks
+are available. Call recovery and fresh independent-speaker confirmation remain
+pending. See the
 [candidate audit](reports/FINAL_CANDIDATE.md) for counts and scope limitations.
 
 Opt-in wake trials did not justify replacing exp15; see

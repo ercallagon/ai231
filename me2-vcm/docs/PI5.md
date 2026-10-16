@@ -2,7 +2,10 @@
 
 For the final existing-install update and measurements use
 [FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md). Initial Pi evidence is in
-[FINAL_CANDIDATE.md](../reports/FINAL_CANDIDATE.md); final endpoint/A-B is pending.
+[FINAL_CANDIDATE.md](../reports/FINAL_CANDIDATE.md); Champion acoustic results are
+summarized in [the Pi 5 report](../reports/PI5_ACOUSTIC_CHAMPION_20261017.md).
+The class acoustic run covered Champion only; Baseline is compared on injected
+frozen-test data.
 
 Start with [the current SSH quickstart](QUICKSTART_PI.md). It is the canonical
 new-user and separate-checkout dry-run procedure.

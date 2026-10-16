@@ -26,9 +26,9 @@ Replace the template's causal encoder/KV-cache/CTC diagram with the actual
 BC8 -> temporal CNN -> masked attentive mean/std pooling -> classification heads.
 This is captured-utterance classification, not causal autoregressive inference.
 
-Pi 5 is the approved substitute for Pi 4. Actual Pi accuracy, p95/RTF and
-end-to-action timing remain pending. Host and injected-file timing are not
-live acoustic latency. Test/holdout are previously exposed evaluation, and wake
+Pi 5 is the approved substitute for Pi 4. Champion acoustic accuracy and Pi
+timings are reported in reports/PI5_ACOUSTIC_CHAMPION_20261017.md; injected-file
+and acoustic scopes remain distinct. Test/holdout are previously exposed evaluation, and wake
 official positives are synthetic; do not claim untouched real-speaker confirmation.
 Author/team/date, node ID and a tagged weights release URL still need confirmation
 where required. Downloadable committed weights and MODEL_TERMS.md are available.

@@ -2,7 +2,9 @@
 
 ## Decision
 
-retain exp15; close experimentation. Default remains exp15; physical Pi5 verification pending.
+retain exp15; close experimentation. Default remains exp15. The class acoustic
+benchmark used pre-screened wake takes and does not establish unbiased Pi wake
+recall or false triggers per hour; see the current Pi 5 acoustic report.
 
 One fine-tune, no scratch run or architecture change. Original best checkpoint verified against deployed export; epoch42 selected historically, despite erroneous archived config best_epoch60. Provenance/parity errors are saved in PROVENANCE.json.
 Training completed2epochs; best fine-tuned epoch1; initial-checkpoint improvement:False. GPU wall132.9s (0.0369GPUhours), peak reserved0.860GB.

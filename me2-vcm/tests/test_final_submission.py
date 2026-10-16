@@ -36,6 +36,17 @@ def test_public_endpoint_is_explicit_not_a_changed_default(monkeypatch, tmp_path
     assert "--live" not in command
 
 
+def test_live_runtime_default_endpoint_is_pi_validated_800ms(monkeypatch):
+    from hey_swift.integration import e2e_loop
+    captured = {}
+    def capture(args):
+        captured["args"] = args
+        return 0
+    monkeypatch.setattr(e2e_loop, "run", capture)
+    assert e2e_loop.main(["--vcm-onnx", "model.onnx"]) == 0
+    assert captured["args"].end_silence_ms == 800.0
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), 0., -1.])
 def test_invalid_endpoint_fails_before_starting_any_process(value, tmp_path):
     with pytest.raises(ValueError, match="finite and positive"):

@@ -127,7 +127,12 @@ semantic decisions before continuing. Otherwise stop and diagnose capture,
 playback or timing; do not adjust frozen model rejection settings. Do not type
 arbitrary input or change audio routing during the scored run.
 
-Run Baseline separately with identical acoustic settings:
+The final report does not claim Baseline acoustic measurements. Baseline vs
+Champion is compared on the frozen injected test set. If you run a diagnostic
+Baseline acoustic trial, keep it clearly separate and do not merge it with the
+Champion official result.
+
+Optional diagnostic-only Baseline command:
 
 ```bash
 .venv/bin/python scripts/run_benchmark_assistant.py --profile baseline --device 0 \

@@ -1,6 +1,6 @@
 # Frozen threshold 0.954: measured results
 
-The six-second model is the repository default by the user's explicit decision after validation-only gate refinement. Pi 5 verification is pending. Both test and holdout were previously exposed during research; no untouched-set or independent-speaker claim is made. No weights or gates were fitted during this evaluation.
+The six-second model is the repository default by the user's explicit decision after validation-only gate refinement. This report covers frozen injected VCM evaluation; the separate Champion Pi 5 acoustic results are in PI5_ACOUSTIC_CHAMPION_20261017.md. Both test and holdout were previously exposed during research; no untouched-set or independent-speaker claim is made. No weights or gates were fitted during this evaluation.
 
 | Split/cohort | run_043 intent | Selected intent | run_043 accepted intent+slot | Selected accepted intent+slot |
 | --- | ---: | ---: | ---: | ---: |
@@ -38,7 +38,7 @@ On the identical 284 processed calibration negatives, run_043 accepts 15 (5.28%)
 
 Selected: 488,264 parameters, trained ONNX 2,136,900 bytes; baseline: 327,750 parameters, ONNX 1,488,732 bytes. The earlier 2,028,874-byte figure described the untrained preflight export, not the selected trained graph. One intra-op and one inter-op CPU thread are configured. Per-split reports contain host feature+ONNX p95 and actual-duration RTF; these are not Pi measurements. Model-only timing uses a separate script and nominal capacity. Capture, decoding, services and speech are excluded from injected timing.
 
-The selected frontend retains the continuous input waveform up to 96,000 samples and includes its final partial frame. Over-capacity, flat and invalid inputs reject explicitly. This is waveform retention, not manually verified complete-word retention. Live capture uses pre-roll and 1.2 s pause tolerance; host simulation passes, actual Pi mic/latency remains pending. The baseline uses its historical two-second center-feature crop. Duration cohorts and all failures are reported rather than silently dropped.
+The selected frontend retains the continuous input waveform up to 96,000 samples and includes its final partial frame. Over-capacity, flat and invalid inputs reject explicitly. This is waveform retention, not manually verified complete-word retention. Live capture uses pre-roll and the measured 800 ms endpoint default; `--end-silence-ms 1200` is an explicit longer-pause override. See the separate acoustic report for Pi microphone/latency scope. The baseline uses its historical two-second center-feature crop. Duration cohorts and all failures are reported rather than silently dropped.
 
 ## Limits and independent confirmation
 
