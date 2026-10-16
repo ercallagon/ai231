@@ -27,6 +27,11 @@ class SetupError(ValueError):
 
 
 SOLOIST_ARM64_URL = "https://soloist-builds.spotifycdn.com/soloist_release_arm64.tar.gz"
+PIPER_AMY_REVISION = "664c651454f055ed34bd83f09e024ffbc0da09ac"
+PIPER_AMY_FILES = (
+    ("en_US-amy-medium.onnx", 63_201_294, "778d28aeb95fcdf8a882344d9df142fc"),
+    ("en_US-amy-medium.onnx.json", 7_007, "eed7b28ea26b86395fd842942bdaea4c"),
+)
 
 
 def download_soloist(home):
@@ -90,6 +95,60 @@ def download_soloist(home):
                     os.unlink(temporary)
                 except FileNotFoundError:
                     pass
+
+
+def download_default_voice(home):
+    voice_dir = home / "voices"
+    voice_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    base_url = (
+        "https://huggingface.co/rhasspy/piper-voices/resolve/"
+        f"{PIPER_AMY_REVISION}/en/en_US/amy/medium"
+    )
+    temporary = []
+    installed = []
+    destinations = [voice_dir / name for name, _, _ in PIPER_AMY_FILES]
+    if any(path.exists() for path in destinations):
+        raise SetupError("A default voice file already exists; inspect it before replacing anything")
+    try:
+        for (name, expected_size, expected_md5), destination in zip(PIPER_AMY_FILES, destinations):
+            fd, temp_path = tempfile.mkstemp(prefix="piper-voice-", dir=voice_dir)
+            temporary.append(temp_path)
+            digest = hashlib.md5(usedforsecurity=False)
+            total = 0
+            with os.fdopen(fd, "wb") as output:
+                with urlopen(f"{base_url}/{name}", timeout=60) as response:
+                    if not response.geturl().startswith("https://"):
+                        raise SetupError("Voice download redirected away from HTTPS")
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > expected_size:
+                            raise SetupError(f"Voice file {name} exceeded its published size")
+                        digest.update(chunk)
+                        output.write(chunk)
+            if total != expected_size or digest.hexdigest() != expected_md5:
+                raise SetupError(f"Downloaded voice file {name} failed its pinned size/checksum check")
+        for temp_path, destination in zip(temporary, destinations):
+            os.link(temp_path, destination)
+            installed.append(destination)
+        print(f"Downloaded default Piper voice: {PIPER_AMY_FILES[0][1] / (1024 * 1024):.1f} MiB model")
+        return str(destinations[0])
+    except SetupError:
+        for path in installed:
+            path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        for path in installed:
+            path.unlink(missing_ok=True)
+        raise SetupError(f"Default voice download failed ({type(exc).__name__})") from None
+    finally:
+        for temp_path in temporary:
+            try:
+                os.unlink(temp_path)
+            except FileNotFoundError:
+                pass
 
 
 
@@ -226,10 +285,24 @@ def wizard(home, session=False):
         cfg["secrets"]["phone_mac"] = hidden("Phone Bluetooth MAC", r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
         print("Pairing and phone permission prompts are completed using: swift.py bluetooth")
     if yes("Enable Piper spoken responses?"):
-        print("Piper and a separately licensed .onnx voice plus matching .onnx.json are required.")
-        if not yes("Have you checked and accepted the chosen voice's terms?"):
-            raise SetupError("Authorized voice required")
-        cfg["voice_model"] = existing_path("Voice .onnx path")
+        print("Piper speech is optional and is used only for synthesis, not command detection.")
+        print("Default: en_US-amy-medium (~60 MiB), pinned from rhasspy/piper-voices.")
+        print("Voice card: https://huggingface.co/rhasspy/piper-voices/tree/664c651454f055ed34bd83f09e024ffbc0da09ac/en/en_US/amy/medium")
+        print("Its model card points to Mycroft Mimic3 voice terms: https://github.com/MycroftAI/mimic3-voices/blob/master/LICENSE")
+        if yes("Use the default Amy medium voice?", True):
+            if not yes("Have you reviewed and accepted this voice's terms?"):
+                raise SetupError("Authorized voice required")
+            cfg["voice_model"] = str(home / "voices/en_US-amy-medium.onnx")
+            if not Path(cfg["voice_model"]).is_file():
+                if yes("Download the pinned default voice into this checkout now?", True):
+                    cfg["voice_model"] = download_default_voice(home)
+                else:
+                    cfg["voice_model"] = existing_path("Voice .onnx path")
+        else:
+            print("Use a voice you have reviewed and accepted, with its matching .onnx.json sidecar.")
+            if not yes("Have you checked and accepted the chosen voice's terms?"):
+                raise SetupError("Authorized voice required")
+            cfg["voice_model"] = existing_path("Voice .onnx path")
         if not Path(cfg["voice_model"] + ".json").is_file():
             raise SetupError("Missing voice configuration")
         try:

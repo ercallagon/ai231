@@ -81,12 +81,27 @@ and API keys use hidden input. Each feature's prerequisites are explicit:
 | Spotify | Internet for setup, personal Soloist key/Premium, phone Spotify Connect authorization |
 | Calls | Compatible paired phone/tablet, SIM/call permissions, native PipeWire telephony/HFP gateway, private international-format recipient |
 | SMS | Phone supports MAP, message-access permission, BlueZ OBEX user service, private recipient |
-| Speech | Optional pinned Piper dependencies and your authorized voice .onnx + .onnx.json |
+| Speech | Optional pinned Piper dependencies and a voice you accept the terms for |
 
 Pretrained Piper voices are synthesis-only; neither wake nor VCM detector loads
 pretrained weights. Voice/song terms are separate from the project's MIT code.
 The wizard can install the optional speech lock into this venv after approval.
 It does not copy existing account profiles, contacts, login state or assets.
+
+For spoken responses, setup offers a pinned `en_US-amy-medium` Piper voice
+(about 60 MiB) and downloads its `.onnx` plus matching `.onnx.json` into this
+checkout's ignored `work/user/voices/`. It displays the model card and voice
+terms before asking for acceptance. The default is synthesis-only; it is not
+used by either detector. Users may instead provide another voice they have
+reviewed. No voice is bundled or downloaded unless speech is enabled and the
+user accepts its terms. The default files are pinned to a Piper Voices
+revision and checked against the published sizes and MD5 values.
+
+The Amy model card identifies Mycroft Mimic3 Voices as its source and refers
+to that source for license terms. Review the [voice model card](https://huggingface.co/rhasspy/piper-voices/tree/664c651454f055ed34bd83f09e024ffbc0da09ac/en/en_US/amy/medium)
+and [source voice license](https://github.com/MycroftAI/mimic3-voices/blob/master/LICENSE)
+before accepting. Voice-model rights are distinct from this project's code
+license.
 
 For offline music, the wizard defaults to
 `~/swift-clean/me2-vcm/work/user/music` for this checkout. Copy your authorized
