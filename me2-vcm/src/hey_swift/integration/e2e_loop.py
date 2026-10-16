@@ -191,6 +191,8 @@ def _capture_command_vad(device, args, *, rate=None, before_ready=None, stream_a
     pre_roll = np.zeros(0, dtype=np.float32)
     all_before_speech = []
     noise_levels = []
+    peak_input_db = -180.0
+    peak_candidate_samples = 0
     candidate_samples = 0
     candidate_start_t = None
     last_speech_sample = 0
@@ -231,6 +233,10 @@ def _capture_command_vad(device, args, *, rate=None, before_ready=None, stream_a
                     "overflow": overflow,
                     "start_sustain_ms": args.speech_start_ms,
                     "noise_floor_db": round(float(noise_floor_db), 2),
+                    "noise_calibration_min_db": round(min(noise_levels), 2) if noise_levels else None,
+                    "noise_calibration_max_db": round(max(noise_levels), 2) if noise_levels else None,
+                    "peak_input_db": round(peak_input_db, 2),
+                    "peak_onset_sustain_ms": round(peak_candidate_samples / SAMPLE_RATE * 1000, 1),
                     "threshold_db": round(max(float(args.vad_min_speech_db),
                                                float(noise_floor_db) + float(args.vad_margin_db)), 2),
                 }
@@ -247,6 +253,7 @@ def _capture_command_vad(device, args, *, rate=None, before_ready=None, stream_a
             now = time.monotonic()
             elapsed = now - capture_t0
             level_db = _dbfs(chunk)
+            peak_input_db = max(peak_input_db, level_db)
             threshold_db = max(float(args.vad_min_speech_db),
                                float(noise_floor_db) + float(args.vad_margin_db))
             voiced = speech_filter.voiced(chunk)
@@ -259,6 +266,7 @@ def _capture_command_vad(device, args, *, rate=None, before_ready=None, stream_a
                     if candidate_samples == 0:
                         candidate_start_t = now - chunk.size / SAMPLE_RATE
                     candidate_samples += chunk.size
+                    peak_candidate_samples = max(peak_candidate_samples, candidate_samples)
                 else:
                     candidate_samples = 0
                     candidate_start_t = None
@@ -541,6 +549,11 @@ def run(args) -> int:
         "live_actions": bool(args.live),
         "music_listen_volume_percent": getattr(args, "music_listen_volume_percent", 50),
         "cue_gain_db": getattr(args, "cue_gain_db", 0.),
+        "end_silence_ms": getattr(args, "end_silence_ms", None),
+        "speech_start_timeout": getattr(args, "speech_start_timeout", None),
+        "speech_start_ms": getattr(args, "speech_start_ms", None),
+        "noise_calibration_seconds": getattr(args, "vad_noise_seconds", None),
+        "vad_margin_db": getattr(args, "vad_margin_db", None),
     })
 
     with build_router(live=args.live, hardware=args.hardware, speak=args.speak,
@@ -673,6 +686,7 @@ def run(args) -> int:
                             "capture_audio_ms": round(wav.size / SAMPLE_RATE * 1000.0, 1),
                             "accepted": prediction.accepted,
                             "rejection_reason": vcm_result.get("rejection_reason"),
+                            "end_silence_ms": args.end_silence_ms,
                             "threads": getattr(vcm, "threads", 1)}), flush=True)
                     # Restore before music effects so volume commands apply to
                     # normal volume; otherwise stay quiet through spoken feedback.

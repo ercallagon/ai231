@@ -91,7 +91,7 @@
     "src/hey_swift/integration/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "src/hey_swift/integration/call_guard.py": "1eb54907680ed9025f15fb83e7d9cc3234d9bf7c3767e228f946122d232287da",
     "src/hey_swift/integration/config.py": "0ab9b046dea0c45bb8fa26a4ad2c678d3d101956b926b8c7bcf4ee6db4bce301",
-    "src/hey_swift/integration/e2e_loop.py": "6ac602cd01da4ffd095c11e2088c47a3f03338ff07f393a15190b57073857986",
+    "src/hey_swift/integration/e2e_loop.py": "6cfe2ea84b4c59c73e5f0b8af1fc55e127e9e8eebb9a189a56b2632f034fdc14",
     "scripts/summarize_runtime_latency.py": "3d999741006c74ee9605d2a53a5cc7a0395d8f61cc8dd820ce9915fe0bbd0a9b",
     "scripts/test_pi.py": "7f66f84c018cff7e9994891349cc3e18fd27c6b2fccf1dd9883405b706c8dfa0",
     "src/hey_swift/integration/model_contract.py": "897b819a9571ff2e215358e31b573c19a2f1d5129fdbef025822ba101f977483",
@@ -226,7 +226,7 @@
     "requirements-speech-py313-aarch64.lock": "ba0690f9f8178f4546415a48ad84a5e7ad3cbcf72234887f74b18a030e51fc83",
     "requirements-speech.txt": "3b572ad88e37ed282648343962a0395b93a8799fb25affb3ce431b63e62fb343",
     "scripts/run_assistant.py": "500283678ded8bab101bbd20a3444c95e80f6a4206e45854d2a647d77e8b51a1",
-    "scripts/run_benchmark_assistant.py": "debbecabab6d14c12783431978558592cf9d43a3eee0c3e918a909a658a74ab5",
+    "scripts/run_benchmark_assistant.py": "c187a394f2b7f68dcbae453fbba36008ea0e9cd3df3f323f3c2abab9c39b75df",
     "scripts/swift.py": "9c0b76d52411262e0143d2dcefa77b5ddcd7bc9c97aadbd575d34cbed907cc9e",
     "src/hey_swift/actions/services/music.py": "d3f09390f31115bed309dcadfae39dcb729ee65b6240307fcab98770dd782348",
     "src/hey_swift/actions/services/weather.py": "12aeb755e3380167a5cf4b61b8addfe077eea2cca9ca31bb80417924a73482e0",
@@ -235,7 +235,7 @@
     "src/hey_swift/profiles.py": "c6b4dc1ead8c0f1de4da03504f16d00525ab6719cc9c829f527a28decf2cb148",
     "src/hey_swift/submission_report.py": "791cfb251d77d62db647a022991e4cb9ec6233a23af844f33dd984270a384d4d",
     "src/hey_swift/telemetry.py": "0dd88ff1a300ffdc6ca0e5bc07fa74b1c9e3ade7cca83372101446e015b4def6",
-    "docs/BENCHMARK.md": "64856d1d89cf47af3ea60a47a81ab93ea3b5dd99070d5f4c5012194e54acbcce",
+    "docs/BENCHMARK.md": "9d61cef5a2b49d923129405566d69cd9fb4feb577e32a265bb512bd21ad4252c",
     "reports/SSH_WORKFLOW_CHECKS.json": "bdfca702feb3c702546d99ff1d83123c41218b2983ab060784a27582fd69f687",
     "swift": "f7528dde160bb72df301751b42e75accbbd10326afab303ccd48513b5426ea01",
     "src/hey_swift/integration/terminal.py": "7cc1b90059e4e14ef38bba9b71c31bfc6543d5d0f8b9087079732ec62ee023ff",
@@ -249,7 +249,10 @@
     "reports/PI_STREAM_STATE_FIX_20261016.md": "0b42cef9cc388f41ceaeeaecf7463a429e82b42e6af15ebf6820e03d1fb8ea2f",
     "docs/AUDIO.md": "56f66d8d748bbbc741e9e7c21e0cc82aeaa47f8a613541e0bf4574bd85767f48",
     "docs/rpi-e2e.md": "27b1fc7853a91e10d4fa252b16bdd92b052b0124258ca21463ee71f5adef2413",
-    "docs/rpi-runtime-v6.md": "05d3aecde9d139387a3a6978ecae41a70235aa7bf517bb18ed58c3b0e4bb9071"
+    "docs/rpi-runtime-v6.md": "05d3aecde9d139387a3a6978ecae41a70235aa7bf517bb18ed58c3b0e4bb9071",
+    "scripts/review_class_benchmark.py": "7fe11e6588b344a0bd037ee5efed9efc7b587aee365b9835baa775a2c929e5bd",
+    "tests/test_benchmark_runtime_workflow.py": "ecf2cd7f03379a41aff37374008e17cdba13c1c2ac92644d1dbfab6af0196798",
+    "tests/test_selected_runtime.py": "2892c3a9e12036d5b9c0730b7a2732a3a91ef37faf652e7304df84ae0fbe1aa3"
   },
   "wakeword_default": "exp15",
   "wakeword_experiments": "final_streaming_v1; Pi pending"

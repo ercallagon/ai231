@@ -1,5 +1,74 @@
 # Class benchmark and supplementary injection
 
+## Endpoint trial and clean reruns (2026-10-16)
+
+An explicit `--end-silence-ms 800` on the Pi benchmark launcher selects an
+experimental 0.8-second endpoint wait. Omitting it retains the frozen profile's
+capture policy (Champion: 1.2 seconds). Model weights, preprocessing, labels and
+rejection thresholds do not change. Use the same explicit endpoint policy for
+both models in a comparison; do not mix it with the earlier default-policy run.
+This is input endpointing, not the model's six-second capacity or the laptop's
+wake-to-command gap. A modeled 0.6-second internal pause is preserved with 800 ms;
+a modeled 1.08-second pause is NOT. Retain 1200 ms for slower/paused commands.
+Host simulations do not verify complete-word retention on the Pi.
+
+Prepare Windows first with the Pi assistant stopped. Record wake takes, choose
+the playback speaker, then calibrate the Pi microphone. `plughw:2,0` was the
+operator's USB input; recheck device enumeration rather than assuming it is
+portable. At **Sound check**, start the Pi listener and wait for Listening.
+If replaying with an already running listener and unchanged calibrated audio,
+skip the direct ALSA mic check; otherwise it competes for the same microphone.
+
+Example on Pi, from this checkout (choose a new directory for a new session):
+
+```bash
+.venv/bin/python scripts/run_benchmark_assistant.py --profile champion --device 0 --end-silence-ms 800 --log-dir work/pi5_test_01/champion_echo_endpoint800_01
+```
+
+Use that exact absolute directory in the Windows benchmark's `--log-dir` and
+retain `--wake-gap 2.0`. Keep speaker/placement/gain fixed after calibration.
+For the operator's recorded development takes, `--wake-files` accepts
+`runs/wake_probe_20261016_195853/wake_2.wav` and `wake_3.wav` with the same parent.
+These takes were screened for triggering: disclose that selection, retain wake
+misses in end-to-end scoring, and do not present the run as unbiased wake recall.
+Do not change model/gate settings based on this previously exposed holdout.
+
+The launcher now saves both a filtered `.log` (wake/decision events only) and a
+separate `.diagnostics` file (full stdout/stderr, including capture noise floor,
+threshold, no-speech peak input and maximum sustained onset). Give only the
+filtered log directory to the benchmark. Do not concatenate diagnostics into
+the score stream. Ctrl+C stops the wrapper without a Python traceback.
+
+Known Windows compatibility workarounds for the reviewed upstream version:
+create `.cache` before profiling, and in `vcmbench/pi.py`'s `SshLink.run`, keep
+`input=input_bytes` but add
+`stdin=(subprocess.DEVNULL if input_bytes is None else None)` to `subprocess.run`.
+Preserve an exclusive timestamped backup before editing. This prevents the
+no-input SSH subprocess from sharing interactive stdin while preserving data
+uploads. The operator verified this got past the repeated SSH timeout. These
+are local compatibility changes, not alterations to official scoring.
+
+After a run, retain all official outputs and the two Pi logs. Supplementary
+review of a copied Windows result directory:
+
+```bash
+.venv/bin/python scripts/review_class_benchmark.py work/copied_benchmark_run --output work/copied_benchmark_run/SWIFT_AUDIT.json
+```
+
+The audit never rewrites scores/trials or drops early events. It separates
+zero-audio failures from absent timing fields, processed-only inference/RTF,
+detector-estimated endpoint latency, negative external latencies, multiple
+decisions and accepted versus rejected no-wake predictions. It refuses to
+overwrite its output. Negative external latency can indicate a premature
+decision or playback/log timestamp mismatch; full diagnostics are needed before
+attributing it to room noise. Upstream selects the first decision in a trial
+interval, so repeated decisions can also affect recognition scoring.
+
+Rollback the endpoint experiment by omitting `--end-silence-ms` or explicitly
+using 1200 for Champion. No installation/setup rerun, model replacement or
+global audio-volume reset is required. Pi audibility, pause retention, actual
+endpoint p95 and room-noise behavior remain physical verification tasks.
+
 Reviewed upstream: https://github.com/airimonda/vcm-benchmark at commit
 ab39857cf73dd067d068fed388c321ab160dc191. Its parser/schema host suite passed
 174 checks. It expects laptop-speaker playback into the Pi microphone.

@@ -46,12 +46,13 @@ def test_strict_command_preparation_never_crops():
         assert prepare_command_audio(wave(),metadata,6,preserve_full=True)[1]==expected
 
 
-def test_capture_preserves_training_length_pause_and_ends_dynamically(monkeypatch):
+@pytest.mark.parametrize("endpoint_ms,pause_frames,speech_frames", [(1200,27,20),(800,15,20),(800,27,10)])
+def test_capture_preserves_training_length_pause_and_ends_dynamically(monkeypatch,endpoint_ms,pause_frames,speech_frames):
     from hey_swift.integration import e2e_loop as loop
     import hey_swift.audio.capture as capture
     clock=[0.]
     # Calibration, start delay, speech, 1.08s internal pause, speech, endpoint.
-    levels=[.001]*4+[.001]*5+[.1]*10+[.001]*27+[.1]*10+[.001]*40
+    levels=[.001]*4+[.001]*5+[.1]*10+[.001]*pause_frames+[.1]*10+[.001]*40
     class Stream:
         def __init__(self,**kwargs): self.i=0
         def __enter__(self): return self
@@ -67,13 +68,13 @@ def test_capture_preserves_training_length_pause_and_ends_dynamically(monkeypatc
     monkeypatch.setattr(capture,"ContinuousResampler",Resampler)
     monkeypatch.setattr(loop.time,"monotonic",lambda:clock[0])
     args=SimpleNamespace(vad_frame_ms=40,command_seconds=7.4,min_command_seconds=.5,
-        speech_start_ms=120,pre_roll_ms=200,end_silence_ms=1200,
+        speech_start_ms=120,pre_roll_ms=200,end_silence_ms=endpoint_ms,
         speech_start_timeout=3.,vad_noise_seconds=.16,vad_margin_db=10,vad_min_speech_db=-45)
     audio,meta=loop._capture_command_vad(0,args,rate=16000)
     assert meta["reason"]=="end_silence"
-    assert np.count_nonzero(audio>.05)==20*640
+    assert np.count_nonzero(audio>.05)==speech_frames*640
     assert meta["capture_seconds"]<6
-    assert 1.19<=meta["endpoint_wait_seconds"]<=1.25
+    assert endpoint_ms/1000-.01<=meta["endpoint_wait_seconds"]<=endpoint_ms/1000+.05
 
 
 @pytest.mark.parametrize("intent,slot,rejected",[("TEMPERATURE","22",False),("TEMPERATURE","REJECT",True),("OUT_OF_SCOPE",None,True),(None,None,True)])
