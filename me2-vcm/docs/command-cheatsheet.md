@@ -44,6 +44,24 @@ TTS/cue/owned-call suppression is not acoustic echo cancellation. Unrelated
 buzz/ring/beep false wakes still need recordings; model/thresholds are preserved.
 Real call/SMS tests require your deliberate authorization. No automatic test
 script places calls, sends messages or changes live audio profiles.
+
+## Private Setup Updates
+
+From the repository root, update a single saved setting without rerunning setup:
+
+```bash
+./swift config set call-number
+./swift config set sms-number
+./swift config set phone-mac
+./swift config set spotify-key
+./swift config set spotify-uri spotify:playlist:PLAYLIST_ID
+./swift config set weather-location
+```
+
+Phone numbers, MAC address and Spotify key are requested through hidden input;
+never append them as command arguments. Updates retain every other field and
+create a private timestamped profile backup. See [the Pi quickstart](QUICKSTART_PI.md)
+for setup defaults, asset locations and update commands after installation.
 # Capture Safety Note (2026-10-12)
 
 If the runtime reports `Music could not be quieted`, the command was skipped;

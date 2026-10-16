@@ -16,6 +16,9 @@ After the quickstart installation, the commands are:
 ./swift report
 ```
 
+Optional one-field updates, such as a private phone recipient, are documented in
+the [Pi quickstart](docs/QUICKSTART_PI.md#change-one-setting-later).
+
 `run` previews actions; `demo` guides configured real effects with per-call/SMS
 confirmation. The report consolidates frozen recognition, timing, rejection,
 cohort/family/coverage, resource and historical training/wake evidence; missing

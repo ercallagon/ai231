@@ -64,20 +64,21 @@ loads no stored profile. /dev/shm is required; RAM can be swapped by the OS.
 An abrupt kill may leave RAM files/its own daemon; normal exit cleans them.
 Existing Bluetooth pairing remains OS state in either mode.
 
-The wizard lists audio devices and stores microphone name + host API, resolving
-the index again at each run. Missing/ambiguous devices fail explicitly. Playback
-uses the OS default sink; inspect it with `wpctl status -n` and listen at a safe
-level. Choosing/changing a default sink affects other installations too.
+The wizard selects the only microphone automatically, or asks you to choose if
+there are several. It stores microphone name + host API and resolves the device
+index again at each run. Playback uses the OS default sink; inspect it with
+`wpctl status -n`. Changing that default affects other installations too.
 
-Enable only integrations you actually have. Private recipients, MAC addresses
-and API keys use hidden input. Each feature's prerequisites are explicit:
+Choose only the optional integrations you use. Required recipients, MAC
+addresses and API keys use hidden input. Paths and service defaults are filled
+in automatically:
 
 | Feature | Required setup |
 | --- | --- |
 | Time/reminders | Correct OS time/timezone; reminders stored in this checkout |
 | LED/display | gpiozero/lgpio, permission to /dev/gpiochip*, tested wiring below |
 | Weather | Internet and selected coordinates; no API key; unavailable honestly offline |
-| Offline music | Your authorized MP3 directory; mpv; no songs are redistributed |
+| Offline music | Put authorized MP3s in the checkout's `work/user/music/`; mpv |
 | Spotify | Internet for setup, personal Soloist key/Premium, phone Spotify Connect authorization |
 | Calls | Compatible paired phone/tablet, SIM/call permissions, native PipeWire telephony/HFP gateway, private international-format recipient |
 | SMS | Phone supports MAP, message-access permission, BlueZ OBEX user service, private recipient |
@@ -85,17 +86,17 @@ and API keys use hidden input. Each feature's prerequisites are explicit:
 
 Pretrained Piper voices are synthesis-only; neither wake nor VCM detector loads
 pretrained weights. Voice/song terms are separate from the project's MIT code.
-The wizard can install the optional speech lock into this venv after approval.
+After you enable spoken responses and accept the voice terms, setup downloads
+the pinned voice and installs its hash-locked dependencies into this venv.
 It does not copy existing account profiles, contacts, login state or assets.
 
-For spoken responses, setup offers a pinned `en_US-amy-medium` Piper voice
-(about 60 MiB) and downloads its `.onnx` plus matching `.onnx.json` into this
-checkout's ignored `work/user/voices/`. It displays the model card and voice
-terms before asking for acceptance. The default is synthesis-only; it is not
-used by either detector. Users may instead provide another voice they have
-reviewed. No voice is bundled or downloaded unless speech is enabled and the
-user accepts its terms. The default files are pinned to a Piper Voices
-revision and checked against the published sizes and MD5 values.
+If you enable spoken responses, setup offers the pinned `en_US-amy-medium`
+Piper voice (about 60 MiB), shows its model card and source terms, and asks for
+acceptance. On acceptance it downloads the `.onnx` and matching `.onnx.json`
+into ignored `work/user/voices/`, verifies published sizes and checksums, and
+installs the pinned Piper dependencies in this checkout's venv automatically.
+The voice is used only for synthesis, not by either detector. No voice is
+bundled or downloaded unless speech is enabled and its terms are accepted.
 
 The Amy model card identifies Mycroft Mimic3 Voices as its source and refers
 to that source for license terms. Review the [voice model card](https://huggingface.co/rhasspy/piper-voices/tree/664c651454f055ed34bd83f09e024ffbc0da09ac/en/en_US/amy/medium)
@@ -103,10 +104,9 @@ and [source voice license](https://github.com/MycroftAI/mimic3-voices/blob/maste
 before accepting. Voice-model rights are distinct from this project's code
 license.
 
-For offline music, the wizard defaults to
-`~/swift-clean/me2-vcm/work/user/music` for this checkout. Copy your authorized
-MP3 files into that directory before enabling music, or enter another directory
-inside this checkout. The setup rejects a directory without `.mp3` files.
+For offline music, setup creates
+`~/swift-clean/me2-vcm/work/user/music` and uses it automatically. It continues
+if the folder is empty; copy authorized MP3 files there before trying music.
 For example, from a second Pi SSH terminal, after confirming the source folder
 contains only files you are authorized to use:
 
@@ -115,20 +115,19 @@ mkdir -p ~/swift-clean/me2-vcm/work/user/music
 cp ~/ai231/me2-vcm/integration/assets/*.mp3 ~/swift-clean/me2-vcm/work/user/music/
 ```
 
-Then enter the checkout-local destination when the setup wizard asks. This
-keeps runtime music files out of the code checkout's tracked files while
-avoiding a dependency on the older installation after copying.
+No path entry is needed. Music stays under the new checkout after copying.
 
 For Spotify, obtain your key through a phone/browser at the official page:
 https://developer.spotify.com/documentation/soloist/concepts/authentication
-When you enable Spotify, setup can download the official ARM64 archive directly
-from Spotify into this checkout's ignored `work/user/downloads/` and install the
-executable under `work/user/bin/`. It prints the actual archive size. This
-requires internet on the Pi and does not run during general dependency
-installation. You can instead provide an executable you downloaded from
-Spotify's [official downloads page](https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates).
+When you enable Spotify, setup automatically downloads the official ARM64
+archive into ignored `work/user/downloads/` and installs the executable under
+`work/user/bin/` if it is not already there. It prints the actual archive size.
+This requires internet on the Pi and runs only after you enable Spotify. You can
+also install from Spotify's [official downloads page](https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates).
 The project does not redistribute Soloist. Spotify builds expire after 90 days.
-Then run:
+The setup uses Spotify Top 50 - Philippines by default. To use another playlist,
+set its Spotify URI after setup with `./swift config set spotify-uri URI`.
+Then authorize it:
 
 ```bash
 ./swift spotify
@@ -155,6 +154,44 @@ The pairing command asks before changing shared Bluetooth state. Passkeys and
 permissions need physical phone interaction. Diagnostics do not place calls or
 send messages. Compatible gateway/MAP detection is not successful call/SMS proof.
 Unsupported phones remain a clearly reported integration blocker.
+
+### Change One Setting Later
+
+Run setup from the checkout to review service enablement. To replace one private
+value without repeating setup, use `config set`; the profile is backed up
+privately and all other settings are retained. Sensitive values are requested
+with hidden input, so do not put phone numbers or keys in shell arguments:
+
+```bash
+./swift config set call-number
+./swift config set sms-number
+./swift config set phone-mac
+./swift config set spotify-key
+./swift config set spotify-uri spotify:playlist:PLAYLIST_ID
+./swift config set weather-location
+```
+
+The first four commands prompt privately. Press Enter at the Spotify URI prompt
+to restore the Top 50 - Philippines default. `weather-location` prompts for a
+city and coordinates. These commands change one saved field and preserve the
+rest of the private profile.
+
+### Update After Installation
+
+If `./swift install` already succeeded and setup was cancelled, update source
+without reinstalling dependencies:
+
+```bash
+cd ~/swift-clean
+git pull --ff-only origin main
+cd me2-vcm
+./swift setup
+./swift doctor
+```
+
+The setup files and downloaded assets under `work/user/` remain in place. If a
+profile was already saved, setup asks whether to reuse it; use `./swift config
+set ...` to update one value without rebuilding the profile.
 
 ## 3. Preview and real demo
 

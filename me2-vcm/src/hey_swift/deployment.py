@@ -27,6 +27,7 @@ class SetupError(ValueError):
 
 
 SOLOIST_ARM64_URL = "https://soloist-builds.spotifycdn.com/soloist_release_arm64.tar.gz"
+DEFAULT_SPOTIFY_URI = "spotify:playlist:37i9dQZEVXbNBz9cRCSFkY"
 PIPER_AMY_REVISION = "664c651454f055ed34bd83f09e024ffbc0da09ac"
 PIPER_AMY_FILES = (
     ("en_US-amy-medium.onnx", 63_201_294, "778d28aeb95fcdf8a882344d9df142fc"),
@@ -151,6 +152,41 @@ def download_default_voice(home):
                 pass
 
 
+CONFIG_FIELDS = {
+    "call-number": ("calling_number", r"\+[1-9][0-9]{7,14}"),
+    "sms-number": ("messaging_number", r"\+[1-9][0-9]{7,14}"),
+    "phone-mac": ("phone_mac", r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}"),
+    "spotify-key": ("soloist_key", r"\S+"),
+}
+
+
+def update_config(home, key, value=None):
+    cfg = load_config(home)
+    if key in CONFIG_FIELDS:
+        secret_key, pattern = CONFIG_FIELDS[key]
+        if value is not None:
+            raise SetupError(f"{key} is entered through a hidden prompt; omit the value from the command")
+        cfg.setdefault("secrets", {})[secret_key] = hidden(f"New {key}", pattern)
+    elif key == "spotify-uri":
+        updated = value if value is not None else input("Spotify URI (Enter restores Top 50 - Philippines): ").strip()
+        if updated and not re.fullmatch(r"spotify:(track|playlist|album):[A-Za-z0-9]+", updated):
+            raise SetupError("Use a spotify:track, spotify:album or spotify:playlist URI")
+        cfg["spotify_uri"] = updated or DEFAULT_SPOTIFY_URI
+    elif key == "weather-location":
+        updated = value if value is not None else input("Weather city label [Quezon City]: ").strip()
+        cfg["city"] = updated or "Quezon City"
+        cfg["latitude"] = float(input("Latitude [14.6488]: ").strip() or "14.6488")
+        cfg["longitude"] = float(input("Longitude [121.0509]: ").strip() or "121.0509")
+        if not -90 <= cfg["latitude"] <= 90 or not -180 <= cfg["longitude"] <= 180:
+            raise SetupError("Invalid coordinates")
+    else:
+        raise SetupError("Editable fields: call-number, sms-number, phone-mac, spotify-key, spotify-uri, weather-location")
+    cfg["updated_utc"] = datetime.now(timezone.utc).isoformat()
+    private_json(home / "profile.json", cfg)
+    print(f"Updated {key}; other settings were retained and the previous profile was backed up privately.")
+    return 0
+
+
 
 def yes(prompt, default=False):
     suffix = " [Y/n]: " if default else " [y/N]: "
@@ -195,6 +231,25 @@ def microphone(config):
     return str(matches[0]["index"])
 
 
+def choose_microphone(listing):
+    inputs = [device for device in listing if device["inputs"]]
+    if not inputs:
+        raise SetupError("No microphone input device found")
+    if len(inputs) == 1:
+        chosen = inputs[0]
+        print(f"Using microphone {chosen['index']}: {chosen['name']} ({chosen['hostapi']}).")
+        return chosen
+    print("Select the microphone to use:")
+    for device in inputs:
+        print(f"{device['index']}: {device['name']} ({device['hostapi']})")
+    while True:
+        selected = input("Microphone index: ").strip()
+        chosen = next((device for device in inputs if str(device["index"]) == selected), None)
+        if chosen:
+            return chosen
+        print("Choose one of the listed input devices.")
+
+
 def hidden(prompt, pattern=None):
     while True:
         value = getpass.getpass(prompt + ": ").strip()
@@ -218,65 +273,44 @@ def wizard(home, session=False):
     print("OS audio routes, Bluetooth pairing and GPIO remain shared with other installations.")
     if not session and (home / "profile.json").exists() and yes("Explicitly reuse this checkout's saved configuration?"):
         return load_config(home)
-    listing = devices()
-    for d in listing:
-        print(f"{d['index']}: {d['name']} ({d['hostapi']}) input={d['inputs']} output={d['outputs']}")
-    while True:
-        selected = input("Microphone index: ").strip()
-        chosen = next((d for d in listing if str(d["index"]) == selected and d["inputs"]), None)
-        if chosen:
-            break
-        print("Choose a listed input device.")
+    chosen = choose_microphone(devices())
     cfg = dict(schema=1, microphone={k: chosen[k] for k in ("name", "hostapi")},
-               hardware="mock", enabled=[], weather=False, spotify=False, speech=False, secrets={})
+               hardware="mock", enabled=["information", "reminders"], weather=False,
+               spotify=False, speech=False, secrets={})
     print("Playback uses the OS default PipeWire sink; inspect it with wpctl status -n.")
-    if yes("Enable local time and reminders?", True):
-        cfg["enabled"] += ["information", "reminders"]
     if yes("Enable RGB LED and TM1637 using the documented BCM17/27/22 and BCM23/24 wiring?"):
         cfg["enabled"].append("devices")
         cfg["hardware"] = "pi"
-    if yes("Enable internet weather (Open-Meteo; no API key)?"):
+    if yes("Enable Open-Meteo weather? Uses internet and defaults to Quezon City."):
         cfg["enabled"] = sorted(set(cfg["enabled"] + ["information"]))
         cfg["weather"] = True
-        cfg["city"] = input("Weather location label [Quezon City]: ").strip() or "Quezon City"
-        cfg["latitude"] = float(input("Latitude [14.6488]: ").strip() or "14.6488")
-        cfg["longitude"] = float(input("Longitude [121.0509]: ").strip() or "121.0509")
-        if not -90 <= cfg["latitude"] <= 90 or not -180 <= cfg["longitude"] <= 180:
-            raise SetupError("Invalid coordinates")
+        cfg.update(city="Quezon City", latitude=14.6488, longitude=121.0509)
     if yes("Enable offline MP3 music?"):
-        if not yes("Do you have permission to use these local audio files?"):
-            raise SetupError("Authorized assets required")
         default_music_dir = home / "music"
-        default_music_dir.mkdir(parents=True, exist_ok=True)
-        entered_music_dir = input(
-            f"Directory containing authorized MP3 files [{default_music_dir}]: "
-        ).strip()
-        directory = Path(entered_music_dir or default_music_dir).expanduser().resolve()
-        if not list(directory.glob("*.mp3")):
-            raise SetupError(f"No MP3 files in {directory}; copy authorized files there, then rerun setup")
-        cfg["music_dir"] = str(directory)
+        default_music_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        cfg["music_dir"] = str(default_music_dir)
         cfg["enabled"].append("music")
+        print(f"Add MP3s you are authorized to use under {default_music_dir}; no path entry is needed.")
+        if not list(default_music_dir.glob("*.mp3")):
+            print("No MP3 files found yet; setup will continue. Add files before using offline music.")
     if yes("Enable Spotify Soloist?"):
         print("Each user needs Spotify Premium and a personal Soloist key:")
         print("https://developer.spotify.com/documentation/soloist/concepts/authentication")
-        print("Get the ARM64 binary from https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates")
+        print("Setup downloads Spotify's official ARM64 executable into this checkout when needed.")
         print("Use a phone browser/app on this LAN for authorization. No password is requested here.")
         default_soloist = home / "bin/soloist"
         if default_soloist.is_file() and os.access(default_soloist, os.X_OK):
-            if yes(f"Use this checkout's Soloist executable at {default_soloist}?", True):
-                cfg["soloist_binary"] = str(default_soloist)
-            else:
-                cfg["soloist_binary"] = existing_path("Path to your officially downloaded Soloist executable", True)
-        elif yes("Download the official ARM64 Soloist executable into this checkout now?", True):
+            cfg["soloist_binary"] = str(default_soloist)
+            print(f"Using this checkout's Soloist executable: {default_soloist}")
+        elif not default_soloist.exists():
             cfg["soloist_binary"] = download_soloist(home)
         else:
-            cfg["soloist_binary"] = existing_path("Path to your officially downloaded Soloist executable", True)
+            raise SetupError(f"Soloist path exists but is not executable; inspect it: {default_soloist}")
         cfg["secrets"]["soloist_key"] = hidden("Personal Soloist API key", r"\S+")
         cfg["spotify"] = True
         cfg["enabled"].append("music")
-        cfg["spotify_uri"] = input("Optional spotify:playlist/album/track URI (Enter for default): ").strip()
-        if cfg["spotify_uri"] and not re.fullmatch(r"spotify:(track|playlist|album):[A-Za-z0-9]+", cfg["spotify_uri"]):
-            raise SetupError("Invalid Spotify URI")
+        cfg["spotify_uri"] = DEFAULT_SPOTIFY_URI
+        print("Music default: Spotify Top 50 - Philippines. Change later with ./swift config set spotify-uri.")
     for group, label in (("calling", "phone calls"), ("messaging", "SMS")):
         if yes(f"Enable real {label} (requires compatible phone and terminal confirmation for each action)?"):
             cfg["enabled"].append(group)
@@ -285,31 +319,25 @@ def wizard(home, session=False):
         cfg["secrets"]["phone_mac"] = hidden("Phone Bluetooth MAC", r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
         print("Pairing and phone permission prompts are completed using: swift.py bluetooth")
     if yes("Enable Piper spoken responses?"):
-        print("Piper speech is optional and is used only for synthesis, not command detection.")
-        print("Default: en_US-amy-medium (~60 MiB), pinned from rhasspy/piper-voices.")
+        print("Default: en_US-amy-medium (~60 MiB), synthesis only; not used for command detection.")
         print("Voice card: https://huggingface.co/rhasspy/piper-voices/tree/664c651454f055ed34bd83f09e024ffbc0da09ac/en/en_US/amy/medium")
         print("Its model card points to Mycroft Mimic3 voice terms: https://github.com/MycroftAI/mimic3-voices/blob/master/LICENSE")
-        if yes("Use the default Amy medium voice?", True):
-            if not yes("Have you reviewed and accepted this voice's terms?"):
-                raise SetupError("Authorized voice required")
+        if yes("Enable Piper speech with the default Amy voice and accept its terms?"):
             cfg["voice_model"] = str(home / "voices/en_US-amy-medium.onnx")
-            if not Path(cfg["voice_model"]).is_file():
-                if yes("Download the pinned default voice into this checkout now?", True):
-                    cfg["voice_model"] = download_default_voice(home)
-                else:
-                    cfg["voice_model"] = existing_path("Voice .onnx path")
+            if not Path(cfg["voice_model"]).is_file() and not Path(cfg["voice_model"] + ".json").is_file():
+                cfg["voice_model"] = download_default_voice(home)
+            if not Path(cfg["voice_model"]).is_file() or not Path(cfg["voice_model"] + ".json").is_file():
+                raise SetupError("Default voice model and matching JSON must both be present")
+            cfg["speech"] = True
         else:
-            print("Use a voice you have reviewed and accepted, with its matching .onnx.json sidecar.")
-            if not yes("Have you checked and accepted the chosen voice's terms?"):
-                raise SetupError("Authorized voice required")
-            cfg["voice_model"] = existing_path("Voice .onnx path")
-        if not Path(cfg["voice_model"] + ".json").is_file():
-            raise SetupError("Missing voice configuration")
+            print("Speech remains disabled; setup will continue without a voice model.")
+    if cfg["speech"]:
         try:
             importlib.import_module("piper")
         except ImportError:
-            if sys.prefix == sys.base_prefix or not yes("Install locked Piper dependencies into this virtual environment?"):
+            if sys.prefix == sys.base_prefix:
                 raise SetupError("Piper is required for spoken responses")
+            print("Installing the pinned Piper dependencies into this checkout's virtual environment.")
             subprocess.check_call([sys.executable, "-m", "pip", "install", "--require-hashes", "--only-binary=:all:",
                                    "-r", str(ROOT / "requirements-speech-py313-aarch64.lock")])
             importlib.invalidate_caches()
@@ -521,6 +549,11 @@ def main():
     sub = parser.add_subparsers(dest="action", required=True)
     p = sub.add_parser("install"); p.add_argument("--uv", action="store_true")
     p = sub.add_parser("setup"); p.add_argument("--session", action="store_true")
+    p = sub.add_parser("config", help="Update one value in this checkout's private setup")
+    config_sub = p.add_subparsers(dest="config_action", required=True)
+    p = config_sub.add_parser("set")
+    p.add_argument("key", choices=(*CONFIG_FIELDS, "spotify-uri", "weather-location"))
+    p.add_argument("value", nargs="?")
     sub.add_parser("doctor")
     for action in ("run", "live-latency", "demo"):
         p = sub.add_parser(action)
@@ -543,6 +576,8 @@ def main():
         return 0
     if args.action == "doctor":
         return doctor(home)
+    if args.action == "config":
+        return update_config(home, args.key, args.value)
     if args.action == "evaluate":
         code = subprocess.call([sys.executable, str(ROOT / "scripts/test_pi.py"), *( ["--reset"] if args.reset else [])], cwd=ROOT)
         if code:
