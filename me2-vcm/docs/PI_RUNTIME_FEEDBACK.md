@@ -16,7 +16,8 @@ require the checks below.
 | Successful dialing followed by stopped listening | The confirmation wrapper did not expose `.backend`, which the call guard required. It now forwards backend access. Transient call-state errors retry with bounded backoff; unknown states never count as idle. |
 | Call service reported 21.506 seconds | Its timer included waiting for typed approval. Removing the prompt removes that component; actual Bluetooth/TTS time still needs Pi measurement. The reported inference was 0.111 seconds. |
 | Four model choices | `selected` aliases Champion; `run043` aliases Baseline. Help now presents only the two public names; older commands still work. |
-| Playback masks the wake phrase | Same-terminal music controls lower/pause/stop playback. Offline PLAY previously reset music to 25%; it now preserves lower volumes. This does not implement AEC or improve the wake model itself. |
+| Playback masks the wake phrase | Same-terminal music controls lower/pause/stop playback. Within one assistant run, offline PLAY preserves a lower user-set level; each new run restores the remembered player to its configured 25% baseline. This does not implement AEC or improve the wake model itself. |
+| Piper speech is quiet or changes after music commands | Speech now uses `pw-play --volume` on its own stream (default 0.5); `VCM_SPEECH_CHANNEL_VOLUME` is the optional 0..1 override and survives the public launcher. Each new run restores the remembered music player to its configured 25% baseline. Neither action changes the global sink, cue, or call stream. |
 | Spotify first attempt fell back | Root cause remains unconfirmed without its diagnostic. Startup now warms control readiness before listening (15-second bound); play uses saved-login activation with a 25-second budget. Fallback diagnostics include the failing phase. Existing pause-confirmation safety remains. |
 
 ## Update and Check on Pi
@@ -42,9 +43,12 @@ Startup should show the v7 marker. Existing private profiles remain usable.
 
 1. Wake without speaking; verify console rejection with no spoken timeout reply.
 2. Test a light, timer and reminder to check normal routing and speech.
-3. Play music and record the reported backend and any Spotify diagnostic/phase.
-   Type `:volume 10` and Enter; check music becomes quieter and Hey Swift can be
-   heard. Pause/resume and verify the lower offline level remains.
+3. Check TTS audibility with a normal response, then repeat at
+   `VCM_SPEECH_CHANNEL_VOLUME=0.65 ./swift run --model champion --live` if
+   needed. Play music and record the reported backend. Type `:volume 10` and
+   Enter; verify speech volume and routing stay separate. Stop and restart the
+   assistant: the remembered player should remain selected and return to 25%.
+   The global sink level should not change.
 4. When deliberately testing a real call, confirm your configured recipient
    first. Check dialing needs no terminal approval, wake capture pauses, and
    listening resumes after the tablet actually ends the call. Remote hangup

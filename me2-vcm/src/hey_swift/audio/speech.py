@@ -9,6 +9,8 @@ import tempfile
 import threading
 import hashlib
 import json
+import math
+import os
 import queue
 import time
 from typing import Protocol
@@ -44,10 +46,56 @@ def play_wav(path: Path, *, timeout=60) -> None:
         raise SpeechUnavailable("No playback adapter configured for this platform.")
 
 
+def speech_playback_volume(value=None):
+    raw = os.environ.get("VCM_SPEECH_CHANNEL_VOLUME", "0.5") if value is None else value
+    try:
+        volume = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise SpeechUnavailable("TTS playback volume must be a number from 0 to 1.") from exc
+    if not math.isfinite(volume) or not 0 <= volume <= 1:
+        raise SpeechUnavailable("TTS playback volume must be a number from 0 to 1.")
+    return volume
+
+
+def speech_playback_sink(value=None):
+    sink = os.environ.get("VCM_SPEECH_SINK", "") if value is None else value
+    sink = str(sink).strip()
+    if any(character in sink for character in ("\x00", "\n", "\r")):
+        raise SpeechUnavailable("TTS output target is invalid.")
+    return sink or None
+
+
+def play_speech_wav(path: Path, *, timeout=60, volume=None) -> None:
+    """Play speech with per-stream gain; leave cue and device volume untouched."""
+    if sys.platform.startswith("linux"):
+        gain = speech_playback_volume(volume)
+        sink = speech_playback_sink()
+        if shutil.which("pw-play"):
+            command = ["pw-play", "--volume", f"{gain:g}"]
+            if sink:
+                command.extend(["--target", sink])
+            command.append(str(path))
+            subprocess.run(command,
+                           check=True, timeout=timeout)
+            return
+        if shutil.which("paplay"):
+            paplay_volume = round(gain * 65536)
+            command = ["paplay", f"--volume={paplay_volume}"]
+            if sink:
+                command.append(f"--device={sink}")
+            command.append(str(path))
+            subprocess.run(command,
+                           check=True, timeout=timeout)
+            return
+        if gain != 1 or sink:
+            raise SpeechUnavailable("TTS-only volume/routing needs pw-play or paplay; no global audio setting was changed.")
+    play_wav(path, timeout=timeout)
+
+
 class PiperSpeech:
     """Load one pretrained voice lazily and reuse it on CPU."""
 
-    def __init__(self, model_path, *, player=play_wav, phrases_dir=None):
+    def __init__(self, model_path, *, player=play_speech_wav, phrases_dir=None):
         self.model_path = Path(model_path)
         self._player = player
         self._voice = None
@@ -117,7 +165,7 @@ class PiperSpeech:
             prepared = time.monotonic()
             with wave.open(str(path), "rb") as wav:
                 duration = wav.getnframes() / wav.getframerate()
-            if self._player is play_wav:
+            if self._player is play_speech_wav:
                 self._player(path, timeout=max(5., duration + 5.))
             else:
                 self._player(path)

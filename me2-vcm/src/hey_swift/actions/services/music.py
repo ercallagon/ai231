@@ -81,6 +81,12 @@ class MpvBackend:
             current = self.command("get_property", "volume", timeout=1)
             self.command("set_property", "volume", min(current, self.max_volume_percent), timeout=1)
 
+    def reset_session_volume(self):
+        if self.max_volume_percent is None or not self.is_running():
+            return False
+        self.command("set_property", "volume", self.max_volume_percent, timeout=1)
+        return True
+
     def command(self, *command, timeout=5):
         if sys.platform == "win32":
             raise MusicUnavailable("Use Pi/Linux for mpv IPC playback; Windows supports mock tests and Spotify API control.")
@@ -254,6 +260,12 @@ class SoloistBackend:
         if self.max_volume_percent is not None:
             current = self.ctl("now", as_json=True, timeout=1).get("volume", 100)
             self.ctl("volume", str(min(int(current), self.max_volume_percent)), timeout=1)
+
+    def reset_session_volume(self):
+        if self.max_volume_percent is None or not self.is_running():
+            return False
+        self.ctl("volume", str(self.max_volume_percent), timeout=1)
+        return True
 
     def ensure_started(self):
         if self.is_running():
@@ -472,6 +484,13 @@ class AutoMusicBackend:
         if self.active is not None:
             player = self.online if self.active == "spotify" else self.offline
             player.limit_volume()
+
+    def reset_active_session_volume(self):
+        """Reset only the remembered player to the configured listening baseline."""
+        if self.active is None:
+            return False
+        player = self.online if self.active == "spotify" else self.offline
+        return player.reset_session_volume()
 
     def set_volume(self, percent):
         """Adjust only the selected player; never alter the OS/call sink gain."""

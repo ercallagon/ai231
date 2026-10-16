@@ -250,10 +250,27 @@ Enter; no wake phrase is required:
 
 Controls run between capture operations and affect only the selected music
 player. `:volume` accepts whole percentages up to the existing 25% listening
-cap; `:quieter` decreases by ten points. Lower levels persist when offline
-playback resumes. They do not change the speaker's global or call volume.
+cap; `:quieter` decreases by ten points. The selected backend is retained so
+pause/stop/volume commands continue to target the player that owns playback.
+At each new assistant launch, that player's volume is restored to the configured
+25% baseline; terminal changes apply for the current run. This affects only
+the selected music player, not the speaker sink or call volume.
 This provides a demo recovery path when playback masks Hey Swift; acoustic
 echo cancellation is not implemented.
+
+Piper speech uses a separate PipeWire playback stream at 50% by default. This
+does not change the chime, music, call stream or global sink. To adjust TTS for
+one run, use a value from 0 to 1. To pin only speech to a specific PipeWire
+output node, set `VCM_SPEECH_SINK` to the exact node name shown by `wpctl status -n`:
+
+```bash
+VCM_SPEECH_CHANNEL_VOLUME=0.65 VCM_SPEECH_SINK=alsa_output.usb-DEVICE.analog-stereo ./swift run --model champion --live
+```
+
+The launcher passes only these speech overrides while continuing to isolate
+other inherited `VCM_*` variables. With no volume override, every new run starts at 0.5.
+`pw-play` (or `paplay`) is required to apply speech-only gain; the runtime will
+not raise global output volume as a fallback.
 
 With Spotify enabled, live startup warms its saved-login daemon for up to
 15 seconds before listening, without requesting activation or playback.

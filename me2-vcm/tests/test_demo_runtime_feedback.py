@@ -218,10 +218,16 @@ def test_public_launch_passes_opt_in_flags_and_isolates_environment(monkeypatch,
     monkeypatch.setattr(deployment, "microphone", lambda cfg: "0")
     run = Mock(return_value=0)
     monkeypatch.setattr(deployment.subprocess, "call", run)
+    monkeypatch.setenv("VCM_SPEECH_CHANNEL_VOLUME", "0.65")
+    monkeypatch.setenv("VCM_SPEECH_SINK", "usb-speaker")
+    monkeypatch.setenv("VCM_UNRELATED_SECRET", "must-not-pass")
     cfg = dict(enabled=["calling", "messaging"], hardware="pi", secrets={})
     deployment.assistant(cfg, tmp_path, live=True)
     assert run.call_args.kwargs["env"]["HEY_SWIFT_CONFIRM_COMMUNICATIONS"] == "0"
     assert run.call_args.kwargs["env"]["VCM_SPOTIFY_ENABLED"] == "0"
+    assert run.call_args.kwargs["env"]["VCM_SPEECH_CHANNEL_VOLUME"] == "0.65"
+    assert run.call_args.kwargs["env"]["VCM_SPEECH_SINK"] == "usb-speaker"
+    assert "VCM_UNRELATED_SECRET" not in run.call_args.kwargs["env"]
     deployment.assistant(cfg, tmp_path, live=True, confirm_communications=True, speak_no_speech=True)
     assert run.call_args.kwargs["env"]["HEY_SWIFT_CONFIRM_COMMUNICATIONS"] == "1"
     assert "--speak-no-speech" in run.call_args.args[0]

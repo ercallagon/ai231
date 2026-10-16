@@ -32,6 +32,37 @@ def test_no_active_music_remains_usable():
         restore()
 
 
+def test_new_run_resets_only_persisted_music_route_to_configured_baseline(tmp_path):
+    from hey_swift.actions.services.music import AutoMusicBackend
+
+    state = tmp_path / "music-routing.json"
+    state.write_text('{"active":"offline"}')
+    online = SimpleNamespace(reset_session_volume=Mock(return_value=True))
+    offline = SimpleNamespace(reset_session_volume=Mock(return_value=True))
+    backend = AutoMusicBackend(online, offline, state_path=state)
+
+    assert backend.reset_active_session_volume() is True
+    online.reset_session_volume.assert_not_called()
+    offline.reset_session_volume.assert_called_once_with()
+    assert state.read_text() == '{"active":"offline"}'
+
+
+def test_music_session_volume_reset_uses_player_baseline_only():
+    from hey_swift.actions.services.music import MpvBackend, SoloistBackend
+
+    offline = MpvBackend([], "/unused", max_volume_percent=25)
+    offline.is_running = Mock(return_value=True)
+    offline.command = Mock()
+    assert offline.reset_session_volume() is True
+    offline.command.assert_called_once_with("set_property", "volume", 25, timeout=1)
+
+    online = SoloistBackend(max_volume_percent=25)
+    online.is_running = Mock(return_value=True)
+    online.ctl = Mock()
+    assert online.reset_session_volume() is True
+    online.ctl.assert_called_once_with("volume", "25", timeout=1)
+
+
 def test_failed_quieting_returns_to_listening_without_inference_or_action(monkeypatch):
     stub = broken_router()
     devices = SimpleNamespace(execute=Mock())

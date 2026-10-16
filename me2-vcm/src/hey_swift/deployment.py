@@ -354,6 +354,9 @@ def wizard(home, session=False):
 
 def isolated_env(cfg, state):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("VCM_", "HEY_SWIFT_"))}
+    for variable in ("VCM_SPEECH_CHANNEL_VOLUME", "VCM_SPEECH_SINK"):
+        if variable in os.environ:
+            env[variable] = os.environ[variable]
     env.update(HEY_SWIFT_RUNTIME_ROOT=str(state), HEY_SWIFT_ENABLED_INTEGRATIONS=",".join(cfg["enabled"]),
                HEY_SWIFT_CONFIRM_COMMUNICATIONS="0", VCM_SOLOIST_PROFILE="bundled",
                VCM_SPOTIFY_ENABLED="1" if cfg.get("spotify") else "0",

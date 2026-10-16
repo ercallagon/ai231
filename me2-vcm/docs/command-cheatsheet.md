@@ -51,6 +51,13 @@ These controls avoid requiring a wake while music masks speech. They run
 between capture operations, have no spoken reply, and leave global/call volume
 alone. This is playback control; no AEC is claimed.
 
+Each new assistant run restores the remembered music player to the configured
+25% baseline while preserving which player is active. Terminal volume changes
+last for the current run. Piper TTS has independent per-stream volume (default
+0.5); one-run volume and optional sink overrides are `VCM_SPEECH_CHANNEL_VOLUME=0.65`
+and `VCM_SPEECH_SINK=EXACT_NODE_NAME`. Chime, music, call and global sink levels
+are controlled separately.
+
 Advanced flags below belong to `.venv/bin/python scripts/run_assistant.py`,
 not the public `./swift run` wrapper:
 

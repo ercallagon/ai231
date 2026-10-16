@@ -230,9 +230,13 @@ def build_router(*, live=False, hardware="mock", speak=False,
                                  state_path=ROOT / "state/music-routing.json",
                                  reachable=(lambda: False) if offline_mode or os.environ.get("VCM_SPOTIFY_ENABLED") == "0" else (lambda: True)))
             try:
-                music.backend.limit_active_volume()
-            except Exception:
-                pass
+                reset = music.backend.reset_active_session_volume()
+                route = music.backend.active or "auto"
+                volume_note = f"{music_volume_limit}% baseline restored" if reset else "baseline applies on first playback"
+                print(f"Music_startup: route={route}; {volume_note}.", flush=True)
+            except Exception as exc:
+                print(f"Music_startup: route={music.backend.active or 'auto'}; volume baseline unavailable ({type(exc).__name__}).",
+                      flush=True)
             services["music"] = music
         if "information" in enabled:
             weather = OpenMeteoWeatherProvider(offline=offline_mode or os.environ.get("VCM_WEATHER_ENABLED") == "0")
