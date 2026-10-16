@@ -150,7 +150,8 @@ For phone integrations, explicitly pair/connect and approve phone permissions:
 ./swift doctor
 ```
 
-The pairing command asks before changing shared Bluetooth state. Passkeys and
+The pairing command asks before changing shared Bluetooth state. If the phone is
+already paired, it skips pairing and proceeds to trust/connect. Passkeys and
 permissions need physical phone interaction. Diagnostics do not place calls or
 send messages. Compatible gateway/MAP detection is not successful call/SMS proof.
 Unsupported phones remain a clearly reported integration blocker.

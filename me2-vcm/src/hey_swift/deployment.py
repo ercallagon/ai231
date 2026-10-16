@@ -440,9 +440,19 @@ def bluetooth(cfg):
         return 1
     print("Enable Bluetooth/discoverability on the phone. Approve matching passkeys and call/message access there.")
     subprocess.run(["bluetoothctl", "--timeout", "15", "scan", "on"], check=False)
-    for command in (("--agent", "KeyboardDisplay", "pair"), ("trust",), ("connect",)):
-        if subprocess.call(["bluetoothctl", *command, mac]):
+    info = subprocess.run(["bluetoothctl", "info", mac], capture_output=True, text=True, check=False)
+    already_paired = re.search(r"^\s*Paired:\s+yes\s*$", info.stdout, re.MULTILINE) is not None
+    if already_paired:
+        print("Phone is already paired; continuing with trust/connect.")
+    else:
+        pair = subprocess.run(["bluetoothctl", "--agent", "KeyboardDisplay", "pair", mac],
+                              capture_output=True, text=True, check=False)
+        if pair.returncode and "org.bluez.Error.AlreadyExists" not in pair.stdout + pair.stderr:
             print("Bluetooth step failed; pairing is pending. No call or SMS was initiated.")
+            return 1
+    for command in (("trust",), ("connect",)):
+        if subprocess.call(["bluetoothctl", *command, mac]):
+            print("Bluetooth step failed; trust/connect is pending. No call or SMS was initiated.")
             return 1
     print("Bluetooth connected. Phone HFP/PipeWire telephony and MAP/OBEX support still require diagnostics.")
     return 0
