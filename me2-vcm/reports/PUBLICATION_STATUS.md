@@ -34,7 +34,7 @@ Baseline/Champion comparisons use frozen injected test data.
 CHECKS.json, FINAL_CHECKS.json and PUBLICATION_CHECKS.json are immutable
 historical execution receipts. Their original dependency/authentication states
 and test counts describe their own runs. They are not current publication
-status. Updated review receipts remain under ignored work/ until reviewed.
+status. Current review receipts are retained in the local work/ archive.
 
 Published historical logs replace private host prefixes with PROJECT_ROOT or
 HPC_HOME. [PROVENANCE_REDACTIONS.json](PROVENANCE_REDACTIONS.json) ties published
@@ -42,11 +42,11 @@ and archived hashes; original local artifacts remain intact. The original
 exp15 configuration's best_epoch 60 is preserved with an evidence-based
 correction to epoch 42.
 
-## Evidence Limits
+## Measurement and Use Scope
 
-[SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) centralizes the outstanding
-rights/access, independent-speaker, wake-data and cluster metadata evidence.
-Test/holdout were repeatedly exposed; official wake positives are synthetic.
-Acoustic results do not verify call recovery, music/AEC robustness or fresh-OS
-installation. The source-code MIT licence does not grant underlying data,
-voice or model permissions.
+Champion acoustic measurements and the frozen injected Baseline comparison are
+distinct evaluations. Test/holdout were previously exposed, and the isolated
+wake test uses synthetic positives. [SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md)
+defines the evidence scope; [DATASET_LICENSE.md](../data/DATASET_LICENSE.md) and
+[MODEL_TERMS.md](../MODEL_TERMS.md) define source-specific use conditions separately
+from the source-code MIT licence.

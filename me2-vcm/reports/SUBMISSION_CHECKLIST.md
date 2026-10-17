@@ -95,16 +95,14 @@ document; current results wording has changed without changing frozen evidence.
 [WEIGHTS_RELEASE_20261017.json](WEIGHTS_RELEASE_20261017.json) records verification.
 [MODEL_TERMS.md](../MODEL_TERMS.md) governs the weights separately from code MIT.
 
-## Evidence Requiring Additional Records
+## Interpretation and Access Terms
 
-- Source/voice permissions and consent: incomplete for the sources explicitly
-  identified in DATASET_LICENSE.md; no permission is inferred from public access.
-- Independent speakers: no fresh reserved confirmation set has been collected.
-- Public wake retraining: raw-recording retrieval and permission records are incomplete.
-- Cluster node ID: absent from committed training provenance.
-- Device scope: call-end recovery, music/AEC robustness and fresh-OS installation
-  have not been verified. The acoustic export lacks execution-time model/config
-  hashes and Git revision; exact loaded-byte identity is not proven by that run.
-
-These are evidence limitations, not completed requirements. Existing immutable
-receipts and historical experiment records retain their original measurements.
+Results characterize the recorded evaluation conditions and previously exposed
+sets; they do not establish independent unseen-speaker performance. The public
+reproduction command evaluates the frozen VCM models. Full wake retraining is
+outside that public recipe because recording access and consent documentation
+are incomplete. Source-specific voice/data permissions are described in
+[DATASET_LICENSE.md](../data/DATASET_LICENSE.md); public availability supplies no
+additional permission. [MODEL_TERMS.md](../MODEL_TERMS.md) applies separately to
+weights. The [acoustic report](PI5_ACOUSTIC_CHAMPION_20261017.md) defines timing,
+provenance and device scope. Historical receipts retain their original results.

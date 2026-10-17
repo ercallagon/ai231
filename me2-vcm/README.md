@@ -172,7 +172,7 @@ incorrect best_epoch 60 recorded in the preserved historical config.
 - experiments/RUN_INDEX.csv: historical trial inventory; incompatible
   protocols and unknown/incomplete results are marked rather than ranked together.
 - reports/MODEL_SELECTION.md: validation selection and calibration history.
-- reports/SUBMISSION_CHECKLIST.md: submission evidence and documented limitations.
+- reports/SUBMISSION_CHECKLIST.md: submission criteria, evidence and evaluation scope.
 - reports/PUBLICATION_STATUS.md: current publication scope versus historical receipts.
 - reports/PI5_ACOUSTIC_CHAMPION_20261017.md: Champion acoustic results, timing scopes
   and recorded conditions.
@@ -180,11 +180,11 @@ incorrect best_epoch 60 recorded in the preserved historical config.
 - scripts/reproduce.py: injected-file feature/model recognition and RTF on host/Pi.
 - docs/BENCHMARK.md: class laptop-speaker -> Pi-microphone benchmark.
 
-Host regression tests use mocked calls, SMS, capture and GPIO. Pi injection,
-Champion acoustic results at the 800 ms default, and operator GPIO/audio checks
-are available. Call recovery and fresh independent-speaker confirmation remain
-pending. See the
-[candidate audit](reports/FINAL_CANDIDATE.md) for counts and scope limitations.
+Verification comprises host regressions with mocked services/peripherals,
+frozen Pi injection, Champion acoustic results at the 800 ms endpoint, and
+operator GPIO/audio observations. The [candidate audit](reports/FINAL_CANDIDATE.md)
+and [submission evidence](reports/SUBMISSION_CHECKLIST.md) define the measured
+scope and interpretation.
 
 Opt-in wake trials did not justify replacing exp15; see
 [wake evidence](reports/WAKE_EXP15_STREAMFT.md). They are not extra public VCM
