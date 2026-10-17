@@ -27,7 +27,7 @@ See [commands](docs/command-cheatsheet.md), [audio](docs/AUDIO.md),
 
 | Component | Repository selection | Status |
 | --- | --- | --- |
-| Wake word | exp15 CNN + GRU, 204,738 parameters, threshold 0.30 | Preserved default; recent trials did not justify replacement |
+| Wake word | exp15 CNN + GRU, 204,738 parameters, threshold 0.30 | Frozen default; recovered checkpoint and ONNX parity verified |
 | Voice commands | Champion: 6s BC8 + TCN + attentive statistics pooling, 488,264 learned parameters, threshold 0.954 | Frozen default; Pi 5 injected comparison and Champion acoustic benchmark recorded |
 | Voice-command baseline | Baseline (2s BC8), 327,750 parameters, threshold 0.875 | Complete selectable fallback; historical run_043 lineage |
 
@@ -37,12 +37,11 @@ The archive and all 17 payload files were checksum-verified against its source
 tag; see [release verification](reports/WEIGHTS_RELEASE_20261017.json).
 Weight use follows [MODEL_TERMS.md](MODEL_TERMS.md), separately from the code licence.
 
-BC8 names this BC-ResNet-8-style width configuration, **not eight layers**:
-the backbone has 12 broadcast-residual blocks. Champion adds three temporal
-blocks and masked attentive mean/std pooling. See [architecture](docs/architecture.md).
-Six seconds is capacity, not mandatory waiting. Historical IDs (`selected`,
-`run_043`, `exp15`) remain provenance, not extra public VCM choices. No causal
-encoder, KV-cache, ASR decoder or pretrained detector is claimed.
+Champion uses a BC-ResNet-8-style width configuration with 12 broadcast-residual
+blocks, three temporal convolution blocks and masked attentive mean/std pooling.
+It classifies dynamically captured utterances with up to six-second capacity.
+Historical IDs (`selected`, `run_043`, `exp15`) identify the preserved artifact
+lineage. See [architecture](docs/architecture.md).
 
 ## Final Pi Measurements
 
@@ -50,8 +49,8 @@ Use [FINAL_PI_VALIDATION.md](docs/FINAL_PI_VALIDATION.md) for safe updates,
 preflight/provenance, injected evaluation, acoustic comparison and retrieval.
 The live default is 800 ms, measured in the Champion Pi 5 acoustic run. Use an
 explicit longer endpoint (for example 1200 ms) when commands contain long pauses;
-this trades responsiveness for pause tolerance and was not compared in a paired
-endpoint experiment.
+this provides a configurable tradeoff between responsiveness and pause tolerance.
+The [acoustic report](reports/PI5_ACOUSTIC_CHAMPION_20261017.md) records the tested conditions.
 
 ```bash
 ./swift evaluate --reset
@@ -61,11 +60,11 @@ endpoint experiment.
 
 Do not reset results during a benchmark. Injection bypasses wake/capture/actions.
 [METRICS.md](docs/METRICS.md) separates model-only, feature+ONNX, decision and
-acoustic timing. The frozen-test comparison includes Baseline and Champion; the
-class acoustic benchmark was Champion-only. See
-[the acoustic report](reports/PI5_ACOUSTIC_CHAMPION_20261017.md) for results and
-caveats. No acoustic Baseline comparison is claimed.
-[Candidate audit](reports/FINAL_CANDIDATE.md) lists evidence and limitations.
+acoustic timing. Baseline and Champion were compared on the same frozen injected
+test set. Champion was also evaluated through laptop-speaker-to-Pi-microphone
+playback. See [the acoustic report](reports/PI5_ACOUSTIC_CHAMPION_20261017.md)
+for measured results and [the candidate audit](reports/FINAL_CANDIDATE.md)
+for the evidence map and measurement scope.
 
 ## Install and verify
 
@@ -78,7 +77,7 @@ python scripts/reproduce.py verify
 
 Linux/macOS: `./run.sh verify`. Windows: `py scripts/reproduce.py verify` or
 `.\run.ps1 verify`. Verification loads both ONNX contracts, checks artifact hashes
-and runs synthetic inputs. It does not measure recognition or Pi hardware.
+and runs synthetic-input contract checks.
 
 ## One-command result reproduction
 
@@ -186,7 +185,7 @@ operator GPIO/audio observations. The [candidate audit](reports/FINAL_CANDIDATE.
 and [submission evidence](reports/SUBMISSION_CHECKLIST.md) define the measured
 scope and interpretation.
 
-Opt-in wake trials did not justify replacing exp15; see
-[wake evidence](reports/WAKE_EXP15_STREAMFT.md). They are not extra public VCM
-model choices. The [documentation index](docs/README.md) separates active guides
-from preserved historical recipes. No further training is queued.
+The frozen exp15 wake model is supported by the checkpoint, parity checks and
+controlled trials in [wake evidence](reports/WAKE_EXP15_STREAMFT.md).
+The [documentation index](docs/README.md) organizes current guides and preserved
+historical recipes.
