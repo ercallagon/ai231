@@ -62,15 +62,17 @@ The selected graph includes temperature scaling once, with temperature
 uses temperature 0.6475641442117414 and threshold 0.875.
 Runtime applies softmax without a second temperature division. Intent accuracy,
 conditional slot accuracy, raw strict E2E, and gated command success are distinct
-metrics. See [submission readiness](submission.md).
+metrics. See [frozen results](../reports/RESULTS.md).
 
 ## Runtime Safety
 
 Capture endpoints on trailing silence or bounded limits; total capture length
 and retained input length are different. Retained input exceeding capacity is
 rejected rather than silently truncated. Complete-word retention is not manually
-verified. The selected profile uses 200 ms pre-roll, sustained onset and a 1.2 s
-silence endpoint; six seconds is capacity, not mandatory waiting time. A 7.4 s
+verified. The live launcher uses 200 ms pre-roll, sustained onset and an 800 ms
+silence endpoint. The frozen model YAML preserves its historical 1200 ms entry;
+`--end-silence-ms 1200` explicitly restores that longer pause tolerance.
+Six seconds is capacity, not mandatory waiting time. A 7.4 s
 capture safety deadline permits endpoint observation but rejects incomplete
 captures. See [PI5.md](PI5.md) for current settings and separate live tests.
 

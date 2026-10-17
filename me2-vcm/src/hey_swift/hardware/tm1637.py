@@ -1,7 +1,8 @@
-"""TM1637 4-digit 7-segment display interface (lazy import).
+"""Unsupported historical TM1637 scaffold; not a functional display driver.
 
-The TM1637 is driven via bit-banged GPIO (clk + dio), so it needs RPi.GPIO.
-Lazy import keeps the module import-safe off-Pi.
+show() contains no rendering implementation and available() checks an import
+only. The tested bit-banged driver is devices.PiHardware, using gpiozero/lgpio
+on BCM23/24. This legacy class is retained for source compatibility only.
 """
 
 from __future__ import annotations

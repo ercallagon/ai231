@@ -1,8 +1,8 @@
-"""RGB LED interface (lazy RPi.GPIO import).
+"""Unsupported legacy LED scaffold; retained only for historical compatibility.
 
-Supports the state colors defined in configs/hardware.yaml (idle, listening,
-processing, success, error). On non-Pi machines, set_rgb raises a clear error;
-use `available()` to probe first.
+This class does not implement RGB mixing, defaults to an obsolete single pin,
+and calls a nonstandard GPIO pulse method. available() checks an import only.
+The supported Pi 5 runtime uses devices.PiHardware with BCM17/27/22 instead.
 """
 
 from __future__ import annotations

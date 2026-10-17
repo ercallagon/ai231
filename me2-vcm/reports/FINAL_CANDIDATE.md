@@ -1,174 +1,76 @@
-# Final Submission Candidate Audit
+# Submission Candidate
 
-Status: frozen models; Champion Pi 5 acoustic run completed 2026-10-17. Read alongside
-[RESULTS.md](RESULTS.md), [MODEL_SELECTION.md](MODEL_SELECTION.md), and
-[the final handoff](../docs/FINAL_PI_VALIDATION.md). The containing Git commit,
-not a historical run ID, identifies this candidate. No retraining, gate fitting,
-model replacement, split change or automatic deployment is part of this update.
+Champion is the frozen six-second BC8-TCN-ASP model, with 488,264 learned
+parameters and confidence threshold 0.954. Baseline is two-second BC8
+(historical run_043), 327,750 parameters and threshold 0.875. Exp15 CNN-GRU,
+204,738 parameters and threshold 0.30, remains the wake model.
+[MODEL_SELECTION.md](MODEL_SELECTION.md) records selection and calibration;
+[RESULTS.md](RESULTS.md) contains the frozen injected comparison.
 
-## Frozen Selection
+## Measured Pi 5 Results
 
-Champion: six-second BC8-TCN-ASP, 488,264 learned parameters, gate 0.954.
-Baseline: two-second BC8, 327,750 parameters, historical run_043, gate 0.875.
-Wake: exp15 CNN-GRU, 204,738 parameters, gate 0.30. Calibration temperature is
-already baked into each VCM ONNX; do not divide logits again. Configs, labels,
-manifests and models are hashed in ARTIFACTS.json and data/model_reference.json.
-No pretrained detector weights are used; optional Piper synthesis is separate.
+The [Champion-only acoustic report](PI5_ACOUSTIC_CHAMPION_20261017.md) records
+the speaker-to-microphone benchmark. Baseline was compared on frozen injected
+test data; no acoustic Baseline comparison was performed.
 
-BC8 is the repository's BC-ResNet-8-style width configuration, not eight layers:
-12 broadcast blocks (stage repeats 2/2/4/4; widths 64/96/128/160), stem 128,
-tail 256. Champion adds temporal stride-two pooling, a 128-channel projection,
-three noncausal residual depthwise temporal blocks (kernel 5, dilations 1/3/9),
-and masked attentive mean/std pooling. It is not a causal encoder, KV-cache
-system or an unmodified paper model. The upstream ONNX profiler's 499,784 count
-is not the training code's learned-parameter count; disclose counting scope.
-
-## Received Pi Evidence
-
-The final Champion-only acoustic benchmark and trial-level audit are summarized
-in [PI5_ACOUSTIC_CHAMPION_20261017.md](PI5_ACOUSTIC_CHAMPION_20261017.md).
-It recorded 170/186 (91.4%) accepted-correct supported intent+slot decisions,
-including 74/86 real and 96/100 synthetic; OOS false accepts were 2/16. The
-detector-estimated speech-end-to-decision p95 was 926.7 ms (n=194); feature
-preparation+inference p95 was 116.5 ms (n=194). The acoustic run was Champion
-only; frozen injected test remains the Baseline/Champion comparison. The
-runtime default endpoint is 800 ms, the tested setting, with 1200 ms available
-as an explicit pause-tolerance override.
-
-Limitations: 4/16 no-wake controls produced a wake event, all rejected before
-action; the sample is small. Nine external laptop-to-Pi timing values were
-negative, so the report's 1.776 s p95 is not presented as a valid command-end
-latency. Four trial intervals had multiple decisions. The benchmark output did
-not include an execution-time model/config hash or Git revision. See the linked
-report for exact provenance and the generated report's OOS narrative correction.
-
-Uploaded injection: work/pi5_review/REPORT.md, test_RESULTS.json and
-holdout_RESULTS.json in the private research workspace. Raw cost/environment
-files were not included in that upload. Reported model-only Champion p95
-89.18 ms / nominal RTF 0.01486 remains user-returned evidence, not a freshly
-rerun host measurement. Do not confuse the earlier 48.31 ms two-second Baseline
-measurement with Champion cost.
-
-| Champion metric | Test | Holdout |
-| --- | --- | --- |
-| Raw intent, full manifest | 4466/4693 (95.16%) | 191/202 (94.55%) |
-| Raw real intent | 649/824 (78.76%) | 87/96 (90.63%) |
-| Raw synthetic intent | 3817/3869 (98.66%) | 104/106 (98.11%) |
-| Accepted-correct supported intent + slot | 4046/4367 (92.65%) | 178/186 (95.70%) |
-| Accepted-correct real supported | 508/777 (65.38%) | 78/86 (90.70%) |
-| Accepted-correct synthetic supported | 3538/3590 (98.55%) | 100/100 (100%) |
-| OOS false accepts | 14/326 | 1/16 |
-| Processing failures | 16, all real | 0 |
-
-Keep failures in full-manifest denominators and also report processed-subset
-metrics. These sets have been inspected repeatedly; they are **previously
-exposed evaluations**, not independent unseen confirmation. Real/synthetic
-grouping follows frozen source metadata, not predictions. Neither high synthetic
-accuracy nor 86 supported real holdout examples establishes broad generalization.
-
-Earlier class acoustic run: laptop runs/20261016-201135; 202 wake-present and
-16 no-wake trials, seed 42, screened wake takes 2/3, ECHO Spot playback, two-second
-gap, 1200 ms endpoint, preview actions. Preserved source file SHA-256:
-
-| File | SHA-256 |
+| Metric | Champion acoustic result |
 | --- | --- |
-| report.md | 8e08ba3374b2699549b0a62d3434b76f119fef3661b30269b6620b1c46e7e95c |
-| metrics.json | ebff6edd77b5826c6245910a9138293374ca51d0ecfe2c237c97b9e5837de4dc |
-| trials.csv | 889f0b650ebbc9d5498ffef40a571c4b14207f8f87df822608f219ec13ad3a8d |
-| pi_metrics.csv | e0019a21e767fd4cc2294e53e232dd24157ad6d033d0b0c7eeeddd150aa53b87 |
+| Intent accuracy | 184/202 (91.1%) |
+| Accepted-correct supported intent + slot | 170/186 (91.4%) |
+| Real / synthetic supported success | 74/86 (86.0%) / 96/100 (96.0%) |
+| OOS false accepts | 2/16; real 0/10, synthetic 2/6 |
+| No-wake controls | 4/16 triggered wake; all rejected before action |
+| Processing/no-response | One zero-audio decision; seven no-response wake-present trials |
+| Feature preparation + inference p95 | 116.5 ms, n=194 processed decisions |
+| Actual-audio RTF p95 | 0.1475 |
+| Detector-estimated speech-end to decision p95 | 926.7 ms, n=194; includes endpoint wait, excludes services/TTS |
+| Runtime | Pi 5, 4 GB; ONNX Runtime CPU; one intra-op/inter-op thread; 800 ms endpoint |
+| Resources | Peak RSS 201.7 MB; mean CPU 61.3%; peak temperature 51.2 C; no throttling observed |
 
-Raw user logs/recordings remain local, not publication assets. The uploaded class
-outputs lack a contemporaneous model hash, Git revision and full calibration
-record. Identity is consistent with the selected model path/size, not proven by
-an execution-time hash. The new preflight closes that provenance gap prospectively.
+The detector endpoint uses the last voiced frame read time, not annotated
+acoustic ground truth. Nine external laptop-observed timings were negative,
+so the external 1.776 s p95 is not a valid command-end latency estimate.
+Four trial intervals had multiple decisions; the official scorer uses the
+first decision. No failed or early trials were removed from official scoring.
 
-- Official command decisions: 159/202 (78.71%); supported accepted-correct
-  144/186 (77.42%): real 68/86, synthetic 76/100.
-- Supported failures: 14 no-response, 9 zero-audio no-sustained-speech,
-  19 inferred/rejected or other OOS outputs. Saved predictions cannot distinguish
-  low-confidence rejection from OOS argmax without fuller diagnostics.
-- Conditional slot accuracy 78/78 applies only after correct intent; it is not
-  unconditional success across all slotted commands.
-- Family success: COLOR 10/18, BRIGHTNESS 12/18, TIMER 13/18,
-  ALARM 14/18, CREATE_REMINDER 14/18, TEMPERATURE 15/18.
-- OOS false accepts 1/16. Three OOS no-responses are scored as rejection, not
-  confirmed model rejection. No-wake fires 5/16 comprise four rejected decisions
-  and one accepted MESSAGE; no service was executed in preview.
-- Processed inference (input preparation + features + ONNX), n=176:
-  mean 108.767 ms, p95 116.15 ms; actual-audio RTF p95 0.16412.
-- Detector-estimated speech-end to prediction, n=176: p95 1326.24 ms.
-  Endpoint wait is included; action/TTS and laptop log-delivery time are not.
-- Runtime CPU mean 59.1%, RSS maximum 201.9 MB, temperature maximum 54 C,
-  reported throttling flags zero. These are run-specific, not universal limits.
+The 2026-10-17 run used two screened wake takes, a two-second wake-to-command
+gap and 29.3 dB SNR. It does not establish unbiased wake recall, false wakes/hour,
+independent-speaker generalization or noise/music/AEC robustness. The export
+lacks contemporaneous model/config hashes and Git revision, so exact loaded-byte
+identity is not cryptographically established by that run. Source file hashes
+are retained in the acoustic report.
 
-## Findings And Disposition
+## Implementation and Verification
 
-| Finding / metric | Addressed | Still required / tradeoff |
-| --- | --- | --- |
-| Endpoint dominates decision delay | 800 ms is now the runtime default and was used in the Champion Pi run | Detector-estimated p95 926.7 ms; no paired endpoint comparison; pauses >800 ms may split |
-| Model inference vs action latency confused | Distinct model-only, feature+ONNX, detector-end and external scopes | Do not call 116 ms speech-end latency |
-| Missing vs zero timing conflated | Supplementary audit separates them | Initial nine zero-audio decisions were not missing fields |
-| Early/multiple decisions | Full diagnostics and unique logs; audit preserves original scoring | Four final-run intervals had multiple events; nine external latency values were negative; scorer uses first event |
-| Wake detection claim | Explicit wake events distinguished from proxy command receipt | Two wake takes were pre-screened; 4/16 no-wake controls triggered, all rejected; not a wake-hour estimate |
-| Capture/no-speech failures | Added peak/noise/onset diagnostics, not weakened onset gate | Pi reproduction with fixed gain/placement; noise alone not established cause |
-| Speech/music isolation | Operator confirmed stable independent TTS across restarts and tablet volume changes | Not acoustic echo cancellation; loud music can still mask wake |
-| GPIO/action path | Operator reported successful visible actions for 22 phrases | Not proof of actual calls/SMS or call-end recovery |
-| Runtime rollback | Both models and 1200 ms endpoint retained | Do not overwrite working deployment automatically |
-| Coverage and rejection | Full manifests, failures, source/family and accepted/raw scopes retained | Fresh unseen speakers absent; small OOS/no-wake samples uncertain |
+The two-input mel/mask adapter, retained-input capacity guard, exact slot
+translation and fail-closed OOS/unsupported-value routing are implemented.
+Temperature scaling is baked into each ONNX once. The selected six-second
+capacity is not a fixed listening time. Complete-word retention has not been
+manually annotated.
 
-Host tests show 800 ms retains a synthetic 0.6 s internal pause but ends before
-speech after a 1.08 s pause; 1200 ms preserves that longer pause. Complete-word
-retention is not manually established. Six seconds is capacity, not fixed wait.
-The laptop wake-to-command gap is not included in speech-end decision timing.
-No inference conclusion establishes real service latency or success.
+The profile launcher supplies 800 ms endpoint silence instead of forwarding the
+frozen YAML's historical 1200 ms value. Explicit 1200 ms remains available for
+longer pauses. Host regressions verify the public launcher path and overrides
+for both profiles. Models, gates and data are unchanged. The recorded acoustic
+run supplied 800 ms explicitly and retains its original measurement scope.
 
-The class scorer selects the first decision in its trial interval. Negative
-external timing may reflect premature triggers or clock/playback/log attribution;
-do not drop early events, rewrite scores or blame room noise without evidence.
-Supplementary review_class_benchmark.py never changes the official score.
+[FINAL_CHECKS.json](FINAL_CHECKS.json) preserves the earlier 258-pass/four-skip
+host receipt. [VERIFICATION.md](VERIFICATION.md) describes checkpoint/ONNX
+parity, runtime contracts and operator-confirmed GPIO/audio evidence. New local
+review receipts do not replace these immutable historical records. Host checks
+use mocked peripherals/services and establish no successful real call/SMS.
 
-## Repository And Submission Audit
+## Evidence and Limits
 
-The incoming curated tree had 444 ME2 tracked files, 48,059,078 bytes, with no
-tracked raw Parquet, user songs/voices, private profiles, caches or archives.
-Original research artifacts are not moved/deleted. Historical contender evidence
-is retained intentionally, not promoted. The shared Git repository's ME1 and
-history are preserved. A restricted experiment allowlist reduces accidental
-future staging of research runs; no broad staging command is needed.
+The [submission evidence checklist](SUBMISSION_CHECKLIST.md) centralizes source
+rights/consent, independent-speaker, public wake-data and cluster metadata gaps.
+The complete injected comparison retains 16 Champion test processing failures
+in the full denominator, real/synthetic cohorts, OOS rates and paired/family
+errors. Test and holdout were repeatedly examined; later gate refinement used
+validation/tune only. No fresh unseen confirmation is claimed.
 
-Use scripts/prepare_submission_inventory.py --tracked to regenerate file sizes,
-hashes and pattern-based sensitive-content checks. A pattern scan is not proof
-of universal secret absence. Tests, inventory and a clean exported-tree contract
-check must pass before publication; execution receipts stay under ignored work/.
-No raw private diagnostics, credentials or recordings are submission evidence.
-
-Host execution receipt: [FINAL_CHECKS.json](FINAL_CHECKS.json). The CPU suite
-passed 258 tests with four explicit skips: two obsolete A0-export checks and
-two unavailable raw-wake-data integration checks. Active frozen ONNX contracts
-passed independently; 146 protected artifact hashes were unchanged. The initial
-full invocation in an inference-only environment failed on absent torch/sklearn;
-those dependency failures were rerun in the existing training environment with
-GPUs disabled, not suppressed. Temporary CPU unit-test smoke fits are not new
-experiments. Pi and complete-word listening verification remain separate.
-
-Two-slide fields: source/DOI/licences, utterance and duration accounting,
-architecture/parameters, seeds/splits/logs/checkpoints, comparable-size baseline,
-test recognition/source/family/rejection metrics and reproducible commands are
-in the repository. Pi cost/resource scope must identify its actual source. The
-acoustic baseline comparison was not run; frozen injected test supplies the
-Baseline/Champion comparison. No fresh-OS,
-unseen-speaker, AEC or successful telephony recovery claim is justified.
-
-## Freeze And Decision
-
-Retain Champion as the published recognition default with Baseline selectable;
-this is not a new model promotion. The measured endpoint is 800 ms; other
-interaction settings still require their own evidence. Require artifact
-integrity, complete denominators and no
-unexplained scoring corruption or material retention regression. Sub-second
-decision p95 is a target; no numerical accuracy/false-trigger acceptance cutoff
-was pre-agreed, so do not invent one after seeing results. The final deck now
-includes the measured evidence; licensing, team/author confirmation and device
-limitations remain visible in the checklist. Afterwards limit changes to
-evidence/reports/deck unless a material issue is explained with its retesting
-requirements first.
+Original experiment artifacts, full selected logs, checkpoints and manifests
+are preserved. Earlier preparation and first-acoustic-run detail remain in
+[the historical audit](https://github.com/ercallagon/ai231/blob/9de6bb4eb0bf309b1166969748875e3d78cb49e7/me2-vcm/reports/FINAL_CANDIDATE.md).
+The comparable-model evidence is a system comparison, not an isolated
+architecture ablation. Call-end recovery and fresh-OS installation are unverified.

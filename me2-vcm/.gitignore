@@ -84,6 +84,8 @@ overrides/
 *.ses
 *.session
 *.session-journal
+# Presentation files are submitted separately from the source repository.
+reports/ME2_submission_deck.*
 .ssh/
 .aws/
 .codex/

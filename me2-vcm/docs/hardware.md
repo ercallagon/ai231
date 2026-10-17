@@ -1,67 +1,71 @@
-# Hardware
+# Raspberry Pi 5 Hardware
 
-Raspberry Pi 5 peripheral wiring and configuration. All interfaces are
-**lazy-imported** (D-011): `import hey_swift` works off-Pi; a clear error is
-raised only when a peripheral is actually driven.
+The supported live adapter is [devices.py](../src/hey_swift/hardware/devices.py):
+`PiHardware` uses gpiozero with the OS-provided lgpio backend; `MockHardware`
+records actions for host tests. GPIO imports occur only when the Pi adapter is
+constructed. The public entry point is `./swift run --model champion --live`.
 
-## Overview
+## Tested Wiring
 
-| Peripheral | Driver | Bus | Config key |
-|---|---|---|---|
-| RGB LED | `hardware/devices.py` / `gpiozero.RGBLED` | GPIO via lgpio | `led` |
-| 4-digit display | `hardware/devices.py` | GPIO bit-bang via lgpio | `display.tm1637` |
-| Character LCD | `hardware/lcd.py` | I2C (PCF8574) | `display.lcd` |
-| Microphone | `audio/capture.py` | ALSA / USB | `audio_io.capture_device` |
-| Speaker | `audio/playback.py` | ALSA / USB | `audio_io.playback_device` |
+The RGB LED and TM1637 remain connected simultaneously.
 
-## LED (RGB)
+| Peripheral | Connection | BCM | Physical pin |
+| --- | --- | ---: | ---: |
+| KY-016 RGB | Red | 17 | 11 |
+| KY-016 RGB | Green | 27 | 13 |
+| KY-016 RGB | Blue | 22 | 15 |
+| KY-016 RGB | Ground | - | 9 |
+| TM1637 | CLK | 23 | 16 |
+| TM1637 | DIO | 24 | 18 |
+| TM1637 | VCC (3.3 V) | - | 17 |
+| TM1637 | Ground | - | 6 |
 
-- **Pins:** BCM 17 red, BCM 27 green, BCM 22 blue — `led.red_gpio`,
-  `led.green_gpio`, `led.blue_gpio`.
-- **States** (`led.colors`): idle (dim blue), listening (green), processing
-  (amber), success (bright green), error (red).
-- **Enable:** `sudo apt install python3-lgpio` and `pip install gpiozero`.
-  Use a venv created with `--system-site-packages` so apt's `lgpio` is visible.
+The adapter uses active-high RGB and fixed tested pins. The matching entries in
+`configs/hardware.yaml` document that contract; editing the YAML does not
+rewire `PiHardware`. The TM1637 adapter uses brightness level 3 of 7, independent
+of the legacy YAML brightness value. No I2C LCD is used.
 
-## TM1637 4-digit display
+Install `python3-lgpio` through the OS package manager and use the documented
+`--system-site-packages` virtual environment so that its ABI matches OS Python.
+`./swift install` handles the Python dependencies; [the quickstart](QUICKSTART_PI.md)
+lists the required system packages.
 
-- **Pins:** CLK = BCM 23, DIO = BCM 24 — `display.tm1637`.
-- **Driver:** bit-banged via the tested `PiHardware` adapter.
-- **Enable:** set `display.tm1637.enabled: true`.
+## Checks and Display Ownership
 
-## Character LCD (I2C)
+With other GPIO users stopped, run:
 
-- **Addr:** 0x27 (PCF8574 backpack) — `display.lcd.i2c_addr`.
-- **Enable I2C:** `sudo raspi-config` → Interface Options → I2C → Enable.
-- **Driver:** `smbus` (`sudo apt install python3-smbus`).
-- **Enable:** set `display.lcd.enabled: true`.
-
-## Audio
-
-- **Capture:** default mic, or set `audio_io.capture_device` to an index/name.
-- **Playback:** default speaker, or set `audio_io.playback_device`.
-- **Portaudio:** `sudo apt install libportaudio2` (for
-  `sounddevice`).
-- **Command window:** `audio_io.capture_block_seconds` (3.0 s) + `pre_roll_ms`
-  (200 ms) — the audio captured after a wake.
-
-## Wiring diagram (GPIO)
-
-```
-Raspberry Pi 5
-┌─────────────────────────────┐
-│  BCM 17 ──────────▶ RGB LED red
-│  BCM 27 ──────────▶ RGB LED green
-│  BCM 22 ──────────▶ RGB LED blue
-│  BCM 23 ──────────▶ TM1637 CLK
-│  BCM 24 ──────────▶ TM1637 DIO
-│  I2C (SDA/SCL) ───▶ LCD (PCF8574, 0x27)
-│  3.3V / GND ──────▶ peripherals
-└─────────────────────────────┘
-Mic (USB/ALSA) ──▶ audio_io.capture_device
-Speaker (USB/ALSA) ─▶ audio_io.playback_device
+```bash
+./swift gpio
+./swift doctor
 ```
 
-> Exact resistor values / LED common-anode-vs-cathode depend on your specific
-> module — verify against your parts before powering. This doc documents the
-> *logical* mapping; the physical schematic is a TODO for the build phase.
+The check cycles red/green/blue and displays `1234`. The operator's visual
+confirmation is recorded separately from import checks and voice recognition.
+The operator confirmed these physical effects on the tested Pi. Timer/alarm
+updates run independently of the wake-listening loop; a new display action
+supersedes earlier ownership. [Commands](command-cheatsheet.md) lists supported
+timer and alarm values.
+
+## Audio and Capture
+
+The tested mono USB microphone supports 48 kHz capture. Setup stores its device
+name and host API; runtime resolves the index and resamples continuously to
+16 kHz. Output uses the selected/default PipeWire sink, with independent
+speech/cue/music controls described in [AUDIO.md](AUDIO.md).
+
+The current capture path is `integration/e2e_loop.py`: sustained onset,
+200 ms pre-roll, dynamic trailing-silence endpointing (800 ms by default),
+a three-second speech-start timeout, and explicit retained-input capacity
+checks. Champion capacity is six seconds; the safety deadline is 7.4 seconds.
+These are not the legacy `audio_io.capture_block_seconds: 3.0` fixed-window
+settings in `hardware.yaml`. Capture policy comes from the profile launcher
+and CLI; the YAML's historical audio fields are not the current device selector.
+
+## Legacy Interfaces
+
+`hardware/led.py`, `hardware/tm1637.py` and `hardware/lcd.py` are unsupported
+historical scaffolds retained for import compatibility. The LED scaffold lacks
+RGB mixing and uses an obsolete pin; the display scaffolds contain no-op writes.
+Their `available()` methods test dependency imports, not functional hardware.
+The current runtime, CLI and tests use `hardware/devices.py`; no character LCD
+driver or schematic beyond the tested pin table is provided.

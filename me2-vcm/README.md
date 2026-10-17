@@ -31,6 +31,12 @@ See [commands](docs/command-cheatsheet.md), [audio](docs/AUDIO.md),
 | Voice commands | Champion: 6s BC8 + TCN + attentive statistics pooling, 488,264 learned parameters, threshold 0.954 | Frozen default; Pi 5 injected comparison and Champion acoustic benchmark recorded |
 | Voice-command baseline | Baseline (2s BC8), 327,750 parameters, threshold 0.875 | Complete selectable fallback; historical run_043 lineage |
 
+Frozen exports, checkpoints and matching configuration are published in the
+[v1.0.0 weights release](https://github.com/ercallagon/ai231/releases/tag/me2-weights-v1.0.0).
+The archive and all 17 payload files were checksum-verified against its source
+tag; see [release verification](reports/WEIGHTS_RELEASE_20261017.json).
+Weight use follows [MODEL_TERMS.md](MODEL_TERMS.md), separately from the code licence.
+
 BC8 names this BC-ResNet-8-style width configuration, **not eight layers**:
 the backbone has 12 broadcast-residual blocks. Champion adds three temporal
 blocks and masked attentive mean/std pooling. See [architecture](docs/architecture.md).
@@ -133,7 +139,7 @@ Use the complete fallback without modifying the working installation:
 
 Preview is the default. Calls/SMS are not required for benchmark testing.
 The SSH workflow isolates private setup and inherited secrets; preserve any
-locally adjusted cue. Omitting the endpoint flag retains each profile's policy.
+locally adjusted cue. Omitting the endpoint flag uses the current 800 ms runtime default.
 
 ## Optional scratch retraining
 
@@ -165,11 +171,11 @@ incorrect best_epoch 60 recorded in the preserved historical config.
 - logs/training/: complete selected and baseline training logs.
 - experiments/RUN_INDEX.csv: historical trial inventory; incompatible
   protocols and unknown/incomplete results are marked rather than ranked together.
-- reports/MODEL_SELECTION.md: original selection and authorized calibration revision.
-- reports/SUBMISSION_CHECKLIST.md: two-slide fields, evidence and remaining limits.
+- reports/MODEL_SELECTION.md: validation selection and calibration history.
+- reports/SUBMISSION_CHECKLIST.md: submission evidence and documented limitations.
 - reports/PUBLICATION_STATUS.md: current publication scope versus historical receipts.
-- reports/PI5_ACOUSTIC_CHAMPION_20261017.md and reports/ME2_submission_deck.pptx:
-  final Champion acoustic evidence and editable two-slide submission deck.
+- reports/PI5_ACOUSTIC_CHAMPION_20261017.md: Champion acoustic results, timing scopes
+  and recorded conditions.
 - scripts/benchmark_onnx_pi.py: model-only p95/thread measurements.
 - scripts/reproduce.py: injected-file feature/model recognition and RTF on host/Pi.
 - docs/BENCHMARK.md: class laptop-speaker -> Pi-microphone benchmark.

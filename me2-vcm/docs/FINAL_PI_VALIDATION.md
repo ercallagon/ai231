@@ -1,13 +1,20 @@
-# Final Pi 5 Validation
+# Pi 5 Verification and Reproduction
 
-Run these steps on the existing `~/swift-clean/me2-vcm` installation. They do
-not replace private setup, songs, accounts, models or previous deployments.
-Pi 5 replaces Pi 4 with instructor approval. No HPC-to-Pi connection is assumed.
+The completed Champion acoustic run is reported in
+[PI5_ACOUSTIC_CHAMPION_20261017.md](../reports/PI5_ACOUSTIC_CHAMPION_20261017.md).
+Baseline and Champion were compared on frozen injected test data.
+The procedure below records a new run without replacing private setup,
+music, accounts, earlier results or the working installation.
 
-## 1. Update Safely (Pi SSH)
+## 1. Update the Existing Pi Checkout
 
-Stop the running assistant with Ctrl+C first. From Windows use
-`ssh ej@192.168.100.103`; macOS/Linux use the same command in Terminal.
+Connect from Windows PowerShell, macOS Terminal or Linux:
+
+```bash
+ssh -t USER@PI_ADDRESS
+```
+
+Stop the assistant with Ctrl+C, then run on the Pi:
 
 ```bash
 cd ~/swift-clean
@@ -16,200 +23,148 @@ git pull --ff-only origin main
 cd me2-vcm
 git rev-parse HEAD
 .venv/bin/python -m pip check
-```
-
-If Git reports a conflict or refuses to fast-forward, stop and retain the output;
-do not reset, clean, force-pull or rerun setup. This candidate adds no dependency.
-For a new installation instead follow [QUICKSTART_PI.md](QUICKSTART_PI.md).
-If a later update changes locks, follow its dependency instructions before testing.
-Do not run `./swift install` or `setup` merely to update documentation/code.
-
-## 2. Record Preflight
-
-Use a fresh evidence folder, outside the resettable evaluation directory. Set
-`EXPECTED_COMMIT` to the full published candidate SHA supplied with the release,
-not an old value from another trial.
-
-```bash
-EXPECTED_COMMIT=PASTE_FULL_CANDIDATE_SHA
-EVIDENCE=work/final_candidate_01
-mkdir -p "$EVIDENCE"
-.venv/bin/python scripts/record_submission.py --expected-commit "$EXPECTED_COMMIT" \
-  --device 0 --end-silence-ms 800 --output "$EVIDENCE/PREFLIGHT.json"
 ./swift doctor
 ```
 
-The recorder refuses an existing output, dirty tracked project files, mismatched
-commit or protected asset hashes. It loads ONNX contracts and records public
-environment, model/config hashes, thread settings and requested endpoint policy;
-it does not read credentials or prove audible capture/GPIO effects. Device 0 is
-this tested USB microphone, not a universal default. Confirm device identity in
-doctor; never silently substitute another input. Retain doctor warnings.
-If preflight fails or a required dependency is missing, stop before scored trials
-and return the error. A weather network warning alone does not block offline
-recognition; record it instead of claiming the API worked.
+A refused fast-forward or tracked-file conflict requires inspection before
+continuing; retain local edits and private state. This update adds no dependency.
+Installation and first-run configuration are in [QUICKSTART_PI.md](QUICKSTART_PI.md).
 
-## 3. Injected Recognition And Model Cost
+## 2. Record the Run
+
+Use a fresh evidence directory outside the resettable evaluation folder:
+
+```bash
+SOURCE_REVISION=$(git rev-parse HEAD)
+EVIDENCE=work/verification_$(date +%Y%m%d_%H%M%S)
+mkdir -p "$EVIDENCE"
+.venv/bin/python scripts/record_submission.py --expected-commit "$SOURCE_REVISION" \
+  --end-silence-ms 800 --output "$EVIDENCE/PREFLIGHT.json"
+```
+
+The recorder checks the revision, clean tracked tree, frozen hashes and finite
+ONNX contracts. It records environment, policy and threads without reading
+private credentials. Device identity comes from doctor/setup; device index 0
+is not universal. A successful import/contract probe does not prove audible
+capture or physical action. Weather-network failure does not invalidate offline
+recognition but remains a diagnostic failure.
+
+## 3. Frozen Injected Comparison
 
 ```bash
 ./swift evaluate --reset
 ./swift report
 ```
 
-`--reset` archives previous `work/pi5_test_01` results before creating fresh ones;
-it does not erase private setup or songs. Run it **before** acoustic testing, never
-during a run. Cached verified Parquet is reused. A first fetch is about 305 MB.
-The command evaluates frozen Baseline (2s BC8) and Champion (6s BC8-TCN-ASP),
-benchmarks their model-only cost, refreshes diagnostics and creates `REPORT.md`.
-Keep all failures/denominators. These are previously exposed test/holdout sets.
-Injection reads complete files; it bypasses wake, microphone and causal endpointing.
-Model-only p95/nominal RTF is not speech-end latency. Feature+ONNX timing has a
-separate scope and actual-audio-duration RTF. Do not substitute one for another.
+Reset archives earlier results and reuses verified cached Parquet; first fetch
+is about 305 MB. Run it before acoustic testing, never during a run.
+It scores frozen Baseline/Champion test and holdout, measures model-only cost,
+refreshes diagnostics and creates work/pi5_test_01/REPORT.md.
+Injection bypasses wake, live capture and endpointing. Feature+ONNX timing and
+model-only timing have different scopes; all processing failures remain in the
+recognition denominators. These are previously exposed evaluation sets.
 
-## 4. Live Endpoint Check (Pi)
+## 4. Live Endpoint Smoke Check
 
 ```bash
-./swift live-latency --model champion --end-silence-ms 800
+./swift live-latency --model champion
 ```
 
-Preview only: no real calls or SMS. Wait for listening, say Hey Swift, then the
-command after the cue. Include short commands, all temperature values, and
-commands with a natural internal pause. Keep failed/no-speech trials, not just
-successful predictions. Ctrl+C stops. This measures detector-estimated speech
-end to prediction, before action/TTS; it is not annotated acoustic ground truth.
-800 ms is an optional interaction experiment, not a changed model/gate/default.
-If it splits words/pauses, record that material failure; compare the preserved
-1200 ms setting with `--end-silence-ms 1200` in separate logs, not mixed results.
-Six seconds is model capacity, not mandatory listening time.
+Wait for listening, say Hey Swift, then speak after the cue/capture-ready message.
+Include short commands, temperature values and natural internal pauses; retain
+failures. Ctrl+C summarizes the unique log directory. Default silence endpoint
+is 800 ms. A separate `--end-silence-ms 1200` run provides longer pause tolerance.
+Six seconds is input capacity, not mandatory listening time. This preview does
+not place calls or send SMS. Decision timing ends before services/TTS and uses
+a detector-estimated speech endpoint.
 
-## 5. Acoustic Class Benchmark (Laptop + Pi)
+After stopping the default session with Ctrl+C, check the explicit override in
+a separate session:
 
-Use [BENCHMARK.md](BENCHMARK.md) for the class repository and schema. Reviewed
-upstream commit: `ab39857cf73dd067d068fed388c321ab160dc191`. Record your actual
-benchmark revision and local diff. Windows uses `.venv\Scripts\python.exe`;
-macOS uses `.venv/bin/python` (see [MACOS.md](MACOS.md)).
+```bash
+./swift live-latency --model champion --end-silence-ms 1200
+```
 
-In the existing Windows benchmark checkout, PowerShell:
+Keep the two log directories separate. The effective endpoint is recorded with
+runtime diagnostics; the model, configuration and frozen rejection threshold
+remain those of the Champion profile.
+
+## 5. Acoustic Benchmark
+
+Follow [BENCHMARK.md](BENCHMARK.md) for the upstream checkout, pinned holdout
+hash and recording setup. Reviewed upstream revision:
+`ab39857cf73dd067d068fed388c321ab160dc191`.
+Record the actual benchmark revision and any local SSH compatibility diff.
+
+In Windows PowerShell, from the benchmark checkout:
 
 ```powershell
-cd C:\Users\EJ\vcm-benchmark
+Set-Location "$HOME\vcm-benchmark"
 New-Item -ItemType Directory -Force .cache | Out-Null
 git rev-parse HEAD
 git diff -- vcmbench/pi.py
-.\.venv\Scripts\python.exe benchmark.py --help
-.\.venv\Scripts\python.exe benchmark.py --mode ssh --host ej@192.168.100.103 --proc run_assistant.py --log-dir /home/ej/swift-clean/me2-vcm/work/pi5_test_01/final_champion_800 --wake-word "Hey Swift" --wake-files runs/wake_probe_20261016_195853/wake_2.wav runs/wake_probe_20261016_195853/wake_3.wav --size full --seed 42 --wake-gap 2.0 --holdout .\holdout_frozen.parquet --model pi:~/swift-clean/me2-vcm/models/vcm/selected.onnx
+.\.venv\Scripts\python.exe benchmark.py --mode ssh --host USER@PI_ADDRESS --proc run_assistant.py --log-dir /home/PI_USER/swift-clean/me2-vcm/work/pi5_test_01/acoustic_champion_01 --wake-word "Hey Swift" --size full --seed 42 --wake-gap 2.0 --holdout .\holdout_frozen.parquet --model pi:~/swift-clean/me2-vcm/models/vcm/selected.onnx
 ```
 
-Reuse verified wake takes 2 and 3 from `runs/wake_probe_20261016_195853`, the ECHO
-speaker and the recorded two-second wake-to-command gap. Confirm those settings
-in the wizard; do not assume reuse retains them. Keep the same gain, placement,
-microphone and wake files for Baseline. Report that the takes were screened for
-waking reliability: this comparison is not an unbiased wake-recall estimate.
-Use the authorized pinned holdout/checksum from BENCHMARK.md; never fit settings
-or thresholds to scored results. Keep all 202 wake-present + 16 no-wake trials.
+Replace USER/PI_ADDRESS/PI_USER with the intended account and host.
+macOS uses `.venv/bin/python`; see [MACOS.md](MACOS.md).
+Record/select wake takes during setup, before scoring, and preserve their hashes.
+The reported 2026-10-17 run used two reliability-screened takes; that screening
+limits wake-recall interpretation. Keep wake files, gap, gain, placement and
+device routing fixed for a new frozen run.
 
-The Pi assistant must be **stopped for the exclusive ALSA mic check**. Choose
-`plughw:2,0` only after confirming the USB identity; `default` previously failed.
-Record fresh room/speech level and peak readings with the actual ECHO setup;
-aim for the benchmark's >=20 dB SNR without clipping. Then, at Sound check,
-start this in the Pi SSH terminal and wait for `listening`:
+Stop the Pi listener for the exclusive ALSA mic check. Confirm microphone
+identity before choosing a hardware device; the tested USB input was
+`plughw:2,0`. Record room/speech level and peaks; the upstream check targets
+at least 20 dB SNR without clipping. At the laptop sound-check stage, start on Pi:
 
 ```bash
 cd ~/swift-clean/me2-vcm
 .venv/bin/python scripts/run_benchmark_assistant.py --profile champion --device 0 \
-  --end-silence-ms 800 --log-dir work/pi5_test_01/final_champion_800
+  --end-silence-ms 800 --log-dir work/pi5_test_01/acoustic_champion_01
 ```
 
-Point the laptop log setting to
-`/home/ej/swift-clean/me2-vcm/work/pi5_test_01/final_champion_800`.
-Both unscored warmups must wake and yield nonzero processed audio and correct
-semantic decisions before continuing. Otherwise stop and diagnose capture,
-playback or timing; do not adjust frozen model rejection settings. Do not type
-arbitrary input or change audio routing during the scored run.
+Use the verified microphone index instead of 0 if setup reports another identity.
+Both unscored warmups must wake, process nonzero audio and return the expected
+semantics. Capture/playback problems are diagnosed before scoring; model gates
+remain frozen. Preserve all 202 wake-present and 16 no-wake trials.
 
-The final report does not claim Baseline acoustic measurements. Baseline vs
-Champion is compared on the frozen injected test set. If you run a diagnostic
-Baseline acoustic trial, keep it clearly separate and do not merge it with the
-Champion official result.
+The official score uses the first decision per trial interval. Extra/early
+decisions, no-response and zero-audio trials remain evidence. No acoustic
+Baseline comparison is required to reproduce the published Champion result;
+a separately labeled diagnostic Baseline run is supplementary.
 
-Optional diagnostic-only Baseline command:
+Windows SSH workaround: the reviewed local upstream patch sets
+`stdin=subprocess.DEVNULL` only when `input_bytes is None`, while preserving
+`input=input_bytes`. It fixes terminal input handling, not scoring.
+Record the diff; preserve other upstream edits.
+
+## 6. Collect Evidence
+
+Laptop output includes report.md, metrics.json, trials.csv and pi_metrics.csv.
+Keep configuration, plan, wake hashes and effective playback settings with them.
+To analyze a copied laptop result folder on Pi:
 
 ```bash
-.venv/bin/python scripts/run_benchmark_assistant.py --profile baseline --device 0 \
-  --end-silence-ms 800 --log-dir work/pi5_test_01/final_baseline_800
+.venv/bin/python scripts/review_class_benchmark.py work/acoustic_champion_01 \
+  --output work/acoustic_champion_01/SWIFT_AUDIT.json
+./swift report --official work/acoustic_champion_01
 ```
 
-For the baseline laptop command, change only `--log-dir` to
-`/home/ej/swift-clean/me2-vcm/work/pi5_test_01/final_baseline_800` and `--model`
-to `pi:~/swift-clean/me2-vcm/models/vcm/run043.onnx`. All other flags stay fixed.
-Select that directory in the laptop wizard. Restarting creates unique filenames;
-do not combine different endpoints/profiles as one result. Keep full `.diagnostics`
-beside filtered `.log` files. These preview commands do not actuate services.
-No real calls/SMS are required. An optional live-action demo is a separate test
-requiring operator consent and is not represented by benchmark predictions.
+Use fresh names for new runs; never merge profiles/endpoints. Keep raw diagnostic
+logs alongside filtered decision logs. Share only reviewed result files, excluding
+work/user, accounts, keys, songs and voice assets. The supplementary audit does
+not alter the official score. [METRICS.md](METRICS.md) defines denominators and
+timing scope.
 
-Windows SSH compatibility: the existing local `vcmbench/pi.py` fix supplies
-`stdin=subprocess.DEVNULL` to `subprocess.run` when `input_bytes is None`, while
-retaining `input=input_bytes`; retain/review that diff if SSH stalls. This is an
-I/O fix, not a scoring change. `.cache` creation avoids the upstream profiling
-directory error. Do not overwrite unrelated benchmark edits.
+## Rollback and Interpretation
 
-## 6. Retrieve And Summarize
+Ctrl+C stops the listener. `./swift run --model baseline` selects the complete
+fallback; `./swift run --model champion --end-silence-ms 1200` changes pause
+tolerance without changing model rejection. Shared Bluetooth/audio routes remain
+OS state. No installation or account restoration occurs automatically.
 
-The laptop run folder contains `report.md`, `metrics.json`, `trials.csv`,
-`pi_metrics.csv`; preserve the run's config, plan and wake-file checksums too.
-Copy each run into a distinct Pi folder (replace the timestamp with the actual
-new folder, never the initial run):
-
-```powershell
-scp -r .\runs\ACTUAL_NEW_TIMESTAMP ej@192.168.100.103:~/swift-clean/me2-vcm/work/class_final_champion
-```
-
-On Pi:
-
-```bash
-.venv/bin/python scripts/review_class_benchmark.py work/class_final_champion \
-  --output work/class_final_champion/SWIFT_AUDIT.json
-./swift report --official work/class_final_champion
-tar -czf work/final_candidate_evidence_01.tar.gz \
-  work/final_candidate_01 work/pi5_test_01 work/class_final_champion
-sha256sum work/final_candidate_evidence_01.tar.gz
-```
-
-Use fresh names on retries. Include the baseline laptop folder in the evidence
-archive after its run. Keep this archive private until checked: runtime/service
-diagnostics can contain personal utterance/action details. Do not archive
-`work/user`, private profiles, Spotify state, keys, music or voice assets.
-
-On the Windows laptop:
-
-```powershell
-scp ej@192.168.100.103:~/swift-clean/me2-vcm/work/final_candidate_evidence_01.tar.gz .
-Get-FileHash .\final_candidate_evidence_01.tar.gz -Algorithm SHA256
-```
-
-Return that archive plus each laptop run folder for interpretation. The audit
-does not rescore/drop early or extra events. Keep official and supplementary
-metrics separate, including zero-audio failures, no-response, negative external
-latencies, false accepts, raw/conditional slots and timing denominators.
-
-## Acceptance And Rollback
-
-Require matching frozen artifacts, no unexplained parser/timing corruption, full
-failure accounting, and no material complete-command retention regression.
-Sub-second detector-end-to-decision p95 is a **target**, not a measured promise.
-No numerical accuracy or false-trigger pass threshold was pre-agreed; report
-paired counts and uncertainty, not a newly invented post-hoc cutoff.
-If an issue is material, preserve evidence and explain required retesting before
-changing implementation. Keep the model/gate frozen and do not tune on holdout.
-
-Select the preserved fallback without reinstalling or overwriting files:
-
-```bash
-./swift run --model baseline
-./swift run --model champion --end-silence-ms 1200
-```
-
-After a satisfactory final run, only verified evidence/report/deck changes are
-planned. Independent unseen-speaker confirmation and some call recovery behavior
-remain limitations until separately measured; host checks cannot close them.
+The recorded evidence supports Champion under the measured protocol. It does
+not establish call recovery, independent-speaker generalization, music/AEC
+robustness or a clean external command-end latency. Numerical acceptance
+cutoffs must be declared before a new study, not fitted to scored results.

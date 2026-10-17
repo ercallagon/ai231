@@ -1,6 +1,13 @@
 # Frozen threshold 0.954: measured results
 
-The six-second model is the repository default by the user's explicit decision after validation-only gate refinement. This report covers frozen injected VCM evaluation; the separate Champion Pi 5 acoustic results are in PI5_ACOUSTIC_CHAMPION_20261017.md. Both test and holdout were previously exposed during research; no untouched-set or independent-speaker claim is made. No weights or gates were fitted during this evaluation.
+The six-second Champion is the repository default following validation-only
+rejection calibration at threshold 0.954. This report covers frozen injected VCM
+evaluation; [the Pi acoustic report](PI5_ACOUSTIC_CHAMPION_20261017.md) covers
+the separate Champion-only device run. Both test and holdout were previously
+exposed during research. The calibration revision followed that exposure and
+used validation and the existing OOS calibration pool only. No weights or gates
+were fitted during the evaluations reported here. These results do not establish
+independent unseen-speaker performance.
 
 | Split/cohort | run_043 intent | Selected intent | run_043 accepted intent+slot | Selected accepted intent+slot |
 | --- | ---: | ---: | ---: | ---: |
@@ -42,6 +49,11 @@ The selected frontend retains the continuous input waveform up to 96,000 samples
 
 ## Limits and independent confirmation
 
-Single training seed; repeated test/holdout exposure; gate refinement after that exposure used validation/tune only. Synthetic accuracy alone hides real-domain errors. Holdout gains are on a small, concentrated speaker set and do not establish population robustness. No fresh independent recordings are available. Reserve consented speakers absent from every development source, freeze this release before collection, and report every recording without tuning.
+The experiment used one training seed. Gate refinement after repeated
+test/holdout exposure used validation/tune only. Synthetic accuracy hides
+real-domain errors when reported alone. Holdout gains are on a small,
+concentrated speaker set and do not establish population robustness. Fresh
+independent-speaker confirmation has not been collected; its separate protocol
+is specified in [INDEPENDENT_CONFIRMATION.md](../docs/INDEPENDENT_CONFIRMATION.md).
 
 Wakeword exp15 remains a separate artifact. Corrected clip-test metrics use TTS positives and do not establish real-human wake recall or music/AEC robustness. See experiments/wakeword/ for exact source and metric scope.

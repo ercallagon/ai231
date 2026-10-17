@@ -2,7 +2,7 @@
 
 Already installed? Use [the final update/benchmark handoff](FINAL_PI_VALIDATION.md)
 instead of reinstalling or rerunning private setup. Optional `--end-silence-ms 800`
-works with `./swift run`, `live-latency` and `demo`; omission keeps profile defaults.
+works with `./swift run`, `live-latency` and `demo`; the public runtime default is 800 ms.
 
 Use these exact commands over SSH. The public names are **Champion (6s BC8-TCN-ASP)**
 (threshold 0.954) and **Baseline (2s BC8)** (threshold 0.875); select them with
@@ -13,8 +13,7 @@ capacity, not mandatory listening time.
 
 ## 1. Separate clean-install dry run
 
-From a laptop terminal, connect using `ssh -t USER@PI_ADDRESS` (for the current
-project Pi: `ssh -t ej@192.168.100.103`). All following
+From a laptop terminal, connect using `ssh -t USER@PI_ADDRESS`. All following
 commands run inside that Pi SSH session. Keep your working ~/swift-e2e and
 ~/ai231 installations intact. Stop their listeners/evaluations using Ctrl+C
 before starting tests; do not uninstall them or change their environments.
@@ -124,12 +123,10 @@ license.
 For offline music, setup creates
 `~/swift-clean/me2-vcm/work/user/music` and uses it automatically. It continues
 if the folder is empty; copy authorized MP3 files there before trying music.
-For example, from a second Pi SSH terminal, after confirming the source folder
-contains only files you are authorized to use:
+For example, from the laptop terminal, upload files you own or are licensed to use:
 
 ```bash
-mkdir -p ~/swift-clean/me2-vcm/work/user/music
-cp ~/ai231/me2-vcm/integration/assets/*.mp3 ~/swift-clean/me2-vcm/work/user/music/
+scp /path/to/authorized/*.mp3 USER@PI_ADDRESS:~/swift-clean/me2-vcm/work/user/music/
 ```
 
 No path entry is needed. Music stays under the new checkout after copying.
@@ -223,10 +220,12 @@ set ...` to update one value without rebuilding the profile.
 Say Hey Swift, wait for the cue and **capture-ready message**, then speak.
 Preview validates commands without actions. Empty captures are logged and return
 quietly to listening. Add `--speak-no-speech` if you want spoken empty-capture
-feedback. Over-limit input rejects safely. The current conservative endpoint hangover is 1.2 seconds;
-there can also be capture-setup delay after the cue, still requiring Pi review.
-No acoustic echo cancellation is claimed. Pause tolerance and music wake
-audibility need physical testing.
+feedback. Over-limit input rejects safely. The default silence endpoint is
+800 ms; capture setup adds a separate delay after the cue. An explicit
+`--end-silence-ms 1200` allows longer pauses at the cost of response time.
+The frozen model YAML retains its historical 1200 ms capture entry; the current
+launcher supplies the 800 ms runtime default. Music can mask wake detection;
+the runtime uses playback suppression and ducking, not acoustic echo cancellation.
 
 For enabled real actions:
 
@@ -396,16 +395,20 @@ REPORT.md includes available counts, failures, uncertainty and scopes; missing
 live/acoustic/physical results stay marked missing. Metrics and acquisition
 methods are listed in METRICS.md. Exp15's historical clip-test metrics and
 training facts are references, not newly measured Pi streaming performance.
-The official class acoustic benchmark still needs laptop-speaker -> Pi-mic
-playback; injection or SSH alone does not replace it. See BENCHMARK.md. Import
-its result directory when available with `swift.py report --official PATH`.
+The completed Champion laptop-speaker -> Pi-microphone benchmark is summarized
+in [the Pi acoustic report](../reports/PI5_ACOUSTIC_CHAMPION_20261017.md).
+Baseline and Champion were compared on frozen injected test data; no acoustic
+Baseline comparison was performed. For a new acoustic run, follow
+[BENCHMARK.md](BENCHMARK.md). Import a locally available result directory with
+`./swift report --official PATH`. Injection and acoustic playback have different
+measurement scopes.
 
 ## 6. Retrieve and rollback
 
 From Windows PowerShell (archive an older local pi5_test_01 folder first):
 
 ```powershell
-scp -r ej@192.168.100.103:~/swift-clean/me2-vcm/work/pi5_test_01 .
+scp -r USER@PI_ADDRESS:~/swift-clean/me2-vcm/work/pi5_test_01 .
 ```
 
 Only transfer results, never work/user or runtime/account directories. SSH/SCP

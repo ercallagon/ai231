@@ -1,0 +1,154 @@
+{
+  "release_url": "https://github.com/ercallagon/ai231/releases/tag/me2-weights-v1.0.0",
+  "tag": "me2-weights-v1.0.0",
+  "tag_source_commit": "9de6bb4eb0bf309b1166969748875e3d78cb49e7",
+  "verified_utc": "2026-10-17T03:15:50.542677+00:00",
+  "archive": {
+    "name": "me2-weights-v1.0.0.zip",
+    "bytes": 14041136,
+    "sha256": "595b64717265203562e4d34bb941ec1b5e4126f351691df1c9da4f2565c00bb4",
+    "github_asset_digest_matches": true
+  },
+  "payload_files": [
+    {
+      "path": "models/vcm/selected.onnx",
+      "bytes": 2136900,
+      "sha256": "edb9c14b384a9ff08f524e93a3c4b4def69dfe4140fbd98f997f2ad0abea3d88",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "models/vcm/selected.labels.json",
+      "bytes": 1434,
+      "sha256": "768cd2145b05abfa3daa2c2eeefc83c017cafe885255e1c6b2bb4f10513de46f",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "models/vcm/run043.onnx",
+      "bytes": 1488732,
+      "sha256": "2dfde6cb9dc20ac923ac635a92722b2e238464acdc73af63232bf1c916c590b2",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "models/vcm/run043.labels.json",
+      "bytes": 1012,
+      "sha256": "d773de68288627695fe894ef79b1b4c682d9dd59b414d8c245848b1e60a0fd85",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "models/wakeword/wakeword_exp15_mined_lp.onnx",
+      "bytes": 825493,
+      "sha256": "6c88fa974e51c57e813bd474c5468ff8c03e255bcba00f79e630d573fd053d0b",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "configs/vcm_selected.yaml",
+      "bytes": 1932,
+      "sha256": "c47d926813ed4bebb4c6d18c384c0c48cfbb8392c0b0f7ca27d87216ffa72f3d",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "configs/vcm_run043.yaml",
+      "bytes": 3053,
+      "sha256": "6ca4792d3fda80e503a9e07be088078daf87e6b53afc0a6267e798ff3891f055",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "configs/wakeword.yaml",
+      "bytes": 2802,
+      "sha256": "6d08f76b41b0be78ab641b2c578fd0f424e5f0cb2d3e3a04f367d9c0d8c72038",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "experiments/selected/checkpoint.pt",
+      "bytes": 6138121,
+      "sha256": "6c92fdbf1bd41506a6d8ebbf978c51d17767437b19bcad885fa439f59b4c431c",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "experiments/baseline/checkpoint.pt",
+      "bytes": 4175281,
+      "sha256": "efda45e15e513d3e496e17b1286f2dcdf746c274086ed6c37369485e9dc3cced",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "experiments/wakeword/exp15_original/best.pt",
+      "bytes": 826560,
+      "sha256": "d6d9069df46f01f1ed44a014d34cd37150b210e38a4428423f7e41b73c6254b0",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "MODEL_TERMS.md",
+      "bytes": 1443,
+      "sha256": "13de1dfc2b8d20efd6ebc24529f74a26ef7fb2c21545dbade5495b5d31d0cb90",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "data/DATASET_LICENSE.md",
+      "bytes": 1989,
+      "sha256": "c22bae08de7cc1d2c332b2d918241630c76cfe5770da866cfe4b5dd65ffe4d56",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.md",
+      "bytes": 1446,
+      "sha256": "501625bcaa2daa240ebef7e235670f078437071a162e6074c454775bb9b55db3",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "src/hey_swift/vcm/THIRD_PARTY_BCRESNET_LICENSE.txt",
+      "bytes": 1773,
+      "sha256": "6a5a9905a39b4748a8a18650eccb476072ed151eb9557268050924c7f59f012a",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "reports/PI5_ACOUSTIC_CHAMPION_20261017.md",
+      "bytes": 4996,
+      "sha256": "24864f761fe1dfe65928120216d391557921ec69d7cdbf7196a755f7ef101f11",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": true
+    },
+    {
+      "path": "reports/RESULTS.md",
+      "bytes": 5163,
+      "sha256": "5861331c87787cbdc899fa760da7d332fa5dc452efa00f49a1ebd05b999cb99f",
+      "archive_checksum_matches": true,
+      "tag_source_matches": true,
+      "current_worktree_matches": false
+    }
+  ],
+  "all_17_payload_checksums_and_tag_source_match": true,
+  "frozen_model_checkpoint_config_label_files_match_current_worktree": true,
+  "documentation_snapshot_difference": "The release retains reports/RESULTS.md from its immutable source tag. Current documentation wording changed; frozen numeric evidence, models and policies did not.",
+  "model_terms": "MODEL_TERMS.md; source-specific dataset/voice rights and consent limitations remain applicable"
+}

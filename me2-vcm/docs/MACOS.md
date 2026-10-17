@@ -11,7 +11,7 @@ cd me2-vcm
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-eval.txt
 .venv/bin/python scripts/reproduce.py reproduce --fetch --output work/reproduction_unique
-ssh ej@192.168.100.103
+ssh USER@PI_ADDRESS
 ```
 
 For acoustic testing, use a separate checkout of
@@ -20,7 +20,7 @@ permissions for Terminal. Use `.venv/bin/python benchmark.py` and preserve its
 revision/settings/results. Select the actual output speaker, not a headset's
 hands-free profile. Follow [FINAL_PI_VALIDATION.md](FINAL_PI_VALIDATION.md);
 never replace the speaker-to-mic run with injection under the same metric name.
-`scp -r PATH ej@192.168.100.103:~/swift-clean/me2-vcm/work/UNIQUE_NAME`
+`scp -r PATH USER@PI_ADDRESS:~/swift-clean/me2-vcm/work/UNIQUE_NAME`
 transfers evidence; it does not install or modify private setup.
 
 Use Python 3.11-3.13 (prefer 3.13); Python 3.14 is outside this project's declared

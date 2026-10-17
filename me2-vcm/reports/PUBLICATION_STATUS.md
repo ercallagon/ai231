@@ -1,69 +1,52 @@
-# ME2 publication status, 2026-10-17
+# Publication and Evidence Status
 
-Project: **ME2: Voice Controlled Smart Device (Hey Swift)**, under
-[ercallagon/ai231/me2-vcm](https://github.com/ercallagon/ai231/tree/main/me2-vcm).
-The repository main revision before this update was
-393f892ee389cdbb935d4b9eb118e65acd9e32bb, previously verified using git ls-remote.
-Use the containing Git commit for the exact revision of this report; this file
-does not invent a future commit hash or claim an unperformed push.
+Project: [ME2: Voice Controlled Smart Device](https://github.com/ercallagon/ai231/tree/main/me2-vcm).
+Frozen weights are published as
+[me2-weights-v1.0.0](https://github.com/ercallagon/ai231/releases/tag/me2-weights-v1.0.0),
+whose tag remains at `9de6bb4eb0bf309b1166969748875e3d78cb49e7`.
+[Release verification](WEIGHTS_RELEASE_20261017.json) records archive and payload
+hashes. Use [MODEL_TERMS.md](../MODEL_TERMS.md) for weight-use terms. The containing
+Git revision identifies the runtime and documentation.
 
-## Current selection and update scope
+## Frozen Artifacts
 
-- Six-second BC8/TCN/attentive-pooling VCM at frozen threshold 0.954 remains
-  repository default; complete run_043 at 0.875 remains selectable.
-- Original exp15 remains wake default. The recovered Torch checkpoint, original
-  log and epoch-42 correction are included; parity ties it to the selected ONNX.
-- Controlled scratch CMVN/PCEN and short exp15 fine-tune evidence are retained
-  as opt-in experiments, not promoted replacements. No additional trial is queued.
-- Integer sample-clock cooldown fixes chunk-dependent wake timing. Original
-  exp15 graph/gate is unchanged; keeping original weights is not a claim that
-  the corrected runtime source is byte-identical to the earlier release.
-- Current architecture/deck guidance, training accounting and submission
-  checklist supersede stale planning snapshots. Historical results are preserved.
-- The update is scoped to me2-vcm/. ME1, repository-root files and existing Git
-  history are preserved. No Pi installation, accounts, model defaults, hardware
-  wiring or protected training artifacts are changed automatically.
+Champion is the scratch six-second BC8-TCN-ASP model at threshold 0.954.
+Baseline is the complete two-second BC8 fallback at 0.875 (historical run_043).
+Exp15 remains the wake default. Its recovered checkpoint, original log,
+epoch-42 correction and ONNX parity are preserved. Later wake trials did not
+justify replacement. Models, calibration, labels, manifests, checkpoints and
+original training logs are unchanged by documentation cleanup.
 
-## Interpreting verification records
+The current public launcher's endpoint is 800 ms. The frozen model configuration
+retains the historical 1200 ms capture entry; an explicit 1200 ms CLI override
+provides the longer pause tolerance. Champion acoustic measurements were made
+with an explicit 800 ms setting. Host launcher regressions verify default and
+explicit override selection; the recorded acoustic measurements retain their
+original protocol and scope.
 
-Publication copies of historical logs/metadata replace private host paths with
-PROJECT_ROOT/HPC_HOME. PROVENANCE_REDACTIONS.json records archived and published
-hashes; original local artifacts remain untouched. Logs retain all lines with
-only those path substitutions; JSON formatting may change. Historical input
-hashes continue to identify their archived originals, not sanitized derivatives.
+## Verification Records
 
-CHECKS.json is an immutable receipt from the initial preparation. Its final
-authentication-blocked note records that earlier attempt, not present repository
-visibility: initial commits were subsequently published. VERIFICATION.md and
-SUBMISSION_CHECKLIST.md describe current scope and missing device evidence.
+[VERIFICATION.md](VERIFICATION.md) describes completed host and device checks.
+[PI5_ACOUSTIC_CHAMPION_20261017.md](PI5_ACOUSTIC_CHAMPION_20261017.md) records
+Champion-only acoustic recognition, timing, resource usage and limitations.
+Baseline/Champion comparisons use frozen injected test data.
 
-Historical scripts/logs retain their original data/epoch semantics. In particular,
-the exp15 config's best_epoch 60 is corrected by its log/history and parity record;
-the original file is not rewritten to conceal the discrepancy. Earlier VCM
-0.95-gate tables are not the current 0.954 policy results; use RESULTS.md.
+CHECKS.json, FINAL_CHECKS.json and PUBLICATION_CHECKS.json are immutable
+historical execution receipts. Their original dependency/authentication states
+and test counts describe their own runs. They are not current publication
+status. Updated review receipts remain under ignored work/ until reviewed.
 
-For this update, the endpoint/runtime subset passed 25 tests. All tests outside
-the training-only modules passed; the full suite could not import 31 training
-tests because this checkout environment lacks `torch` and `scikit-learn`. The
-previous full training-environment receipt remains available but predates this
-small runtime-default change. The generated deck's OOXML and two-slide structure
-were validated; a visual render was unavailable in this environment. The
-publication command's terminal result and Git history establish whether
-commit/push succeeded; this report is not a substitute for that outcome.
+Published historical logs replace private host prefixes with PROJECT_ROOT or
+HPC_HOME. [PROVENANCE_REDACTIONS.json](PROVENANCE_REDACTIONS.json) ties published
+and archived hashes; original local artifacts remain intact. The original
+exp15 configuration's best_epoch 60 is preserved with an evidence-based
+correction to epoch 42.
 
-## Unresolved, explicitly not certified
+## Evidence Limits
 
-Champion acoustic Pi 5 results at an 800 ms endpoint are recorded in
-PI5_ACOUSTIC_CHAMPION_20261017.md. Frozen injected test remains the comparable
-Baseline/Champion evaluation; no acoustic Baseline run is claimed. Remaining
-limitations include no execution-time model hash/Git revision in the acoustic
-benchmark export, negative external timing values, no independent-speaker
-confirmation, and unverified call recovery. These limitations are disclosed;
-no host result is substituted for a Pi measurement.
-Test/holdout were repeatedly exposed. Official wake positives are
-synthetic; independent real-speaker wake performance is not established.
-Wake raw-data retrieval and some dataset/voice consent/licensing remain incomplete.
-No owned-code MIT grant overrides those source or model terms.
-
-The posted Pi guide separates injected VCM recognition, model-only cost and
-the official laptop-speaker-to-microphone benchmark. No real calls/SMS are needed.
+[SUBMISSION_CHECKLIST.md](SUBMISSION_CHECKLIST.md) centralizes the outstanding
+rights/access, independent-speaker, wake-data and cluster metadata evidence.
+Test/holdout were repeatedly exposed; official wake positives are synthetic.
+Acoustic results do not verify call recovery, music/AEC robustness or fresh-OS
+installation. The source-code MIT licence does not grant underlying data,
+voice or model permissions.

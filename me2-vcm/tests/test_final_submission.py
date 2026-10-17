@@ -47,6 +47,63 @@ def test_live_runtime_default_endpoint_is_pi_validated_800ms(monkeypatch):
     assert captured["args"].end_silence_ms == 800.0
 
 
+@pytest.mark.parametrize("profile", ["champion", "baseline"])
+@pytest.mark.parametrize("endpoint", [None, 800., 1200.])
+def test_profile_launcher_uses_runtime_endpoint_over_historical_yaml(monkeypatch, profile, endpoint):
+    from hey_swift.integration import e2e_loop
+    module = script("run_assistant")
+    captured = {}
+    monkeypatch.setattr(e2e_loop, "run", lambda args: captured.setdefault("args", args) and 0)
+    argv = ["run_assistant.py", "--profile", profile, "--device", "0"]
+    if endpoint is not None:
+        argv += ["--end-silence-ms", str(endpoint)]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert module.main() == 0
+    assert captured["args"].end_silence_ms == (800. if endpoint is None else endpoint)
+    assert captured["args"].pre_roll_ms == 200.
+
+
+def test_catalog_refresh_updates_docs_but_preserves_frozen_hashes(tmp_path):
+    module = script("refresh_artifact_catalog")
+    (tmp_path / "models").mkdir()
+    model = tmp_path / "models/frozen.onnx"
+    model.write_bytes(b"fixed")
+    doc = tmp_path / "README.md"
+    doc.write_text("before")
+    hashes = {"models/frozen.onnx": module.digest(model), "README.md": module.digest(doc)}
+    (tmp_path / "ARTIFACTS.json").write_text(json.dumps({"sha256": hashes}))
+    doc.write_text("after")
+    payload, changed = module.refresh_catalog(tmp_path, refresh=True)
+    assert changed == ["README.md"]
+    assert payload["sha256"]["README.md"] == module.digest(doc)
+    assert payload["sha256"]["models/frozen.onnx"] == hashes["models/frozen.onnx"]
+
+
+@pytest.mark.parametrize("frozen", ["models/frozen.onnx", "reports/CHECKS.json"])
+def test_catalog_refresh_refuses_changed_frozen_artifact(tmp_path, frozen):
+    module = script("refresh_artifact_catalog")
+    model = tmp_path / frozen
+    model.parent.mkdir()
+    model.write_bytes(b"fixed")
+    catalog = tmp_path / "ARTIFACTS.json"
+    catalog.write_text(json.dumps({"sha256": {frozen: module.digest(model)}}))
+    before = catalog.read_bytes()
+    model.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="Frozen artifact changed"):
+        module.refresh_catalog(tmp_path, refresh=True)
+    assert catalog.read_bytes() == before
+
+
+def test_catalog_refresh_refuses_private_paths(tmp_path):
+    module = script("refresh_artifact_catalog")
+    (tmp_path / "ARTIFACTS.json").write_text('{"sha256": {}}')
+    private = tmp_path / "work/user/profile.json"
+    private.parent.mkdir(parents=True)
+    private.write_text("{}")
+    with pytest.raises(ValueError, match="Not a release path"):
+        module.refresh_catalog(tmp_path, refresh=True, include=["work/user/profile.json"])
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), 0., -1.])
 def test_invalid_endpoint_fails_before_starting_any_process(value, tmp_path):
     with pytest.raises(ValueError, match="finite and positive"):

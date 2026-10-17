@@ -1,34 +1,26 @@
-# Two-slide evidence map
+# Submission Evidence Map
 
-The authoritative checklist is [SUBMISSION_CHECKLIST.md](../reports/SUBMISSION_CHECKLIST.md),
-reviewed against the two-page professor-provided me2-deck.pdf on 2026-10-15.
-The PDF and earlier draft slides are local inputs, not published presentation results.
+[SUBMISSION_CHECKLIST.md](../reports/SUBMISSION_CHECKLIST.md) maps the submission
+criteria to source files and verified results. It records unresolved evidence
+as explicit facts rather than assuming that every criterion is satisfied.
 
-Use [RESULTS.md](../reports/RESULTS.md) and reports/evaluation/ for the frozen
-six-second VCM at threshold 0.954 versus run_043 at 0.875. Earlier 20261013
-comparison reports describe historical candidates, not the current selection.
-The original exp15 graph remains the wake default; its recovered checkpoint,
-epoch-42 correction and original log are under experiments/wakeword/exp15_original/.
+| Evidence | Canonical source |
+| --- | --- |
+| Model architecture and feature contracts | [architecture.md](architecture.md) |
+| Training accounting and selected epoch | [TRAINING_ACCOUNTING.json](../experiments/selected/TRAINING_ACCOUNTING.json) |
+| Dataset revision, split sizes and terms | [PROVENANCE.json](../data/PROVENANCE.json), [DATASET_LICENSE.md](../data/DATASET_LICENSE.md) |
+| Baseline/Champion frozen comparison | [RESULTS.md](../reports/RESULTS.md) |
+| Selection and calibration chronology | [MODEL_SELECTION.md](../reports/MODEL_SELECTION.md) |
+| Champion-only Pi 5 acoustic results | [PI5_ACOUSTIC_CHAMPION_20261017.md](../reports/PI5_ACOUSTIC_CHAMPION_20261017.md) |
+| Wake exp15 checkpoint/export | [original exp15](../experiments/wakeword/exp15_original/) |
+| Hardware and measurement procedures | [hardware.md](hardware.md), [METRICS.md](METRICS.md) |
+| Code/data/model rights | [LICENSE](../LICENSE), [MODEL_TERMS.md](../MODEL_TERMS.md) |
+| Frozen weights download and integrity | [v1.0.0 release](https://github.com/ercallagon/ai231/releases/tag/me2-weights-v1.0.0), [verified hashes](../reports/WEIGHTS_RELEASE_20261017.json) |
 
-Selected VCM: 488,264 parameters, ONNX 2,136,900 bytes, 80 x 600 log-mel plus
-padding mask. Wake: 204,738 parameters, ONNX 825,493 bytes, 80 x 100 features.
-Training: one A100-SXM4-40GB, seed 42, 72 epochs, selected epoch 52;
-3.64645 allocated GPU-hours from summed epoch wall durations, not kernel time.
-See experiments/selected/TRAINING_ACCOUNTING.json for derived optimizer steps.
-
-VCM train manifest: 25,366 recordings / 14.4008 source-audio hours; 25,330
-eligible samples. Its 559 declared groups are NOT 559 verified human speakers.
-Labels: 19 supported intents + OOS; six slot heads, 18 supported values total,
-plus the TEMPERATURE reject class. Dataset DOI: 10.57967/hf/10723; rights are
-source-specific and some consent/licensing documentation remains incomplete.
-
-Replace the template's causal encoder/KV-cache/CTC diagram with the actual
-BC8 -> temporal CNN -> masked attentive mean/std pooling -> classification heads.
-This is captured-utterance classification, not causal autoregressive inference.
-
-Pi 5 is the approved substitute for Pi 4. Champion acoustic accuracy and Pi
-timings are reported in reports/PI5_ACOUSTIC_CHAMPION_20261017.md; injected-file
-and acoustic scopes remain distinct. Test/holdout are previously exposed evaluation, and wake
-official positives are synthetic; do not claim untouched real-speaker confirmation.
-Author/team/date, node ID and a tagged weights release URL still need confirmation
-where required. Downloadable committed weights and MODEL_TERMS.md are available.
+The architecture is captured-utterance classification with intent/slot heads:
+BC8, noncausal temporal CNN and masked attentive mean/std pooling. It uses no
+causal encoder, KV cache, CTC or autoregressive decoder. Pi 5 is the documented
+substitute for Pi 4. Learned parameters and the external profiler's count have
+different scopes. Source metadata, not predictions, defines real/synthetic
+cohorts. Frozen test/holdout exposure and the scope of each timing metric are
+part of the reported evidence.

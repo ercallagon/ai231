@@ -125,9 +125,9 @@ cd vcm-benchmark
 git checkout ab39857cf73dd067d068fed388c321ab160dc191
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-scp ej@192.168.100.103:~/swift-clean/me2-vcm/data/vcm/raw/data/holdout-00000-of-00001.parquet .\holdout_frozen.parquet
+scp USER@PI_ADDRESS:~/swift-clean/me2-vcm/data/vcm/raw/data/holdout-00000-of-00001.parquet .\holdout_frozen.parquet
 if ((Get-FileHash .\holdout_frozen.parquet -Algorithm SHA256).Hash -ne 'c36227c81eee4eac63de62cee94631ee9e73952ccf8e16c27912eb049508eb6e') { throw 'Holdout checksum mismatch' }
-.\.venv\Scripts\python.exe benchmark.py --mode ssh --host ej@192.168.100.103 --proc run_assistant.py --log-dir /home/ej/swift-clean/me2-vcm/work/pi5_test_01/official_champion_logs --wake-word "Hey Swift" --size full --seed 42 --wake-gap 0.8 --holdout .\holdout_frozen.parquet --model pi:~/swift-clean/me2-vcm/models/vcm/selected.onnx
+.\.venv\Scripts\python.exe benchmark.py --mode ssh --host USER@PI_ADDRESS --proc run_assistant.py --log-dir /home/PI_USER/swift-clean/me2-vcm/work/pi5_test_01/official_champion_logs --wake-word "Hey Swift" --size full --seed 42 --wake-gap 2.0 --holdout .\holdout_frozen.parquet --model pi:~/swift-clean/me2-vcm/models/vcm/selected.onnx
 ```
 
 Initial setup asks for speaker/microphone selection, SSH authentication, three

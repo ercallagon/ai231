@@ -1,7 +1,8 @@
-"""Character LCD (I2C) interface (lazy import).
+"""Unsupported historical LCD scaffold; not a functional display driver.
 
-Driven over I2C (typically PCF8574 backpack). Needs the I2C bus enabled on the
-Pi. Lazy import keeps the module import-safe off-Pi.
+write() has no display protocol implementation and available() tests only the
+optional dependency. The current runtime does not use this module or support
+a character LCD. devices.PiHardware drives the tested TM1637 display instead.
 """
 
 from __future__ import annotations

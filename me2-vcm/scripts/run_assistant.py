@@ -30,8 +30,11 @@ def main():
         "--wake-onnx",str(ROOT/wake["model"]),
         "--hardware-config",str(ROOT/"configs/hardware.yaml"),"--ack",str(ROOT/"audio/wake_chime.wav")]
     for key,value in config["capture"].items():
-        if key in ("command_seconds","end_silence_ms","pre_roll_ms","speech_start_ms","speech_start_timeout"):
+        if key in ("command_seconds","pre_roll_ms","speech_start_ms","speech_start_timeout"):
             command+=["--"+key.replace("_","-"),str(value)]
+    # Keep historical capture settings in model YAML; explicit CLI arguments
+    # below override the measured public runtime endpoint.
+    command += ["--end-silence-ms", "800"]
     if "--threshold" in extra or any(x.startswith("--threshold=") for x in extra):
         parser.error("Frozen profiles do not permit confidence-threshold overrides")
     return run(command+extra)

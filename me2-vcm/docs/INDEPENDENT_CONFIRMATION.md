@@ -1,9 +1,9 @@
 # Fresh speaker confirmation (not yet collected)
 
-No fresh recordings or consent documents are available to this agent. Do not
-describe the current class holdout as independently unseen: its results were
-examined before this release. The following is a prospective confirmation plan,
-not a measured result or another tuning opportunity.
+Fresh independent-speaker confirmation recordings and their consent records
+have not been collected. The existing class holdout was examined before this
+release and does not provide independent unseen confirmation. The procedure
+below specifies a separate confirmation study; no results from it are reported.
 
 Freeze this commit, model/config/label hashes, threshold 0.954, wake settings and
 capture profile before collecting any new recordings. Recruit at least three
