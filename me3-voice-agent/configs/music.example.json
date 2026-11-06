@@ -1,0 +1,14 @@
+{
+  "backend": "spotify",
+  "allow_live": false,
+  "output_backend": "spotify_connect",
+  "client_id": "",
+  "device_id": "",
+  "device_name": "",
+  "secrets_file": "var/cache/music.env",
+  "scopes": [],
+  "ducking": {
+    "enabled": false,
+    "ratio": 0.35
+  }
+}

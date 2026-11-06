@@ -1,0 +1,46 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Swift · Laptop echo check</title>
+<style nonce="__NONCE__">body{font:17px/1.6 system-ui;background:#f6f8fa;color:#172b4d;max-width:780px;margin:32px auto;padding:24px}section{background:white;border:1px solid #dce3eb;border-radius:16px;padding:24px}button,input,select{font:inherit;margin:8px;padding:10px;max-width:90%}button{cursor:pointer}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #0f766e}pre{white-space:pre-wrap;overflow-wrap:anywhere}audio{width:100%}small{color:#526174}</style>
+<h1>Swift · Laptop echo check</h1><p>Manual browser A/B recording. Nothing is uploaded. This tests your laptop browser and selected devices; Pi AEC remains a separate test.</p>
+<section><ol><li>Use speakers, not headphones. Choose your intended microphone/speaker in browser or Windows settings. Keep placement and system/player volume fixed across trials.</li><li>Select the same speech WAV/MP3 for each AEC setting. This probe does not control Spotify or ducking; leave volume unchanged and do not change player state during the AEC baseline.</li><li>Press Record and follow the prompt: 0–8 s playback with you quiet; 8–16 s speak naturally over the same playback; 16–24 s playback stopped while you continue speaking. The browser records phase timestamps and playback media position.</li><li>Repeat with the other AEC setting, then compare both recordings and transcripts. A quieter recording or browser-reported AEC setting does not prove cancellation. The timestamp reference is browser playback state, not sample-aligned acoustic loopback.</li></ol>
+<label>Speaker reference <input id="file" type="file" accept="audio/*"></label><audio id="reference" controls></audio>
+<label>Requested AEC <select id="aec"><option value="false">Off — baseline</option><option value="true">On — browser processing</option></select></label>
+<p><button id="start">Start guided trial · AEC off</button><button id="stop" disabled>Stop recording</button></p>
+<h2 id="cue" aria-live="polite">Ready when you are</h2><p id="progress"></p>
+<p id="status" role="status" aria-live="polite">Choose the reference and AEC setting. Microphone starts only when you press Start.</p><details><summary>Device settings and recording details</summary><pre id="settings"></pre></details><div id="downloads"></div>
+<small>Browser AEC is requested with automatic gain and noise suppression off where supported. Reported settings are configuration evidence, not acoustic proof. Recordings may contain private speech; save locally under the project's var/recordings/ when importing them.</small></section>
+<script nonce="__NONCE__">
+'use strict';
+const $=id=>document.getElementById(id);let stream,recorder,timer,referenceURL,trial=0,startedAt=null,recordingStartedAt=null,referenceStartedUTC=null,phaseEvents=[],activePhase=null,phasesStarted=false,lastCue='';
+$('file').onchange=()=>{if(referenceURL)URL.revokeObjectURL(referenceURL);const f=$('file').files[0];if(f){referenceURL=URL.createObjectURL(f);$('reference').src=referenceURL;}};
+function updateStartLabel(){$('start').textContent='Start guided trial · AEC '+($('aec').value==='true'?'on':'off');}
+$('aec').onchange=updateStartLabel;updateStartLabel();
+function release(){clearInterval(timer);stream?.getTracks().forEach(t=>t.stop());stream=null;$('reference').pause();$('start').disabled=false;$('stop').disabled=true;$('aec').disabled=false;startedAt=null;recordingStartedAt=null;referenceStartedUTC=null;phaseEvents=[];activePhase=null;phasesStarted=false;}
+function setCue(value){if(value!==lastCue){$('cue').textContent=value;lastCue=value;}}
+function markPhase(name){if(activePhase===name)return;activePhase=name;phaseEvents.push({phase:name,recording_elapsed_ms:recordingStartedAt===null?null:Math.max(0,Math.round(performance.now()-recordingStartedAt)),reference_elapsed_ms:startedAt===null?null:Math.max(0,Math.round(performance.now()-startedAt)),reference_media_seconds:Number.isFinite($('reference').currentTime)?Number($('reference').currentTime.toFixed(3)):null,reference_paused:$('reference').paused,utc:new Date().toISOString()});}
+function beginPhases(){if(phasesStarted)return;phasesStarted=true;startedAt=performance.now();referenceStartedUTC=new Date().toISOString();markPhase('playback_only_silence');$('status').textContent='Guided recording in progress. Follow the cue above.';timer=setInterval(()=>{const elapsed=(performance.now()-startedAt)/1000;const left=Math.max(0,24-Math.floor(elapsed));$('progress').textContent=`${left} seconds remaining`;
+ if(elapsed<8){setCue(`Stay quiet · ${Math.max(0,8-Math.floor(elapsed))}s`);}
+ else if(elapsed<16){markPhase('speech_over_playback');setCue(`Speak naturally over the playback · ${Math.max(0,16-Math.floor(elapsed))}s`);}
+ else if(elapsed<24){if(activePhase!=='playback_stopped_speech_alone'){if(!$('reference').paused)$('reference').pause();markPhase('playback_stopped_speech_alone');}setCue(`Playback stopped — speak alone · ${left}s`);}
+ else{$('cue').textContent='Finishing recording…';$('stop').click();}
+},150);}
+$('reference').loop=true;$('reference').onplaying=()=>{if(recorder?.state==='recording')beginPhases();};
+$('reference').onended=()=>{if(phasesStarted&&(performance.now()-startedAt)/1000<16){$('reference').currentTime=0;$('reference').play().catch(()=>{});}};
+$('stop').onclick=()=>{if(recorder?.state==='recording'){if(phasesStarted)markPhase('recording_stopped_by_user');recorder.stop();}else release();};
+$('start').onclick=async()=>{
+ if(!$('reference').src){$('status').textContent='Select a speech reference first.';return;}
+ if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){$('status').textContent='Use current Chrome/Edge on localhost or a supported secure context.';return;}
+ $('start').disabled=true;$('aec').disabled=true;const requested=$('aec').value==='true';const chunks=[];let settings;
+ try{
+ phaseEvents=[];activePhase=null;
+ stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:{ideal:requested},noiseSuppression:{ideal:false},autoGainControl:{ideal:false}},video:false});
+ const actual=stream.getAudioTracks()[0].getSettings();settings={requestedAEC:requested,reportedAEC:actual.echoCancellation??null,noiseSuppression:actual.noiseSuppression??null,autoGainControl:actual.autoGainControl??null,sampleRate:actual.sampleRate??null,channelCount:actual.channelCount??null,browser:navigator.userAgent,recordingStartedUTC:new Date().toISOString(),referenceStartedUTC:null,recordingTimesliceMs:250,sourceFileLabel:'user-selected audio; filename/path omitted',sourceDurationSeconds:Number.isFinite($('reference').duration)?Number($('reference').duration.toFixed(3)):null,phaseEvents:[],evidence:'laptop-browser-recording; browser event timing, not sample-level synchronized loopback; acoustic results unscored'};
+ $('settings').textContent=JSON.stringify(settings,null,2);
+ recorder=new MediaRecorder(stream);recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+ recorder.onstop=()=>{markPhase('recording_stopped');settings.referenceStartedUTC=referenceStartedUTC;settings.phaseEvents=phaseEvents.slice();const audioBlob=new Blob(chunks,{type:recorder.mimeType}),mimeType=recorder.mimeType;release();setCue('Trial complete · save both files');const name='laptop-aec-'+(requested?'on':'off')+'-'+(++trial);for(const [label,blob,ext] of [['Save microphone recording',audioBlob,mimeType.includes('mp4')?'mp4':'webm'],['Save settings',new Blob([JSON.stringify(settings,null,2)],{type:'application/json'}),'json']]){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name+'.'+ext;a.textContent=label+' · '+name;$('downloads').append(a,document.createElement('br'));}$('status').textContent='Trial captured. Save both files; settings do not establish echo reduction.';};
+ recorder.onerror=()=>{$('status').textContent='Recording failed. Stop and retry after checking devices.';release();};
+ recorder.start(250);recordingStartedAt=performance.now();$('stop').disabled=false;lastCue='';setCue('Starting playback…');$('progress').textContent='';$('reference').currentTime=0;
+ try{await $('reference').play();}catch(_){$('status').textContent='Recording is ready. Press Play on the reference; the guided timer starts with playback.';}
+ }catch(e){release();$('status').textContent='Could not start: '+e.name+'. Check microphone permission and device availability.';}
+};
+window.addEventListener('pagehide',()=>{release();});
+</script></html>

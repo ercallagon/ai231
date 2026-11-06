@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Swift · ASR reading check</title>
+<style>body{font:17px/1.55 system-ui;max-width:760px;margin:24px auto;padding:20px;background:#f6f8fa;color:#172b4d}main{background:#fff;border:1px solid #dce3eb;border-radius:16px;padding:26px}h1{font-size:1.8rem}blockquote{font:1.45rem/1.5 Georgia,serif;border-left:4px solid #0f766e;margin:24px 0;padding:4px 20px}button{font:inherit;padding:10px 16px;min-height:44px;margin-right:10px;border-radius:8px;border:1px solid #0f766e;background:#0f766e;color:white;cursor:pointer}button:disabled{opacity:.55;cursor:default}button:focus-visible,a:focus-visible{outline:3px solid #0f766e;outline-offset:3px}#cue{font-size:1.3rem;font-weight:650;min-height:2em}small{color:#526174}a{color:#0f766e}</style>
+<main><h1>Swift · Read aloud check</h1><p>Use your intended wired microphone in a quiet room. Keep the speaker silent. Read the passage exactly as printed, at your normal pace, when the prompt says “Read now.” This records your mic locally; nothing is uploaded.</p>
+<blockquote id="passage">Hey Swift, please remind me to bring the blue notebook tomorrow. After lunch, I want to call Maya and ask whether the garden gate is open.</blockquote>
+<p><button id="start">Start reading check</button><button id="stop" disabled>Stop</button></p><p id="cue" role="status" aria-live="polite">Ready</p><p id="detail">Three-second preparation, then up to 18 seconds to read. Leave a short pause after the final word.</p><div id="downloads"></div><small>Save both the recording and its matching reference JSON. They may contain private speech; put them under ME3's var/recordings/ only if you want the project to analyze them.</small></main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id), expected=$('passage').textContent.trim();let stream,recorder,clock,deadline,trial=0;
+function release(){clearInterval(clock);stream?.getTracks().forEach(t=>t.stop());stream=null;$('start').disabled=false;$('stop').disabled=true;}
+function save(blob,filename,label){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.textContent=label;$('downloads').append(a,document.createElement('br'));}
+$('stop').onclick=()=>{if(recorder?.state==='recording')recorder.stop();else release();};
+$('start').onclick=async()=>{if(!navigator.mediaDevices?.getUserMedia||!window.MediaRecorder){$('cue').textContent='Open in current Chrome or Edge on localhost.';return;}
+ $('start').disabled=true;const chunks=[];let settings;try{
+ stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:{ideal:false},noiseSuppression:{ideal:false},autoGainControl:{ideal:false}},video:false});
+ const actual=stream.getAudioTracks()[0].getSettings();settings={kind:'swift-asr-reading',passage_id:'swift-reading-v1',expected_text:expected,requestedAEC:false,reportedAEC:actual.echoCancellation??null,noiseSuppression:actual.noiseSuppression??null,autoGainControl:actual.autoGainControl??null,sampleRate:actual.sampleRate??null,channelCount:actual.channelCount??null,browser:navigator.userAgent,startedUTC:new Date().toISOString()};
+ recorder=new MediaRecorder(stream);recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+ recorder.onstop=()=>{release();$('cue').textContent='Done · save both files';const name='swift-asr-reading-'+(++trial),ext=recorder.mimeType.includes('mp4')?'mp4':'webm';save(new Blob(chunks,{type:recorder.mimeType}),name+'.'+ext,'Save microphone recording');save(new Blob([JSON.stringify(settings,null,2)],{type:'application/json'}),name+'.json','Save matching reference JSON');};
+ recorder.onerror=()=>{release();$('cue').textContent='Recording failed. Check microphone permission and try again.';};
+ let count=3;$('cue').textContent='Get ready · '+count;clock=setInterval(()=>{count--;if(count>0){$('cue').textContent='Get ready · '+count;return;}clearInterval(clock);recorder.start(250);$('stop').disabled=false;deadline=performance.now()+18000;$('cue').textContent='Read now · 18 seconds';clock=setInterval(()=>{const left=Math.max(0,Math.ceil((deadline-performance.now())/1000));const next=left?'Read now · '+left+' seconds':'Finishing…';if($('cue').textContent!==next)$('cue').textContent=next;if(!left)$('stop').click();},250);},1000);
+ }catch(e){release();$('cue').textContent='Could not start: '+e.name+'. Check microphone permission.';}};
+window.addEventListener('pagehide',release);
+</script></html>

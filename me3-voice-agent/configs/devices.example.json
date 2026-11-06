@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "backend": "mock",
+  "reminder_store": "var/cache/device-state/reminders.json",
+  "weather": {
+    "provider": "open_meteo",
+    "enabled": false,
+    "latitude": 14.6488,
+    "longitude": 121.0509,
+    "timezone": "Asia/Manila",
+    "location": "Quezon City, Philippines"
+  }
+}

@@ -1,0 +1,84 @@
+[build-system]
+requires = ["hatchling==1.30.1"]
+build-backend = "hatchling.build"
+
+[project]
+name = "me3-voice"
+version = "0.1.0"
+description = "Pi-targeted voice session harness and local speech MCP servers"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "aiohttp==3.14.5",
+  "mcp==2.3.0",
+  "numpy>=1.26.4,<3",
+  "pipecat-ai==1.13.0",
+  "soxr==1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "playwright==1.64.1",
+    "pypdf==6.21.2",
+    "pytest==9.0.2",
+    "pytest-asyncio==1.3.0",
+    "ruff==0.15.7",
+]
+wake = ["openwakeword==0.6.0"]
+kws = ["sherpa-onnx==2.0.1", "sentencepiece==0.2.2"]
+pi = [
+    "dbus-next==0.2.3",
+]
+
+[project.scripts]
+me3-voice = "me3_voice.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/me3_voice"]
+
+[tool.hatch.build.targets.sdist]
+# Explicit distribution boundary: never package private runtime state, even
+# when building from an untracked checkout inside a parent repository.
+ignore-vcs = true
+only-include = [
+  "src", "tests", "scripts", "configs", "deploy", "docs",
+  "README.md", "AGENTS.md", ".env.example", ".gitignore", "pyproject.toml", "uv.lock",
+]
+include = [
+  "/src/me3_voice/**",
+  "/tests/**",
+  "/scripts/**",
+  "/configs/*.json",
+  "/deploy/rpi/README.md",
+  "/docs/ARCHITECTURE.md",
+  "/docs/PLAN.md",
+  "/docs/BENCHMARK.md",
+  "/docs/SSH_HANDOFF.md",
+  "/docs/evidence/*.md",
+  "/README.md",
+  "/AGENTS.md",
+  "/.env.example",
+  "/.gitignore",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+exclude = ["**/__pycache__/**", "**/*.pyc", "/var/**", "/.git/**"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+cache_dir = "var/cache/pytest"
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+cache-dir = "var/cache/ruff"
+line-length = 100
+
+[tool.uv]
+cache-dir = "var/cache/uv"
+# openWakeWord's released metadata requires TFLite even when using its ONNX
+# backend. TFLite has no CPython 3.12+ wheels; ME3 selects ONNX explicitly.
+# Keep its original dependency on older Python, remove it only where unused
+# and unavailable. This override must be repeated in any non-uv workflow.
+override-dependencies = ["tflite-runtime>=2.8.0,<3; python_version < '3.12' and platform_system == 'Linux'"]

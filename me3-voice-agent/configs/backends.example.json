@@ -1,0 +1,31 @@
+{
+  "asr": {
+    "backend": "",
+    "protocol": "",
+    "endpoint": "",
+    "auth_env": "",
+    "model": "",
+    "allow_live": false,
+    "request_limit": 0
+  },
+  "llm": {
+    "backend": "",
+    "protocol": "",
+    "endpoint": "",
+    "auth_env": "",
+    "model": "",
+    "allow_live": false,
+    "request_limit": 0
+  },
+  "tts": {
+    "backend": "",
+    "protocol": "",
+    "endpoint": "",
+    "auth_env": "",
+    "model": "",
+    "allow_live": false,
+    "request_limit": 0,
+    "instructions": "",
+    "seed": null
+  }
+}
