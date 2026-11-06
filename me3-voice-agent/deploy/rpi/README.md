@@ -1,6 +1,23 @@
 # Pi test and transition workflow
 
-Prepared and tested with file/PCM input on HPC; **not Pi-verified**. This is the canonical Pi test/transition runbook; HPC-testable M2–M3 preparation is now authorized separately from physical M1. No ASR, TTS, LLM, account, GPU or model API is needed. Shared HPC model hosting is undecided and does not block these tests. Application source remains src/me3_voice/; do not maintain another implementation here.
+Pi software installation and bounded mock checks are now verified on the deployment below; **live inference, audio I/O and physical effects remain unverified**. This is the canonical Pi runbook. Mock acceptance needs no model API or account; real speech requires configured providers and Pi-side network access. Application source remains `src/me3_voice/`; do not maintain another implementation here.
+
+## Verified Pi software deployment — 2026-11-06
+
+Operator-reported checks used published revision `057321f150dd0c3df72de086e29b572000f2190b` on Raspberry Pi 5, Raspberry Pi OS/Debian 13.7 aarch64, Python 3.13.5, approximately 4 GB RAM. These findings qualify this software smoke path, not every supported OS/Python combination.
+
+| Check | Observed result and limit |
+|---|---|
+| Locked installation and `swift.sh check` | Passed on the Pi. |
+| Deterministic demo and scenarios | First demo had an MCP initialize timeout; retry passed. Its cause is unproven. All 10 mock scenarios passed. |
+| Wake/VAD preparation | Official Sherpa assets prepared; one-second synthetic-silence Sherpa/Silero replay passed. No real-voice/wake-accuracy conclusion. |
+| Mock bridge | Loopback health check passed; not model readiness or audio verification. |
+| Onit | 0.1.5a0 at source pin `3d014cfae043130d956ac042de7142516146e96b` installed separately with uv; `pip check`, actual ME3 worker `READY` handshake with dummy key/empty stdin, and scoped tool imports passed. Transitive packages were frozen, not fully lock-pinned. No model task or website was run. |
+| Audio inventory | USB microphone and USB speaker detected. Keep actual node identifiers in private deployment evidence, not this reusable guide. Neither device was opened. |
+| VPN/routing | One authorized foreground OpenVPN session connected; TTS route used `tun0`. TCP checks passed for university TTS port 8001 (43 ms) and Groq port 443 (136 ms). User later pressed Ctrl+C: **that tunnel is now stopped**. These are single TCP observations, not inference latency or current reachability. |
+| Credentials | Masked setup created a mode-0600 ignored file; preflight found expected Groq/TTS credential names. Values are not published; provider authentication/inference remain unverified. |
+
+ME2 tracked files remained unchanged. GPIO, calls/messages, microphone capture, playback, real inference and website generation stayed inactive. No acoustic, AEC, audible-interruption or physical-effect claim is supported. Earlier HPC-only limitations remain historical; use this dated status for the current Pi software evidence.
 
 ## Fresh checkout installation and operation
 
@@ -8,7 +25,7 @@ Canonical checkout location: `~/ai231/me3-voice-agent/`. The reviewed runnable s
 
 ### Prerequisites and scope
 
-- Target: Raspberry Pi 5 / 4 GB, Raspberry Pi OS **64-bit**, Python 3.11–3.13, `python3-venv`, Git and network access for package/model downloads. Exact OS release, native wheels, RAM, thermals and audio must be recorded on the fresh Pi. Only Linux x86_64 installation/runtime is currently verified.
+- Target: Raspberry Pi 5 / 4 GB, Raspberry Pi OS **64-bit**, Python 3.11–3.13, `python3-venv`, Git and network access for package/model downloads. The deployment above verifies the locked software smoke path on one aarch64 system; record OS, native wheels, RAM, thermals and audio for each new installation. Physical audio remains unverified.
 - Existing PipeWire with `pw-record`, `pw-play`, `wpctl`; do not install/replace an audio service to follow this guide. Browser microphone mode is the supported laptop alternative and requires a trusted localhost origin.
 - RGB LED: documented ME2 configuration BCM R/G/B **17/27/22**, active high; TM1637 CLK/DIO **23/24**. Confirm actual module pin labels, common anode/cathode, resistor requirements, safe 3.3 V connections and existing wiring before selecting real hardware. Do not rewire from a generic module diagram. See the shared-device section below.
 - GPIO support uses approved OS `python3-gpiozero`/`python3-lgpio` packages. If installed outside the environment, create the project venv with `python3 -m venv --system-site-packages var/cache/venv` **before** setup, then verify imports. No Pi libraries are needed for mock startup.
@@ -72,18 +89,31 @@ The laptop's OpenVPN Connect session routes **laptop traffic only**. A Pi on the
 | University TTS `10.153.60.233:8001` (and optional ASR `:8000`) | University DILNET or approved VPN/routed network from the **Pi** |
 | Loopback dashboard `127.0.0.1:8765` | Local Pi browser or explicit private SSH forwarding from the viewing laptop |
 
-Before real voice setup, run this **on the Pi**, with the actual prepared profile:
+For a campus-connected Pi, use authorized DILNET and run the network gate below. Otherwise use an approved, device-appropriate VPN profile; do not assume the laptop's OpenVPN client supplies it.
 
-```bash
-bash scripts/swift.sh network --backend-config var/cache/pi_demo-backends.json
-```
+#### Manual VPN start and pre-bridge network gate
 
-This opt-in command makes one TCP connection per unique configured host/port, timeout3s; sends no credentials/HTTP/inference, and prints role-specific reachability. It is not authentication, TLS, model-health or audio qualification. A failed TTS route must be resolved before expecting spoken answers; Groq can still be reachable independently. The default offline demo needs none of these routes.
+The verified deployment used OpenVPN 2.6.14 installed on Debian after user authorization. Installation is an operator prerequisite, not an application startup action. A personal SHARCHPC profile containing inline CA, certificate, private-key and TLS-auth material was kept only in the Pi user's private `~/.config/openvpn/` directory (0700 directory, 0600 profile). Never commit the profile, its hash, contents, credentials or connection logs. Other users must obtain their own approved profile and access permissions.
 
-Preferred demo choices, without changing the architecture:
+1. **Run on the Pi**, in a dedicated terminal. Replace the generic profile path with your private file; do not put VPN credentials in the command:
 
-1. Place the Pi on authorized DILNET with public internet and confirm the service ports are permitted; or
-2. Configure an instructor/university-approved VPN directly on the Pi using credentials/profile intended for that device. OpenVPN Connect is the laptop client, not a Pi configuration. Obtain a supported Linux client/profile and verify permitted concurrent sessions with the network owner; no VPN packages, routes or services are installed by ME3.
+   ```bash
+   sudo /usr/sbin/openvpn --auth-nocache --config /path/to/private-profile.ovpn
+   ```
+
+   Enter credentials at the interactive prompts; the password is masked. Wait for **`Initialization Sequence Completed`**. The verified session reached this state despite Windows-specific `register-dns` pushed-option warnings; that does not make authentication or routing errors safe to ignore.
+
+2. **Keep that foreground terminal open.** In another Pi terminal, from the ME3 root, run the existing network gate with the deployed private profile:
+
+   ```bash
+   bash scripts/swift.sh network --backend-config var/cache/pi_live-backends.json
+   ```
+
+   `pi_live-backends.json` is an ignored local configuration, not a shipped credential/config file. If a new installation uses another profile name, supply that actual path. Require university TTS and Groq roles to report **`tcp_reachable`** before proceeding. The command makes one TCP connection per unique configured host/port with a 3 s timeout; it sends no API key, HTTP or inference request. It does not establish TLS, provider authentication, model health or spoken output.
+
+3. **Only after the gate passes**, start the loopback bridge with the matching explicit backend/credential/device configuration using the launch procedure below. Keep the VPN terminal running throughout university-service use. Mock bridge health remains separate from live-provider readiness; audio/GPIO actions still require their own controlled authorization.
+
+Ctrl+C in the VPN terminal, or reboot, disconnects the tunnel. Reconnect and rerun the gate before each demo session; the observed tunnel is currently stopped. This flow is interactive and uses `--auth-nocache`: no automatic credential persistence, systemd/boot service or VPN autostart is configured. Stop the ME3 processes you started before ending a real-service demo, then disconnect the VPN explicitly. Do not infer continued routing from an earlier successful check.
 
 If neither is available, stop before claiming a network-ready Pi. An explicit private relay/tunnel through an authorized host is a separate setup decision, requires the Pi to reach that host, adds availability/latency dependencies, and is **not implemented or validated here**. The application deliberately rejects arbitrary plaintext/local forwarding endpoints; do not rewrite `10.153.60.233` to localhost or widen that protection silently. An alternative already-supported TTS provider is possible only with its own credentials, documented contract and authorization; no paid fallback is selected automatically. Do not expose university APIs publicly or share a VPN connection by enabling IP forwarding/NAT without network-owner permission.
 
@@ -99,16 +129,53 @@ Stop the native peer with Ctrl+C first, then the bridge/preview server you start
 - **Thinking/provider failures:** check model/role labels and provider reachability/limits independently; keys are not printed. Preserve receipts and reconcile Unknown before repeating an external action.
 - **Pi action unavailable:** inspect OS imports, permissions and verified wiring. Keep real target unavailable rather than concealing it as mock. Do not initialize GPIO solely for preflight.
 
-Before an update, record `git rev-parse HEAD`, preserve private config and ledger paths, and stop only ME3-owned processes. Review local changes before `git pull --ff-only`, run locked setup and mock acceptance again, then qualify the intended physical devices. For rollback select the previously recorded revision only with local work preserved, rerun its locked setup, and explicitly select the previous private profile. No update/rollback script resets or overwrites user changes. Do not regenerate an existing profile over itself, delete uncertain receipts, replay external effects, or copy environments between architectures. The independent Onit pin and installed package list must also be preserved. Pi clean installation/update/rollback are **pending the user's first external-user test**, not proven by an HPC lock check.
+Before an update, record both parent `HEAD` and the deployed ME3 source revision, preserve private config/ledger paths and local source edits, and stop only ME3-owned processes. For a shared or sparse coursework checkout, **do not run a root-level `git pull`**: use the ME3-only synchronization procedure below, then rerun applicable software acceptance before separately qualifying physical devices. For rollback select the previously recorded revision only with local work preserved, rerun its locked setup, and explicitly select the previous private profile. No update/rollback script resets or overwrites user changes. Do not regenerate an existing profile over itself, delete uncertain receipts, replay external effects, or copy environments between architectures. The independent Onit pin and installed package list must also be preserved. The dated Pi milestone qualifies the initial locked installation/mock smoke path; this update/rollback procedure and real audio/hardware still require their own verification.
+
+### Synchronize only ME3 in a shared or sparse checkout
+
+The reported Pi parent `HEAD` remained `b7d5c14a25ec55caf4aa0fbcae2f4d22d0a38313` while cached `origin/main` and the deployed ME3 baseline were `057321f150dd0c3df72de086e29b572000f2190b`. ME3 was deliberately an untracked overlay relative to that older parent to preserve ME2. Therefore parent `HEAD` and ordinary `git diff` do not identify the deployed ME3 source reliably.
+
+Run the following **from the parent repository root on the Pi**, after reviewing/preserving any unpublished ME3 source edits. Do not copy the Pi checkout wholesale or restore the entire parent tree. Obtain the exact published commit from the documentation update's report; replace the placeholder before running the restore:
+
+```bash
+set -euo pipefail
+# Baseline the existing tracked ME2 file contents; stop if this check fails.
+mkdir -p me3-voice-agent/var/results
+git ls-files -z -- me2-vcm | xargs -0 -r sha256sum > me3-voice-agent/var/results/me2-before-me3-sync.sha256
+test -s me3-voice-agent/var/results/me2-before-me3-sync.sha256
+
+git fetch origin main
+ME3_PUBLISHED_COMMIT='REPLACE_WITH_REVIEWED_COMMIT_SHA'
+git cat-file -e "${ME3_PUBLISHED_COMMIT}^{commit}"
+printf 'ME3 source revision: %s\n' "$ME3_PUBLISHED_COMMIT"
+# Worktree only: preserve the parent index/HEAD and every other coursework path.
+git restore --source="$ME3_PUBLISHED_COMMIT" --worktree -- me3-voice-agent
+sha256sum --check --quiet me3-voice-agent/var/results/me2-before-me3-sync.sha256
+
+python3 - "$ME3_PUBLISHED_COMMIT" <<'PYTHON'
+from pathlib import Path
+import subprocess
+import sys
+
+revision = sys.argv[1]
+for name in ("me3-voice-agent/deploy/rpi/README.md", "me3-voice-agent/docs/PLAN.md"):
+    published = subprocess.check_output(["git", "show", f"{revision}:{name}"])
+    if Path(name).read_bytes() != published:
+        raise SystemExit(f"Published-file mismatch: {name}")
+print("Both documentation files match the exact published revision")
+PYTHON
+```
+
+Run sequentially and stop on any failure; if no ME2 files are tracked in that checkout, the empty hash list does not establish ME2 preservation—use the existing read-only ME2 inventory instead. Preserve ignored `var/`, credentials and the private VPN directory; never use `git clean`, root reset/pull or delete those files to synchronize. The restore updates only published ME3 paths and does not rearm tasks or start services. Record the exact ME3 source commit separately from unchanged parent `HEAD`; byte comparisons and rechecked ME2 hashes, not parent Git status alone, establish this synchronization.
 
 ## Current one-day demo path — 2026-11-06
 
-User will transfer/setup the Pi separately; no Pi SSH address or device access was supplied to this HPC run. The following is an operator-run path, **not Pi-verified**. The new PipeWire peer is software-tested with mocked subprocesses. Keep the final four hours before submission for clean starts, acoustic checks and rollback. Stop feature work before that reserve; exact submission time is still unspecified.
+User will transfer/setup the Pi separately; no Pi SSH address or device access was supplied to this HPC run. The following was the initial operator-run preparation path; the dated verification table above supersedes its software-installation status, while physical/audio steps remain unverified. The new PipeWire peer is software-tested with mocked subprocesses. Keep the final four hours before submission for clean starts, acoustic checks and rollback. Stop feature work before that reserve; exact submission time is still unspecified.
 
 Topology: Pi runs the bridge/Session/Pipecat, CPU Sherpa/Silero, local ASR/TTS MCP subprocesses, configured GPIO/phone adapters, installed Onit worker and native PipeWire peer. Groq provides ASR/LLM inference; university DGX provides TTS. A Pi Spotify Connect receiver, configured separately, renders music. A laptop browser is an observer/inspection UI in native mode. Do not press its Start button while the native peer owns the voice connection. The UI report feed and device controls are not a second microphone connection.
 
 1. Transfer the one canonical ME3 source checkout and explicit inference assets using the existing private SSH workflow. Do not copy ME2, the HPC virtual environment, user recordings, cache trees, or credentials into an archive. Preserve ME2's deployment/services. Before installation run `uname -m`, `getconf GNU_LIBC_VERSION`, `python3 --version`, `wpctl status`, `pw-record --help`, `pw-play --help`, and the existing inventory command below. Confirm GPIO wiring and the actual node names. No hostname is hardcoded.
-2. Create the project environment as below and sync `--extra kws --extra pi`; the new `pi` extra only adds dbus-next0.2.3. GPIO libraries remain explicitly installed Pi OS prerequisites, not laptop dependencies. Do not change PipeWire/BlueZ services to force readiness. Use the already selected Sherpa assets. Onit must have its own compatible environment; the tested installation is onit0.1.5a0, clean source commit `3d014cfae043130d956ac042de7142516146e96b`. Its ARM dependency/import compatibility remains unverified.
+2. Create the project environment as below and sync `--extra kws --extra pi`; the new `pi` extra only adds dbus-next0.2.3. GPIO libraries remain explicitly installed Pi OS prerequisites, not laptop dependencies. Do not change PipeWire/BlueZ services to force readiness. Use the already selected Sherpa assets. Onit must have its own compatible environment; the tested installation is onit0.1.5a0, clean source commit `3d014cfae043130d956ac042de7142516146e96b`. The dated Pi milestone now verifies installation, scoped imports and worker readiness on one aarch64 target; model execution remains unverified there.
 
 ```bash
 # ON THE PI, from the transferred ME3 root; no boot services are installed.
@@ -116,14 +183,14 @@ python3 -m venv var/cache/venv
 var/cache/venv/bin/python -m pip install --cache-dir var/cache/pip uv==0.13.4
 UV_PROJECT_ENVIRONMENT=var/cache/venv UV_PYTHON_DOWNLOADS=never var/cache/venv/bin/uv sync --locked --extra kws --extra pi
 python3 -m venv var/cache/onit-venv
-var/cache/onit-venv/bin/python -m pip install --cache-dir var/cache/pip 'onit @ git+https://github.com/sibyl-oracles/onit@3d014cfae043130d956ac042de7142516146e96b'
+var/cache/venv/bin/uv pip install --python var/cache/onit-venv/bin/python 'onit @ git+https://github.com/sibyl-oracles/onit@3d014cfae043130d956ac042de7142516146e96b'
 mkdir -p var/results var/logs var/scratch/demo-projects
 var/cache/onit-venv/bin/python -m pip freeze > var/results/onit-pi-packages.txt
 PYTHONPATH=src var/cache/venv/bin/python -B scripts/prepare_demo_profile.py --baseline configs/demo-backends.example.json --asr groq --name pi_demo --pi --enable-inference
 PYTHONPATH=src var/cache/venv/bin/python -B scripts/configure_demo_keys.py --output var/cache/demo-models.env
 ```
 
-These setup commands have not run on aarch64. Key entry is masked and owner-only; `ME3_LLM_API_KEY` supplies Groq ASR and LLM, and `ME3_TTS_API_KEY` supplies university TTS. The template has live requests disabled; the setup command explicitly enables only its new private profile. It preserves120B LOW/streaming/2048 through the bridge flags below and removes the old four-request experiment cap only in that new profile. Provider limits and existing tool/operation/context bounds remain. The Qwen ASR baseline is preserved for rollback, not selected silently.
+Locked application installation and the uv-based separate Onit installation passed on the dated aarch64 target; that does not qualify every subsequent live launch or optional integration. Key entry is masked and owner-only; `ME3_LLM_API_KEY` supplies Groq ASR and LLM, and `ME3_TTS_API_KEY` supplies university TTS. The template has live requests disabled; the setup command explicitly enables only its new private profile. It preserves120B LOW/streaming/2048 through the bridge flags below and removes the old four-request experiment cap only in that new profile. Provider limits and existing tool/operation/context bounds remain. The Qwen ASR baseline is preserved for rollback, not selected silently.
 
 ```bash
 # Inventory only: no network calls, inference, GPIO or audio opens.
@@ -134,7 +201,7 @@ PYTHONPATH=src var/cache/venv/bin/python -B -m me3_voice.communications --config
 
 Phone setup needs the paired tablet MAC and configured authorized demo call/SMS recipient numbers, stored only in `communications.phone_address/call_number/message_number`. Require exactly one PipeWire telephony gateway, no active call, user D-Bus access, and a BlueZ MAP-capable phone with message permission. Read-only checks: `busctl --user list` and `bluetoothctl devices Connected`. No recipient or Bluetooth address belongs in chat/logs. The code never retries Dial/PushMessage; unknown outcome requires checking the phone. Calling reports requested, SMS reports transfer complete; neither asserts answered/delivered. Current transport adapters are mock-tested, not Pi/carrier-tested.
 
-3. Start the Pi bridge in terminal A. Omit ME3_MUSIC_CONFIG for the first quiet test. No device opens until a voice peer starts; Pi device configuration explicitly selects real GPIO. If GPIO is unavailable, voice should remain available and actions report unavailable.
+3. Start the Pi bridge in terminal A **only after the separate Pi VPN/network gate passes**. Use the actual deployed profile paths consistently; the earlier preparation example below uses `pi_demo`, while the verified network gate uses the local `pi_live` profile. Omit ME3_MUSIC_CONFIG for the first quiet test. No device opens until a voice peer starts; Pi device configuration explicitly selects real GPIO. If GPIO is unavailable, voice should remain available and actions report unavailable.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
