@@ -1,6 +1,6 @@
 # ME3 — Swift: Full-Duplex Voice AI Agent
 
-Swift is a Raspberry Pi 5 (4 GB) voice assistant with local wake/VAD, our own ASR/TTS MCP servers, configurable remote inference, an Onit task worker, and a browser interface. This is the actual runnable application, not a demo shell. **Full-duplex acoustic reliability and fresh Pi installation remain pending physical qualification.**
+Swift is a Raspberry Pi 5 (4 GB) voice assistant with local wake/VAD, our own ASR/TTS MCP servers, configurable remote inference, an Onit task worker, and a browser interface. This is the actual runnable application, not a demo shell. **Pi locked installation and mock startup passed on the reported target; full-duplex acoustic reliability, real inference and physical actions remain pending qualification.**
 
 ## Install and run from a fresh checkout
 
@@ -15,7 +15,7 @@ bash scripts/swift.sh check
 bash scripts/swift.sh demo
 ```
 
-Linux, Python 3.11–3.13 and `python3-venv` are required. HPC/x86_64 Python 3.13 is tested; Raspberry Pi OS 64-bit on Pi 5 is the target, not yet an installation claim. Setup installs the editable application with `uv==0.13.4` and `uv.lock` into `var/cache/venv`. It downloads dependencies but opens no devices and uses no model API. Add `--dev` for tests or `--pi` for optional Bluetooth support. Do not copy an HPC virtual environment to the Pi. Windows users can view the browser UI; native Windows installation is not qualified.
+Linux, Python 3.11–3.13 and `python3-venv` are required. HPC/x86_64 Python 3.13 and one Raspberry Pi OS/Debian 13.7 aarch64 installation with Python 3.13.5 have software smoke evidence; see the dated Pi runbook for its limits. Setup installs the editable application with `uv==0.13.4` and `uv.lock` into `var/cache/venv`. It downloads dependencies but opens no devices and uses no model API. Add `--dev` for tests or `--pi` for optional Bluetooth support. Do not copy an HPC virtual environment to the Pi. Windows users can view the browser UI; native Windows installation is not qualified.
 
 The `demo` command uses deterministic mock providers, memory playback and mock actions through our real Session/MCP path. It requires no account, university network, wake assets or GPIO. It does not use your microphone. To view the actual dashboard separately:
 

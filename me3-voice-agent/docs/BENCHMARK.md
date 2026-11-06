@@ -254,3 +254,48 @@ Reference: `https://github.com/trueshotjames/ai231-me3-full-duplex-benchmarking`
 The first live-audio smoke initially produced no reply because the adapter had configured a file-style `wake_frame` but did not activate Session at first WebSocket audio. The benchmark-specific first-frame activation fixed that. A follow-up single clip (Candor `v1_turntaking_56`, 12.032 s total recording) showed activation, VAD onset, ASR finalization and `agent_route_dispatched`. The Onit task worker sent one university request body but no response headers arrived before the benchmark's 8-second answer window closed; the benchmark recorded no assistant speech (`TOR=0`, provisional “missed”). The diagnostic parent then reaped its own process with SIGTERM after a 12-second shutdown wait, before the provider's 45-second deadline. This establishes one live benchmark-window miss and a remaining teardown-harness issue, not a provider timeout result. Raw logs are under `var/experiments/020-endpoint-onit-benchmark/fdbench-real-audio-smoke-activated/`.
 
 Endpoint and Onit details, live request accounting, the generated-project failure and owner action are in the 2026-11-06 section of [PLAN.md](PLAN.md). No complete class benchmark run, score, AEC result, user-speaker measurement or Pi result has been obtained.
+
+## Class benchmark update — 2026-11-06
+
+Reviewed upstream `a0bab59114aa31341e8a750c623ef60fc7ca8399` (previously293ba44). New stage marks, stage-latency block, WER support, model metadata and deck/report generation are appropriate for the supplied two-page template. The upstream direct-feed rig still carries no per-trial activation/reset handshake. `--reset-cmd` executes a shell command between trials but does not itself guarantee reconnection/readiness or active-versus-inactive ME3 policy. Six seconds of silence cannot reset the adapter's120-second engagement. Full mixed-trial scoring remains blocked pending an explicit tested reset policy; use separately started processes per controlled case, label active/inactive, and do not report the default mixed run as valid.
+
+ME3's custom Session does not emit standard Pipecat transcription/LLM/TTS frames, so the upstream observer cannot infer all stages. `scripts/fdbench_entry.py` now emits documented marks for canonical endpoint, ASR completion, reasoning request, tool start/end and TTS request/first chunk, plus transport-send audio marks. Missing first-token marks remain unavailable: first speakable segment must not masquerade as TTFT. ASR text is not exported by these marks yet, so automatic WER remains unavailable. Audio-out marks reflect transport handoff, not acoustic onset. Same-machine monotonic values and session/turn IDs preserve correlation; cross-machine raw monotonic clocks must not be subtracted.
+
+Adapter defaults now reuse the selected main secret file for LLM unless ME3_LLM_SECRETS_FILE is explicitly set; configured model labels replace hardcoded university/HPC claims. The unrelated four-request worker cap is removed; ME3_FDBENCH_REQUEST_LIMIT optionally supplies an explicit guard and backend/account limits still apply. No live allowance is granted by this change. `describe()` reports configured roles only, never credentials. Put reference checkout/dependencies and all generated datasets/runs under var/; use FDBENCH_PROJECT/FDBENCH_ENTRY explicitly rather than creating a new root source tree. Do not run a paid judge or new live comparisons without an applicable authorized budget.
+
+## Latest pinned compatibility and Pi smoke gate — 2026-11-06
+
+Rechecked upstream main at **9d7a824e0298b27a2c0f9f1f435be07125ae0391**, superseding the a0bab591 review. New changes exclude discarded speculative LLM requests from context summaries and distinguish benchmark-link routing from cloud/default routing. ME3 does not currently speculate on partial ASR, so it must not emit speculative requests/cancellations to manufacture those rows. On a VPN-connected Pi, the benchmark link and university/cloud route must be recorded separately; neither route label proves API authentication.
+
+The current adapter provides explicit `ME3_FDBENCH_MOCK=1` software checks: canonical SpeechClient/MCP subprocesses, Session, VAD, task mocks and the upstream WebSocket transport, without keys, Onit installation, microphone or speaker. Real providers are selected only by explicit backend configuration when mock mode is absent. Mock metadata no longer claims Onit reasoning. Startup/teardown uses an AsyncExitStack so partial build failures close registered Session/worker/MCP resources. Queue/send/clear checks remain software evidence.
+
+`ME3_FDBENCH_EXPORT_TEXT=1` opts into sending the matching authoritative final transcript in stage marks for class WER scoring. It uses only the current turn's final user projection, never another turn's history or a draft. The upstream mark contract truncates strings at500 characters; ME3 omits longer transcript text rather than submitting a truncated hypothesis as full WER input. Missing transcript marks mean unavailable WER. Provider-final text can be an incorrect recognition; measure it, do not replace it with the expected text. First useful text/Onit retrospective TTFT durations still do not supply a true realtime first-token mark. Exact model context token counts also remain unavailable unless instrumented at actual model request construction; do not infer them from UI transcript length.
+
+### Reproducible setup and no-inference checks
+
+Keep the benchmark clone, its separate scoring environment, datasets and runs under `var/`. Select the exact reviewed benchmark revision; install its own requirements in its own environment only if needed. Do not merge benchmark dependencies into ME3's lock. The ME3 environment supplies Pipecat1.13 and the official transport. From the ME3 root:
+
+```bash
+# Explicit entry and root avoid any dependency on the benchmark folder name/location.
+export FDBENCH_ENTRY="$PWD/scripts/fdbench_entry.py"
+export FDBENCH_PROJECT="$PWD"
+export ME3_FDBENCH_MOCK=1
+var/cache/venv/bin/python -B var/cache/fd-benchmark-reference/launch_assistant.py --check
+
+# Supply an existing explicitly synthetic PCM16/16k/mono fixture, not private user audio.
+var/cache/venv/bin/python -B scripts/check_fdbench_transport.py \
+  --synthetic-wav var/recordings/synthetic-speech.wav \
+  --output-dir var/results/fdbench-pi-mock-smoke
+```
+
+The maintained smoke runner requires a fresh output path and uses fresh Sessions for one active and one inactive case. It sends the existing synthetic clip over a local WebSocket with real pacing; mock ASR text does not come from the clip. It verifies raw reply bytes, actual transport `clear`, inactive silence and cleanup queue state. It does not simulate an acoustic interruption. Output and marks are collected with one host's monotonic clock. The exact upstream launcher `--check` passed on HPC; this is not a Pi or model-health result.
+
+For the later Pi-to-laptop test use the pinned official launcher with `--url ws://LAPTOP_ADDRESS:8791` and a log directory under Pi `var/results/`. This socket is the private benchmark link; it does not route university inference. Check the local network/firewall and VPN behavior separately. No assistant_entry.py copy is required: set FDBENCH_ENTRY/FDBENCH_PROJECT as above. Transcript exports/recordings must be opt-in and credentials remain server-side.
+
+**Do not proceed directly to full mixed-trial scoring.** The upstream runner still has no trial-start group/activation handshake. Its `--reset-cmd` runs after a variant before the queue status is saved, supplies no next-trial metadata and ignores a nonzero subprocess exit; it is not a sufficient readiness/reset protocol. A default6s gap does not reset ME3's120s benchmark engagement. Start separate fresh adapter processes for selected active and inactive cases and label their initial states; these are partial checks, not a full class score. Do not trigger activation from every voiced clip, reset midway through an interruption scenario, or change scoring/audio to improve results. Full-run readiness needs a tested controller that supplies trial identity, activation policy, reset completion and fresh-state acknowledgement, or an instructor-approved standalone-case protocol.
+
+### Evidence and remaining limits
+
+Offline real-transport evidence: `var/experiments/020-endpoint-onit-benchmark/latest-transport-smoke/result.json` — active290 input frames/3840 mock output bytes, wire clear observed; separate inactive290 frames/zero output bytes; both cleanup_complete with empty playback queues, zero live requests. Stage marks included endpoint, ASR final, request, TTS first chunk and audio handoff. Inactive cleanup may send a clear command; this is not a conversational interruption. `var/results/benchmark-latest-entry-check.txt` records the official launcher READY check. Relevant regressions cover current-final-only transcript export and failure after Session creation, with no residual asyncio tasks. Do not turn these checks into benchmark metric estimates or acoustic/Pi claims.
+
+Before any separately authorized real-provider smoke, unset ME3_FDBENCH_MOCK and set ME3_BACKEND_CONFIG/ME3_SECRETS_FILE (and ME3_LLM_SECRETS_FILE only if separate) to the actual Pi-local files. Re-run --check and require the intended configured model labels; never count mock speech as live inference. ME3_FDBENCH_EXPORT_TEXT=1 is explicit benchmark transcript export, and should be removed after the trial. No acoustic accuracy or side-talk detection follows from a wake-disabled inactive Session emitting silence.
