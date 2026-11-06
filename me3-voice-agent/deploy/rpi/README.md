@@ -4,7 +4,7 @@ Prepared and tested with file/PCM input on HPC; **not Pi-verified**. This is the
 
 ## Fresh checkout installation and operation
 
-Canonical checkout location: `~/ai231/me3-voice-agent/`. Clone `https://github.com/ercallagon/ai231.git` into `~/ai231`, then enter its `me3-voice-agent/` subdirectory. Do not clone the entire coursework repository inside the application directory. Do not nest a second application under the existing source. Commands below run from the checkout root and use a project-local editable install: security boundaries and assets are relative to this checkout. A wheel installed globally is not the supported operator workflow.
+Canonical checkout location: `~/ai231/me3-voice-agent/`. The reviewed runnable source is published at [ercallagon/ai231 — me3-voice-agent](https://github.com/ercallagon/ai231/tree/main/me3-voice-agent). Clone `https://github.com/ercallagon/ai231.git` into `~/ai231`, then enter its `me3-voice-agent/` subdirectory. Do not clone the entire coursework repository inside the application directory. Do not nest a second application under the existing source. Commands below run from the checkout root and use a project-local editable install: security boundaries and assets are relative to this checkout. A wheel installed globally is not the supported operator workflow.
 
 ### Prerequisites and scope
 
