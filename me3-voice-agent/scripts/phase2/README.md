@@ -1,0 +1,18 @@
+# Phase 2 validation tools
+
+These isolated tools validate native Pipecat integration and attended Pi audio;
+they do not replace production Session or the sidecar. No inference provider is
+required. Run from the ME3 project root with its existing environment.
+
+Canonical commands, temporary AEC setup, routing checks, return artifacts and
+rollback: [Phase 2 report](../../docs/architecture_modernization/PHASE2_REPORT.md).
+
+- `native_contract.py OUTPUT.json`: three native scenarios, actual speech MCP children with mock providers.
+- `session_comparison.py OUTPUT.json`: two legacy comparison scenarios with the same mock MCP services.
+- `pipewire_transport.py`: native input/output prototype; devices disabled by default.
+- `operator_native.py`: attended physical acquisition; requires explicit nodes, reference WAV and `--capture`.
+- `../../tests/test_phase2_transport.py`: eight offline lifecycle/transport checks.
+
+Use fresh JSON paths under ignored `var/results/`; output overwrite is refused.
+Historical development logs remain private under `var/experiments/022-native-voice-duplex/`.
+Hardware gates remain PENDING_OPERATOR_VALIDATION until actual results are reviewed.
