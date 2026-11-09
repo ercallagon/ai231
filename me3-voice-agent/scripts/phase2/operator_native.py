@@ -5,6 +5,7 @@ Does not certify AEC, speaker audibility or acoustic timing by itself.
 """
 
 import argparse, asyncio, json, os, time, wave, hashlib
+from collections import deque
 from pathlib import Path
 from pipecat.frames.frames import OutputAudioRawFrame, InterruptionFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -84,7 +85,9 @@ async def run(args):
     inp = PipeWireInput(args.source, allow_capture=True, spawn=spawn)
     out = PipeWireOutput(args.sink, allow_playback=True, spawn=spawn)
     observer = Observe()
-    samples = []
+    samples = deque(maxlen=100)
+    resource_log = (args.output / "resources.jsonl").open("x")
+    sample_count = 0
     lag = []
     started = time.monotonic()
     audio_pids = []
@@ -100,6 +103,7 @@ async def run(args):
                 pass
 
     async def sampling():
+        nonlocal sample_count
         while True:
             due = time.monotonic() + 0.1
             await asyncio.sleep(0.1)
@@ -107,9 +111,10 @@ async def run(args):
             pids = [os.getpid(), *audio_pids] + [
                 c.pid for c in [inp.child, out.child, *taps] if c is not None
             ]
-            samples.append(
-                {"at": time.monotonic(), "processes": [sample_process(pid) for pid in pids]}
-            )
+            sample = {"at": time.monotonic(), "processes": [sample_process(pid) for pid in pids]}
+            samples.append(sample)
+            resource_log.write(json.dumps(sample) + "\n")
+            sample_count += 1
 
     monitor = asyncio.create_task(sampling())
     prompts = None
@@ -131,7 +136,7 @@ async def run(args):
             LLMContext(),
             user_params=LLMUserAggregatorParams(
                 user_turn_strategies=UserTurnStrategies(
-                    start=[VADUserTurnStartStrategy()],
+                    start=[VADUserTurnStartStrategy(enable_interruptions=args.profile == "smoke")],
                     stop=[
                         SpeechTimeoutUserTurnStopStrategy(
                             user_speech_timeout=0.2, wait_for_transcript=False
@@ -162,50 +167,50 @@ async def run(args):
         await runner.add_workers(worker)
         job = asyncio.create_task(runner.run())
         await asyncio.wait_for(ready.wait(), 15)
-        print(
-            "24s attended trial: first 8s stay silent; next 8s speak over reference; last 8s speak alone. Reference stops on first confirmed onset. Keep volume/geometry fixed.",
-            flush=True,
-        )
-        with wave.open(str(args.reference), "rb") as wav:
-            if (
+        epoch = time.monotonic()
+        observer.events.append({"event": "profile_start", "profile": args.profile, "at": epoch})
+        if args.profile == "smoke":
+            print(
+                "24s: first 8s silent; next 8s speak over reference; last 8s speak alone. Reference stops on confirmed onset.",
+                flush=True,
+            )
+        else:
+            print(
+                f"{args.seconds}s {args.profile} recording: "
+                + {
+                    "speech": "read the planned phrases; no playback",
+                    "negative": "room sounds/non-directed speech; no playback",
+                    "echo": "remain silent while reference plays",
+                    "overlap": "speak the planned phrases while reference continues",
+                }[args.profile]
+                + ". Automatic interruption is DISABLED for corpus acquisition; this is not a barge-in test.",
+                flush=True,
+            )
+
+        async def phases():
+            observer.events.append({"event": "echo_only_prompt", "at": time.monotonic()})
+            await asyncio.sleep(8)
+            print("8 seconds: speak over reference; report any earlier false stop.", flush=True)
+            observer.events.append({"event": "double_talk_prompt", "at": time.monotonic()})
+            await asyncio.sleep(8)
+            print("16 seconds: reference ends; speak alone.", flush=True)
+            observer.events.append({"event": "user_only_prompt", "at": time.monotonic()})
+
+        if args.profile == "smoke":
+            prompts = asyncio.create_task(phases())
+        playing = args.profile in {"smoke", "echo", "overlap"}
+        wav = wave.open(str(args.reference), "rb") if playing else None
+        try:
+            if wav and (
                 wav.getsampwidth() != 2
                 or wav.getnchannels() != 1
                 or wav.getframerate() not in (16000, 48000)
                 or wav.getnframes() == 0
             ):
                 raise ValueError("reference requires nonempty mono PCM16 WAV at 16k/48k")
-            observer.playing = True
-            epoch = time.monotonic()
-            reference_rate = wav.getframerate()
-
-            async def phases():
-                observer.events.append({"event": "echo_only_prompt", "at": time.monotonic()})
-                await asyncio.sleep(8)
-                print(
-                    "8 seconds: speak over the reference now (if it already stopped, report false interruption).",
-                    flush=True,
-                )
-                observer.events.append({"event": "double_talk_prompt", "at": time.monotonic()})
-                await asyncio.sleep(8)
-                print("16 seconds: reference ends; speak alone.", flush=True)
-                observer.events.append({"event": "user_only_prompt", "at": time.monotonic()})
-
-            prompts = asyncio.create_task(phases())
-            while time.monotonic() - epoch < 16 and not observer.interrupted.is_set():
-                chunk = wav.readframes(reference_rate // 50)
-                if not chunk:
-                    wav.rewind()
-                    continue
-                await worker.queue_frame(OutputAudioRawFrame(chunk, reference_rate, 1))
-                await asyncio.sleep(len(chunk) / (reference_rate * 2))
-            observer.playing = False
-            # Explicit silence phase: flush reference even when no onset occurred.
-            await worker.queue_frame(InterruptionFrame())
-            print(
-                "Reference stopped. Continue speaking when prompted; preserve recordings.",
-                flush=True,
-            )
-            while time.monotonic() - epoch < 24:
+            observer.playing = playing
+            submitted = 0
+            while time.monotonic() - epoch < args.seconds:
                 if job.done():
                     job.result()
                     raise RuntimeError("native pipeline ended early")
@@ -213,7 +218,51 @@ async def run(args):
                     raise RuntimeError(
                         "explicit degraded mode: audio unavailable; stop trial, use text/mock"
                     )
-                await asyncio.sleep(0.1)
+                should_stop = args.profile == "smoke" and (
+                    observer.interrupted.is_set() or time.monotonic() - epoch >= 16
+                )
+                if playing and should_stop:
+                    playing = observer.playing = False
+                    await worker.queue_frame(InterruptionFrame())
+                    observer.events.append(
+                        {
+                            "event": "reference_stop_requested",
+                            "at": time.monotonic(),
+                            "submitted_samples": submitted,
+                        }
+                    )
+                if playing:
+                    rate = wav.getframerate()
+                    chunk = wav.readframes(rate // 50)
+                    if not chunk:
+                        wav.rewind()
+                        continue
+                    if submitted == 0:
+                        observer.events.append(
+                            {
+                                "event": "first_reference_enqueue",
+                                "at": time.monotonic(),
+                                "rate": rate,
+                            }
+                        )
+                    await worker.queue_frame(OutputAudioRawFrame(chunk, rate, 1))
+                    submitted += len(chunk) // 2
+                    await asyncio.sleep(len(chunk) / (rate * 2))
+                else:
+                    await asyncio.sleep(0.02)
+            if playing:
+                observer.playing = False
+                await worker.queue_frame(InterruptionFrame())
+            observer.events.append(
+                {
+                    "event": "acquisition_end",
+                    "at": time.monotonic(),
+                    "reference_samples_enqueued_not_rendered": submitted,
+                }
+            )
+        finally:
+            if wav:
+                wav.close()
     finally:
         try:
             if runner:
@@ -230,16 +279,24 @@ async def run(args):
                 prompts.cancel()
             await asyncio.gather(monitor, *([prompts] if prompts else []), return_exceptions=True)
             log.close()
+            resource_log.close()
         data = {
             "status": "PENDING_OPERATOR_VALIDATION",
             "mode": "physical operator acquisition; requires returned evidence and listening review",
             "events": observer.events,
-            "samples": samples,
+            "samples": list(samples),
+            "resource_samples_file": "resources.jsonl",
+            "resource_sample_count": sample_count,
             "loop_lag_ms": lag,
             "started_monotonic": started,
             "input_failure": inp.failure,
             "output_failure": out.failure,
-            "reference_sha256": hashlib.sha256(args.reference.read_bytes()).hexdigest(),
+            "reference_sha256": hashlib.sha256(args.reference.read_bytes()).hexdigest()
+            if args.reference
+            else None,
+            "profile": args.profile,
+            "planned_seconds": args.seconds,
+            "automatic_interruptions_enabled": args.profile == "smoke",
             "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"),
             "target_source": args.source,
             "target_reference_sink": args.sink,
@@ -250,13 +307,15 @@ async def run(args):
         for name in ("raw", "processed"):
             pcm = args.output / (name + ".pcm")
             if pcm.exists():
-                payload = pcm.read_bytes()
-                payload = payload[: len(payload) // 2 * 2]
-                with wave.open(str(args.output / (name + ".wav")), "wb") as wav:
+                with (
+                    pcm.open("rb") as source,
+                    wave.open(str(args.output / (name + ".wav")), "wb") as wav,
+                ):
                     wav.setnchannels(1)
                     wav.setsampwidth(2)
                     wav.setframerate(48000)
-                    wav.writeframes(payload)
+                    while chunk := source.read(65536):
+                        wav.writeframesraw(chunk[: len(chunk) // 2 * 2])
 
 
 def main():
@@ -264,10 +323,20 @@ def main():
     p.add_argument("--source", required=True)
     p.add_argument("--sink", required=True)
     p.add_argument("--raw-mic", required=True)
-    p.add_argument("--reference", type=Path, required=True)
+    p.add_argument("--reference", type=Path)
+    p.add_argument(
+        "--profile", choices=["smoke", "speech", "echo", "overlap", "negative"], default="smoke"
+    )
+    p.add_argument("--seconds", type=float)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--capture", action="store_true")
     a = p.parse_args()
+    if a.seconds is None:
+        a.seconds = 24 if a.profile == "smoke" else 60
+    if not 1 <= a.seconds <= 7200 or (a.profile == "smoke" and a.seconds != 24):
+        p.error("duration must be 1..7200 seconds; smoke has fixed 24-second prompts")
+    if a.profile in {"smoke", "echo", "overlap"} and a.reference is None:
+        p.error("playback profiles require a local reference WAV")
     if not a.source.startswith("me3.phase2.aec.") or not a.sink.startswith("me3.phase2.aec."):
         p.error("select explicit reviewed Phase 2 AEC nodes; raw mode is not a duplex fallback")
     if not a.output.resolve().is_relative_to((Path.cwd() / "var").resolve()):
@@ -275,6 +344,18 @@ def main():
     if not a.capture:
         print("Capture disabled. Add --capture only for an attended authorized trial.")
         return
+    if a.reference is not None:
+        try:
+            with wave.open(str(a.reference), "rb") as reference:
+                if (
+                    reference.getsampwidth() != 2
+                    or reference.getnchannels() != 1
+                    or reference.getframerate() not in (16000, 48000)
+                    or reference.getnframes() == 0
+                ):
+                    p.error("reference requires nonempty mono PCM16 WAV at 16k/48k")
+        except (OSError, wave.Error):
+            p.error("cannot read reference WAV; no capture started")
     asyncio.run(run(a))
 
 

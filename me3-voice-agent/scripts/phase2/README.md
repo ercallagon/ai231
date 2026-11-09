@@ -10,9 +10,12 @@ rollback: [Phase 2 report](../../docs/architecture_modernization/PHASE2_REPORT.m
 - `native_contract.py OUTPUT.json`: three native scenarios, actual speech MCP children with mock providers.
 - `session_comparison.py OUTPUT.json`: two legacy comparison scenarios with the same mock MCP services.
 - `pipewire_transport.py`: native input/output prototype; devices disabled by default.
+- `audio_inventory.py --output var/results/NEW.json`: read-only local audio/hash/manifest inventory; no uploads.
 - `operator_native.py`: attended physical acquisition; requires explicit nodes, reference WAV and `--capture`.
 - `../../tests/test_phase2_transport.py`: eight offline lifecycle/transport checks.
 
 Use fresh JSON paths under ignored `var/results/`; output overwrite is refused.
 Historical development logs remain private under `var/experiments/022-native-voice-duplex/`.
 Hardware gates remain PENDING_OPERATOR_VALIDATION until actual results are reviewed.
+
+For an extended offline interval, use the supplemental capture profiles and return checklist in the Phase2 report. Only smoke enables interruption; speech/echo/overlap/negative are explicitly labeled corpus modes.

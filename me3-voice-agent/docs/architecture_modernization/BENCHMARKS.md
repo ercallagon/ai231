@@ -85,3 +85,9 @@ Existing regression:469 passed in85.25s outside restricted sandbox IPC; initial 
 | Background tool | 237.29 | 0.080 | 0.068 / 0.180 / 38.341 | 479 |
 
 PSS sums proof plus two MCP children at one snapshot, not peak memory; sampled swap0. CPU excludes children. Lag includes startup,10ms heartbeat. The196ms maximum exceeds the proposed100ms bound and remains unresolved. This is not a paired improvement benchmark. Physical latency, acoustic interruption, Pi resources and AEC gates are PENDING_OPERATOR_VALIDATION. Live streaming and slow ASR-finalization cancellation are unqualified. PCM correction:1,920 bytes at48kHz mono PCM16 is20ms, superseding earlier10ms descriptions. Native VHQ Soxr buffering/flush needs later measurement.
+
+## Existing-audio reuse and deferred live testing — 2026-11-09
+
+Read-only corpus inventory found54 integrity-matching guided browser takes (435.923s), one18s reading, and a23.94s laptop AEC pair; no paired Pi raw/processed/reference session identified in this checkout. Canonical coverage/gaps and evidence limits: docs/evidence/audio-corpus-inventory.md. User explicitly authorized existing recordings for relevant new service evaluations, superseding historical other-provider consent restrictions; preserve original manifests. No upload, paid inference or later-phase implementation occurred.
+
+Phase2 acquisition now includes separate noninterrupting corpus profiles, repeated true interruption trials, wake/negative exposure, continuity/resource logging, actual transcripts and reference/geometry metadata. Hardware gates remain PENDING_OPERATOR_VALIDATION; recordings enable offline comparisons but cannot qualify changed live AEC or final acoustics. Canonical commands: PHASE2_REPORT.md. Validation tools are tracked in scripts/phase2/ and tests/test_phase2_*.py; raw history remains ignored.

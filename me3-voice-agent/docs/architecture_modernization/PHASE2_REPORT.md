@@ -93,6 +93,7 @@ This table identifies removal candidates, not edits performed. The four scripts 
 ### 1. Read-only inventory and offline validation
 
 ```bash
+mkdir -p var/results var/scratch
 ME3_RUN="var/results/phase2-pi-$(date +%Y%m%d-%H%M%S)"
 mkdir -m 700 "$ME3_RUN"
 printf '%s\n' "$ME3_RUN"                 # retain this path for other terminals
@@ -136,7 +137,14 @@ PipeWire's [CLI documentation](https://docs.pipewire.org/page_man_pw-cli_1.html)
 
 ### 3. Native acoustic acquisition — Terminal B
 
-Use a nonprivate, clearly intelligible **mono PCM16 WAV at 16 or 48 kHz** already available on the Pi. No download or inference is required. The script loops this reference; do not change geometry or volume during paired trials.
+Use a nonprivate, clearly intelligible **mono PCM16 WAV at 16 or 48 kHz** already available on the Pi. An18s reference converted from the existing reading is prepared privately at `var/experiments/022-native-voice-duplex/reference-reading-16k.wav` on the development machine; transfer only that WAV and its hash/metadata privately if Pi lacks a suitable reference. It is not in GitHub. Alternatively, if the original reading is already on Pi and ffmpeg exists, convert locally without new inference:
+
+```bash
+ffmpeg -nostdin -hide_banner -loglevel error -i var/recordings/swift-asr-reading-1.webm \
+  -map 0:a:0 -ac 1 -ar 16000 -c:a pcm_s16le -n "$ME3_RUN/reference-reading-16k.wav"
+```
+
+If neither file nor an existing local reference is available, report that transfer requirement; do not request a new spoken recording merely to create playback material. No download or inference is required. The script loops this reference; do not change geometry or volume during paired trials.
 
 ```bash
 read -r -p 'Run directory printed in Terminal A: ' ME3_RUN
@@ -165,6 +173,45 @@ Verify links show **pw-play → me3.phase2.aec.sink → physical speaker**, **ph
 After the trial, in Terminal A use `unload-module` with the exact module variable returned by `load-module`, or `quit` to terminate this owned client and unload its module. Never destroy arbitrary graph IDs or restart shared PipeWire. Then capture `pw-dump` again as `graph-after.json` and confirm owned AEC nodes disappeared and existing routing is preserved.
 
 Return the run directory's JSON/text/log files, `trial-01/raw.wav`, `processed.wav`, reference WAV (or its hash plus an available identical copy), and placement/volume/subjective observations. Raw taps are separate streams and are not a calibrated common acoustic clock; acoustic onset/stop needs annotation, and AEC attenuation alone does not establish intelligibility. The sampler records owned processes plus visible user PipeWire/WirePlumber PSS/RSS/swap/CPU ticks and loop lag; two diagnostic tap processes are additional to the proposed production topology. Preserve failed captures. Review actual results before more trials or declaring any hardware gate passed.
+
+## Supplemental acquisition for extended offline development
+
+**Use this before finishing the Pi visit.** Existing audio inventory and exact gaps: [audio-corpus-inventory.md](../evidence/audio-corpus-inventory.md). Existing54 guided human takes need not be rerecorded. First run the inventory tool on the Pi too; files remaining there may close additional gaps. Raw recordings stay private; return via the existing private transfer workflow, not GitHub.
+
+Your agent should ask the operator to fix device geometry, state actual distance/volume/fan conditions, and keep the original reference WAV. Use a separate new output directory per trial. Run from ME3 root, with the temporary AEC already loaded and graph checked above:
+
+```bash
+# Inventory existing Pi audio first. Metadata/read-only; no inference or devices.
+var/cache/venv/bin/python -B scripts/phase2/audio_inventory.py --output "$ME3_RUN/audio-inventory.json"
+
+# Real Pi speech without speaker playback: read a representative subset of
+# existing phrases, include pauses/names/numbers and a few unfamiliar sentences.
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  var/cache/venv/bin/python -B scripts/phase2/operator_native.py --profile speech --seconds 180 \
+  --source me3.phase2.aec.source --sink me3.phase2.aec.sink --raw-mic "$ME3_CAPTURE_NODE" \
+  --output "$ME3_RUN/quiet-near-01" --capture
+
+# Echo-only: operator silent; reference continues. Repeat using overlap profile
+# while reading known phrases, giving a sustained double-talk recording.
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  var/cache/venv/bin/python -B scripts/phase2/operator_native.py --profile echo --seconds 120 \
+  --source me3.phase2.aec.source --sink me3.phase2.aec.sink --raw-mic "$ME3_CAPTURE_NODE" \
+  --reference "$ME3_REFERENCE_WAV" --output "$ME3_RUN/echo-near-01" --capture
+```
+
+Repeat the last command with `--profile overlap` and a fresh `overlap-near-01` output. Repeat selected speech/echo/overlap at another intended condition, labeling volume/distance. These three corpus modes disable automatic native interruption to retain complete utterances/overlap; they **do not qualify barge-in**. No ASR or real task action runs.
+
+For actual barge-in, repeat the original `--profile smoke`24s command with fresh trial directories, at least50 independent trials for the declared p95 gate. Keep the8s silence /8s overlap /8s user-only prompts. Preserve false stops rather than restarting until a passing sample is found. The agent can loop trials but must coordinate each onset with the operator. Do not use echo/overlap corpus mode for cancellation scoring.
+
+Use `--profile speech --seconds 300` with a fresh directory for >=100 wake examples at natural levels/positions and annotated confusable phrases. This records material for later wake replay; the acquisition pipeline itself runs Silero, not the production wake detector. Use `--profile negative --seconds 7200` only in a consented environment with sufficient storage for the2h negative exposure gate. This records room sounds without playback; false-wake rates require subsequent labeled detector evaluation. Do not equate elapsed recording time with a passing detector score.
+
+For continuous capture/render, an `echo` profile with `--seconds 1800` can collect a30min stress session after successful smoke. Reference keeps playing, automatic interruption is disabled, so it proves neither normal interruption policy nor wake reliability. Check returned logs for gaps/errors, graphs and actual audibility. This prototype is not yet Pi-qualified. Do not leave a failing or excessively loud trial running.
+
+Two48k mono16-bit taps consume about11.52MB/min of raw PCM, or23.04MB/min while retaining both PCM and WAV copies, plus reference/logs. A2h recording can therefore need about2.8GB, more if additional evidence is saved; check free disk space first. WAV conversion streams chunks and resource snapshots stream to `resources.jsonl` with only100 recent samples retained in JSON. These are implementation bounds, not measured Pi RAM or disk performance. Stop on disk/device failure; preserve incomplete evidence.
+
+**Return checklist:** all previous inventory/routing/native audio files plus every trial's `resources.jsonl`, full reference WAV/hash, actual condition notes, and a simple UTF-8 CSV with `trial_id,profile,condition,raw_speech_start_s,raw_speech_end_s,actual_words,raw_audible_stop_s,false_interrupt,first_words_cut_off,notes`. Leave unknown fields blank; software events are not acoustic timestamps. Annotate offsets separately for raw and processed files if clocks differ. Transcripts and precise annotations may be completed offline later; preserve intended phrase IDs/condition notes now. Return an independently checked transcript for quiet/overlap phrases and actual wake counts when available; scripts do not infer these. Failed trials and quiet/negative periods must remain included. Keep raw files private and never commit them.
+
+The user authorized existing project recordings for relevant new service evaluations on2026-11-09; historical consent manifests remain unchanged. No paid service or next phase is authorized by the collection plan. Returned material supports extended offline work, but hardware changes and final acoustic qualification can still require another visit.
 
 ## Smallest remaining Phase 3 work and stop boundary
 
