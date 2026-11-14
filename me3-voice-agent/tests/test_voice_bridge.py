@@ -153,12 +153,12 @@ async def test_ui_device_command_dispatch_is_idempotent_for_bridge_lifetime():
 async def test_browser_sink_bounds_audio_until_playback_ack_and_stops():
     socket = FakeSocket()
     sink = BrowserSink(socket)
-    for _ in range(8):
+    for _ in range(16):
         await sink(b"\0\0" * 512)
     ninth = asyncio.create_task(sink(b"\0\0" * 512))
     await asyncio.sleep(0)
-    assert not ninth.done() and len(socket.audio) == 8
-    sink.acknowledge(struct.unpack("<I", socket.audio[0][:4])[0])
+    assert not ninth.done() and len(socket.audio) == 16
+    assert sink.acknowledge(struct.unpack("<I", socket.audio[0][:4])[0]) >= 0
     await asyncio.wait_for(ninth, 1)
     waiting = asyncio.create_task(sink.flush())
     await asyncio.sleep(0)
@@ -169,6 +169,19 @@ async def test_browser_sink_bounds_audio_until_playback_ack_and_stops():
     await sink.stop()
     assert socket.control[-1] == {"type": "audio_stop"}
     assert not sink.pending
+
+
+@pytest.mark.asyncio
+async def test_browser_sink_ack_preserves_response_and_packet_identity():
+    socket = FakeSocket()
+    sink = BrowserSink(socket)
+    packet_id = await sink.send_audio(b"\0\0" * 16, response_id="response-17")
+    ack = sink.acknowledge_with_response(packet_id)
+    assert ack is not None
+    elapsed, response_id = ack
+    assert elapsed >= 0
+    assert response_id == "response-17"
+    assert not sink.pending and not sink.pending_responses
 
 
 @pytest.mark.asyncio
@@ -754,11 +767,15 @@ def test_onit_provider_cap_without_separate_cap_can_start(tmp_path, monkeypatch,
         backend="external",
         protocol="chat-completions-v1",
         endpoint="http://202.92.159.240:8001/v1/chat/completions",
+        auth_env="ME3_TEST_ONLY_LLM_API_KEY",
         model="Qwen/Qwen3.8-27B",
         allow_private_http=True,
         allow_live=True,
         request_limit=2,
+        max_input_tokens=32000,
+        max_input_tokens_total=64000,
     )
+    monkeypatch.setenv("ME3_TEST_ONLY_LLM_API_KEY", "offline-fixture-not-a-real-key")
     monkeypatch.setattr(bridge, "load_backends", lambda _: specs)
     monkeypatch.setattr(bridge.LiveTransport, "authorize", lambda _: None)
     built = {}
@@ -805,10 +822,14 @@ def test_groq_onit_profile_is_explicit_and_reaches_executor(tmp_path, monkeypatc
         backend="external",
         protocol="chat-completions-v1",
         endpoint="https://api.groq.com/openai/v1/chat/completions",
+        auth_env="ME3_TEST_ONLY_LLM_API_KEY",
         model="openai/gpt-oss-120b",
         allow_live=True,
         request_limit=4,
+        max_input_tokens=32000,
+        max_input_tokens_total=64000,
     )
+    monkeypatch.setenv("ME3_TEST_ONLY_LLM_API_KEY", "offline-fixture-not-a-real-key")
     monkeypatch.setattr(bridge, "load_backends", lambda _: specs)
     monkeypatch.setattr(bridge.LiveTransport, "authorize", lambda _: None)
     captured = {}
@@ -872,3 +893,27 @@ def test_groq_onit_profile_is_explicit_and_reaches_executor(tmp_path, monkeypatc
     assert options["max_output_tokens"] == 2048
     assert options["streaming"] is False
     assert options["max_requests"] == 4
+
+
+@pytest.mark.asyncio
+async def test_legacy_capability_reports_engine_and_keeps_existing_fields():
+    root = Path.cwd()
+    args = Namespace(
+        kws_assets=root / "var/cache/wake",
+        keywords_file=root / "var/cache/wake/hey-swift-keywords.txt",
+    )
+    app = build_app(root, load_backends(None), {}, args)
+    async with TestServer(app, host="127.0.0.1") as server:
+        async with ClientSession() as client:
+            response = await client.get(server.make_url("/api/voice/capabilities"))
+            assert response.status == 200
+            capability = await response.json()
+            assert capability["engine"] == "legacy"
+            assert capability["available"] is True
+            assert capability["wake"] == "Hey Swift"
+            assert capability["capture"] == "browser-pcm16"
+            assert capability["playback"] == "browser-acknowledged-pcm16"
+            assert capability["aec"] == "browser-requested-unverified"
+            assert "asr_partial" in capability
+            assert "task_artifact_access" in capability
+            assert "devices" in capability and "music" in capability

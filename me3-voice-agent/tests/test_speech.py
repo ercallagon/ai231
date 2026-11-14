@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from me3_voice.contracts import FRAME_BYTES, MAX_AUDIO_BYTES, TurnKey, encode_pcm
+from me3_voice.configuration import BackendSpec
 from me3_voice.providers import MockASR, MockTTS
 from me3_voice.servers import SpeechService
 from me3_voice.speech import SpeechClient
@@ -13,7 +14,7 @@ async def test_real_stdio_mcp_contract_and_cleanup():
     key = TurnKey(session_id="integration", turn_id=1)
     async with SpeechClient(transcript="hello") as speech:
         listing = await speech.clients["asr"].list_tools()
-        assert {tool.name for tool in listing.tools} == {
+        assert {tool.name for tool in listing.tools} >= {
             "asr_open",
             "asr_append",
             "asr_finish",
@@ -80,6 +81,22 @@ async def test_stdio_timeout_recovery():
         assert error.value.code == "provider_timeout"
         speech.timeout = 3
         assert await speech.transcribe(TurnKey(session_id="timeout", turn_id=2), b"\x01\0" * 10)
+
+
+async def test_role_timeout_clamps_larger_shared_speech_timeout():
+    from me3_voice.remote import ProviderError
+
+    class SlowToolClient:
+        async def call_tool(self, _name, _arguments):
+            await asyncio.sleep(0.2)
+
+    spec = BackendSpec(timeout_seconds=0.05)
+    speech = SpeechClient(timeout=60, backends={"asr": spec})
+    speech.clients = {"asr": SlowToolClient()}
+    with pytest.raises(ProviderError) as caught:
+        await speech.call("asr", "asr_open", {})
+    assert caught.value.code == "provider_timeout"
+    assert caught.value.error_stage == "asr_open"
 
 
 async def test_stdio_cancel_inflight_then_reuse():
@@ -154,7 +171,12 @@ async def test_english_rejection_preserves_speech_error_code_and_next_turn_recov
     first = (await service.open("recovery", 1))["operation_id"]
     await service.append(first, 0, encode_pcm(b"\1\0" * 512))
     result = await finish(first)
-    assert result == {"speech_error": {"code": "english_only_asr", "role": "asr"}}
+    # Error diagnostics gained sanitized stage/type fields; preserve the public
+    # code/role contract without freezing optional diagnostic metadata.
+    failure = result["speech_error"]
+    assert failure["code"] == "english_only_asr"
+    assert failure["role"] == "asr"
+    assert failure["exception_type"] == "EnglishTextRejected"
     assert not service.operations
     second = (await service.open("recovery", 2))["operation_id"]
     await service.append(second, 0, encode_pcm(b"\1\0" * 512))

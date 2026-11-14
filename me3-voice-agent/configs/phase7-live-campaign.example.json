@@ -1,0 +1,32 @@
+{
+  "asr": {
+    "backend": "external",
+    "protocol": "deepgram-listen-v1",
+    "endpoint": "wss://api.deepgram.com/v1/listen",
+    "auth_env": "ME3_DEEPGRAM_API_KEY",
+    "model": "nova-3",
+    "allow_live": false,
+    "request_limit": 6,
+    "max_audio_seconds": 20
+  },
+  "llm": {
+    "backend": "external",
+    "protocol": "chat-completions-v1",
+    "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+    "auth_env": "ME3_GROQ_API_KEY",
+    "model": "openai/gpt-oss-120b",
+    "allow_live": false,
+    "request_limit": 8,
+    "max_input_tokens": 32000,
+    "max_input_tokens_total": 64000
+  },
+  "tts": {
+    "backend": "external",
+    "protocol": "deepgram-speak-v1",
+    "endpoint": "wss://api.deepgram.com/v1/speak",
+    "auth_env": "ME3_DEEPGRAM_API_KEY",
+    "model": "aura-2-thalia-en",
+    "allow_live": false,
+    "request_limit": 16
+  }
+}

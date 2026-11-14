@@ -4,6 +4,16 @@ import json
 from me3_voice.dashboard import normalize, render, snapshot, stream_records
 
 
+def test_live_dashboard_embeds_the_bounded_native_audio_prebuffer():
+    html = render(
+        {"schema_version": 1, "reports": [], "warnings": [], "generated_utc": ""}, live=True
+    )
+    assert "class SwiftAudioPrebuffer" in html
+    assert "new SwiftAudioPrebuffer(.12,16)" in html
+    assert "runtime.prebuffer?.take()" in html
+    assert "The previous voice session has ended." in html
+
+
 def save(root, name, data):
     path = root / "var/results" / name
     path.parent.mkdir(parents=True, exist_ok=True)

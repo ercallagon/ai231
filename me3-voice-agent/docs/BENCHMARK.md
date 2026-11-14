@@ -192,7 +192,7 @@ Use the canonical recording utility when a live trial reveals recognition proble
 From the HPC project terminal, stop the user-owned voice bridge first if it occupies 8765, then launch:
 
 ```bash
-cd /mnt/jfs_hpc/home/edgardo.callagon.jr/sandbox/ME3-VoiceAgent
+cd $ME3_ROOT
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 var/cache/venv/bin/python -B -m me3_voice.recording_lab serve --port 8765
 ```
 

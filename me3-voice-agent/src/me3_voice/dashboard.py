@@ -506,7 +506,12 @@ def render(data, *, live=False):
         .replace("__NONCE__", nonce)
         .replace("__CSP__", policy)
         .replace("__STYLE__", (ASSETS / "dashboard.css").read_text())
-        .replace("__SCRIPT__", (ASSETS / "dashboard.js").read_text())
+        .replace(
+            "__SCRIPT__",
+            (ASSETS / "audio_prebuffer.js").read_text()
+            + "\n"
+            + (ASSETS / "dashboard.js").read_text(),
+        )
         .replace("__DATA__", encoded)
     )
 

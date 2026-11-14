@@ -8,12 +8,16 @@ No retries, provider-body logging, hardware actions or implicit account discover
 import asyncio
 import json
 import os
+import sqlite3
+import uuid
 import re
 import io
+import time
 import wave
 import base64
+from pathlib import Path
 from contextlib import asynccontextmanager, suppress
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import aiohttp
 
@@ -29,6 +33,7 @@ from .english import (
     rejects_english_asr,
 )
 from .providers import ASRResult, BufferedASRStream, MockASR, MockLLM, MockTTS, ToolCall
+from .request_budget import RequestBudgetError, conservative_input_token_estimate
 
 
 class ProviderError(RuntimeError):
@@ -43,6 +48,8 @@ class ProviderError(RuntimeError):
         error_stage=None,
         error_boundary=None,
         error_detail=None,
+        cause_type=None,
+        rate_limit=None,
     ):
         super().__init__(message)
         self.code = code
@@ -50,6 +57,13 @@ class ProviderError(RuntimeError):
         self.error_stage = error_stage
         self.error_boundary = error_boundary
         self.error_detail = error_detail
+        self.cause_type = cause_type
+        self.rate_limit = rate_limit
+
+
+def _cause_type(exc):
+    cause = exc.__cause__ or exc.__context__
+    return type(cause).__name__ if cause else None
 
 
 def qwen_tts_instructions(spec):
@@ -68,27 +82,227 @@ class LiveTransport:
         self.spec, self.requests, self.client = spec, 0, None
         self.credentials = credentials or {}
         self.on_event = lambda name: None
+        self.last_websocket_timing = {}
 
-    def authorize(self):
-        if not self.spec.allow_live or self.spec.request_limit == 0:
-            raise ConfigurationError(
-                "live requests disabled: set allow_live=true and request_limit to a positive cap or null for provider-enforced limits"
-            )
-        if self.spec.request_limit is not None and self.requests >= self.spec.request_limit:
-            raise ProviderError(
-                "configured provider request allowance exhausted; no request was sent",
-                code="request_limit_reached",
-            )
+    def check_credentials(self):
         key = self.credentials.get(self.spec.auth_env) or os.environ.get(self.spec.auth_env, "")
         if not key or len(key) > 4096 or any(ord(c) < 33 or ord(c) > 126 for c in key):
             raise ConfigurationError(
                 "configured project credential is missing or invalid; set the selected auth_env server-side"
             )
-        self.requests += 1
         return key
 
+    def authorize(
+        self,
+        *,
+        input_tokens: int | None = None,
+        input_token_limit: int | None = None,
+        input_tokens_total_limit: int | None = None,
+    ):
+        if not self.spec.allow_live or self.spec.request_limit == 0:
+            raise ConfigurationError(
+                "live requests disabled: set allow_live=true and request_limit to a positive cap or null for provider-enforced limits"
+            )
+        key = self.check_credentials()
+        run_id = os.environ.get("ME3_REQUEST_RUN_ID", "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", run_id):
+            raise ConfigurationError(
+                "ME3_REQUEST_RUN_ID must identify the explicitly approved request budget"
+            )
+        is_chat = self.spec.protocol == "chat-completions-v1"
+        if is_chat and (
+            type(input_tokens) is not int
+            or input_tokens < 1
+            or type(input_token_limit) is not int
+            or input_token_limit < 1
+            or type(input_tokens_total_limit) is not int
+            or input_tokens_total_limit < input_token_limit
+        ):
+            raise ConfigurationError(
+                "live chat dispatch requires an estimated request size and configured per-request plus aggregate input-token ceilings"
+            )
+        if not is_chat and any(
+            value is not None
+            for value in (input_tokens, input_token_limit, input_tokens_total_limit)
+        ):
+            raise ConfigurationError("input-token reservations only apply to chat-completions")
+        # Reserve and mark dispatch before network I/O. Crashes remain consumed.
+        ledger = Path(os.environ.get("ME3_REQUEST_LEDGER", "var/cache/provider-requests.sqlite"))
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        identity = uuid.uuid4().hex
+        provider = urlsplit(self.spec.endpoint).hostname or "unknown"
+        with sqlite3.connect(ledger, timeout=10) as db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS provider_requests (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, protocol TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, created REAL NOT NULL, updated REAL NOT NULL)"
+            )
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS provider_campaign_caps (run_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, protocol TEXT NOT NULL, request_limit INTEGER NOT NULL, input_tokens_per_request_limit INTEGER NOT NULL DEFAULT 0, input_tokens_limit INTEGER NOT NULL, PRIMARY KEY(run_id,provider,model,protocol))"
+            )
+            cap_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(provider_campaign_caps)")
+            }
+            if "input_tokens_per_request_limit" not in cap_columns:
+                db.execute(
+                    "ALTER TABLE provider_campaign_caps ADD COLUMN input_tokens_per_request_limit INTEGER NOT NULL DEFAULT 0"
+                )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(provider_requests)")}
+            if "protocol" not in columns:
+                db.execute(
+                    "ALTER TABLE provider_requests ADD COLUMN protocol TEXT NOT NULL DEFAULT ''"
+                )
+            if "error_code" not in columns:
+                db.execute("ALTER TABLE provider_requests ADD COLUMN error_code TEXT")
+            if "updated" not in columns:
+                db.execute(
+                    "ALTER TABLE provider_requests ADD COLUMN updated REAL NOT NULL DEFAULT 0"
+                )
+            if "run_id" not in columns:
+                db.execute(
+                    "ALTER TABLE provider_requests ADD COLUMN run_id TEXT NOT NULL DEFAULT 'legacy'"
+                )
+            if "input_tokens_reserved" not in columns:
+                db.execute(
+                    "ALTER TABLE provider_requests ADD COLUMN input_tokens_reserved INTEGER NOT NULL DEFAULT 0"
+                )
+            db.execute("BEGIN IMMEDIATE")
+            count, reserved_input_tokens = db.execute(
+                "SELECT COUNT(*), COALESCE(SUM(input_tokens_reserved),0) FROM provider_requests WHERE run_id=? AND provider=? AND model=? AND protocol=?",
+                (run_id, provider, self.spec.model, self.spec.protocol),
+            ).fetchone()
+            cap_row = db.execute(
+                "SELECT request_limit,input_tokens_per_request_limit,input_tokens_limit FROM provider_campaign_caps WHERE run_id=? AND provider=? AND model=? AND protocol=?",
+                (run_id, provider, self.spec.model, self.spec.protocol),
+            ).fetchone()
+            requested_request_limit = (
+                -1 if self.spec.request_limit is None else self.spec.request_limit
+            )
+            requested_input_limit = input_tokens_total_limit or 0
+            requested_input_request_limit = input_token_limit or 0
+            if cap_row is None:
+                if count:
+                    raise ProviderError(
+                        "existing campaign requests have no frozen input-budget profile; no request was sent",
+                        code="campaign_caps_unregistered",
+                    )
+                effective_request_limit = requested_request_limit
+                effective_input_limit = requested_input_limit
+                effective_input_request_limit = requested_input_request_limit
+                db.execute(
+                    "INSERT INTO provider_campaign_caps (run_id,provider,model,protocol,request_limit,input_tokens_per_request_limit,input_tokens_limit) VALUES(?,?,?,?,?,?,?)",
+                    (
+                        run_id,
+                        provider,
+                        self.spec.model,
+                        self.spec.protocol,
+                        effective_request_limit,
+                        requested_input_request_limit,
+                        effective_input_limit,
+                    ),
+                )
+            else:
+                frozen_request_limit, frozen_input_request_limit, frozen_input_limit = cap_row
+                if (
+                    (frozen_request_limit != -1 and requested_request_limit == -1)
+                    or (
+                        frozen_request_limit != -1
+                        and requested_request_limit > frozen_request_limit
+                    )
+                    or requested_input_request_limit > frozen_input_request_limit
+                    or requested_input_limit > frozen_input_limit
+                ):
+                    raise ProviderError(
+                        "campaign budget cannot be increased for an existing run identity",
+                        code="campaign_cap_increase_rejected",
+                    )
+                effective_request_limit = (
+                    requested_request_limit
+                    if frozen_request_limit == -1
+                    else min(frozen_request_limit, requested_request_limit)
+                )
+                effective_input_request_limit = (
+                    min(frozen_input_request_limit, requested_input_request_limit)
+                    if frozen_input_request_limit and requested_input_request_limit
+                    else frozen_input_request_limit or requested_input_request_limit
+                )
+                effective_input_limit = (
+                    min(frozen_input_limit, requested_input_limit)
+                    if frozen_input_limit and requested_input_limit
+                    else frozen_input_limit or requested_input_limit
+                )
+                if (
+                    effective_request_limit != frozen_request_limit
+                    or effective_input_request_limit != frozen_input_request_limit
+                    or effective_input_limit != frozen_input_limit
+                ):
+                    db.execute(
+                        "UPDATE provider_campaign_caps SET request_limit=?,input_tokens_per_request_limit=?,input_tokens_limit=? WHERE run_id=? AND provider=? AND model=? AND protocol=?",
+                        (
+                            effective_request_limit,
+                            effective_input_request_limit,
+                            effective_input_limit,
+                            run_id,
+                            provider,
+                            self.spec.model,
+                            self.spec.protocol,
+                        ),
+                    )
+            if is_chat and input_tokens > effective_input_request_limit:
+                # Persist the approved campaign profile even when this first
+                # operation is rejected; the same run ID cannot then be
+                # retried under a widened profile in another process.
+                db.commit()
+                raise ProviderError(
+                    "conservative input-token estimate exceeds the per-request ceiling; no request was sent",
+                    code="input_token_request_limit_reached",
+                )
+            if effective_request_limit != -1 and count >= effective_request_limit:
+                db.commit()
+                raise ProviderError(
+                    "durable provider request allowance exhausted; no request was sent",
+                    code="request_limit_reached",
+                )
+            if is_chat and reserved_input_tokens + input_tokens > effective_input_limit:
+                db.commit()
+                raise ProviderError(
+                    "conservative aggregate input-token allowance exhausted; no request was sent",
+                    code="input_token_budget_exhausted",
+                )
+            now = time.time()
+            db.execute(
+                "INSERT INTO provider_requests "
+                "(id,run_id,provider,model,protocol,status,error_code,created,updated,input_tokens_reserved) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (
+                    identity,
+                    run_id,
+                    provider,
+                    self.spec.model,
+                    self.spec.protocol,
+                    "dispatched_unknown",
+                    None,
+                    now,
+                    now,
+                    input_tokens or 0,
+                ),
+            )
+            db.commit()
+        self.requests += 1
+        return key, identity
+
+    def finish_request(self, identity, outcome, error_code=None):
+        if outcome not in {"success", "failure", "unknown"}:
+            outcome, error_code = "unknown", "invalid_outcome"
+        if error_code and not re.fullmatch(r"[a-z0-9_]{1,48}", error_code):
+            error_code = "provider_error"
+        ledger = Path(os.environ.get("ME3_REQUEST_LEDGER", "var/cache/provider-requests.sqlite"))
+        with sqlite3.connect(ledger, timeout=10) as db:
+            db.execute(
+                "UPDATE provider_requests SET status=?, error_code=?, updated=? WHERE id=?",
+                (outcome, error_code, time.time(), identity),
+            )
+
     @staticmethod
-    def status_error(status, role):
+    def status_error(status, role, *, rate_limit=None):
         code = (
             "provider_rate_limited"
             if status == 429
@@ -101,14 +315,66 @@ class LiveTransport:
         stage = "tts" if role == "tts" else "reasoning"
         error_role = "tts" if role == "tts" else "llm"
         return ProviderError(
-            f"{role} service HTTP {status}; payload excluded; no automatic retry",
+            f"{role} service HTTP {status}; payload excluded",
             code=code,
             role=error_role,
             error_stage=stage,
+            rate_limit=rate_limit,
         )
 
     def session(self):
         if self.client is None:
+            trace = aiohttp.TraceConfig()
+
+            def mark(name, value=None):
+                timing = self.last_websocket_timing
+                timing[name] = time.monotonic()
+                if value is not None:
+                    timing[f"{name}_value"] = value
+
+            async def dns_start(_session, _ctx, params):
+                # Hostname only; never include request headers, URL query, or payload.
+                mark("dns_started", getattr(params, "host", None))
+
+            async def dns_end(_session, _ctx, params):
+                mark("dns_completed", getattr(params, "host", None))
+
+            async def dns_cache_hit(_session, _ctx, params):
+                mark("dns_cache_hit", getattr(params, "host", None))
+
+            async def dns_cache_miss(_session, _ctx, params):
+                mark("dns_cache_miss", getattr(params, "host", None))
+
+            async def connection_queued_start(_session, _ctx, _params):
+                mark("connection_pool_wait_started")
+
+            async def connection_queued_end(_session, _ctx, _params):
+                mark("connection_pool_wait_completed")
+
+            async def connection_start(_session, _ctx, _params):
+                mark("connection_establishment_started")
+
+            async def connection_end(_session, _ctx, _params):
+                mark("connection_established")
+
+            async def request_sent(_session, _ctx, _params):
+                mark("websocket_upgrade_request_sent")
+
+            async def request_end(_session, _ctx, params):
+                response = getattr(params, "response", None)
+                status = getattr(response, "status", None)
+                mark("websocket_http_response_received", status)
+
+            trace.on_dns_resolvehost_start.append(dns_start)
+            trace.on_dns_resolvehost_end.append(dns_end)
+            trace.on_dns_cache_hit.append(dns_cache_hit)
+            trace.on_dns_cache_miss.append(dns_cache_miss)
+            trace.on_connection_queued_start.append(connection_queued_start)
+            trace.on_connection_queued_end.append(connection_queued_end)
+            trace.on_connection_create_start.append(connection_start)
+            trace.on_connection_create_end.append(connection_end)
+            trace.on_request_headers_sent.append(request_sent)
+            trace.on_request_end.append(request_end)
             self.client = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(
                     total=None,
@@ -117,13 +383,69 @@ class LiveTransport:
                 ),
                 trust_env=False,
                 cookie_jar=aiohttp.DummyCookieJar(),
+                trace_configs=[trace],
             )
         return self.client
 
+    async def open_socket(self, params, key, *, role="tts"):
+        """Open a tracked WebSocket without tying its lifetime to one request.
+
+        Deepgram Speak v1 permits multiple Speak/Flush cycles on a single
+        connection. Each synthesis still reserves and finishes its own durable
+        request slot; this method only owns the reusable transport connection.
+        """
+        self.last_websocket_timing = {"websocket_handshake_monotonic": time.monotonic()}
+        context = self.session().ws_connect(
+            self.spec.endpoint + "?" + urlencode(params),
+            headers={"Authorization": "Token " + key},
+            max_msg_size=131072,
+            heartbeat=10,
+            timeout=aiohttp.ClientWSTimeout(ws_receive=self.spec.timeout_seconds, ws_close=1),
+        )
+        try:
+            async with asyncio.timeout(self.spec.timeout_seconds):
+                peer = await context.__aenter__()
+            self.last_websocket_timing["connection_ready_monotonic"] = time.monotonic()
+            return LiveWebSocketConnection(
+                self, context, Socket(peer, self.spec.timeout_seconds, role)
+            )
+        except asyncio.CancelledError:
+            self.last_websocket_timing["connection_cancelled_monotonic"] = time.monotonic()
+            self.last_websocket_timing["connection_terminal_exception"] = "CancelledError"
+            raise
+        except TimeoutError as exc:
+            self.last_websocket_timing["connection_failed_monotonic"] = time.monotonic()
+            self.last_websocket_timing["connection_terminal_exception"] = type(exc).__name__
+            raise ProviderError(
+                "speech connection timed out; payload excluded",
+                code="provider_timeout",
+                role=role,
+                error_stage=f"{role}_open",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
+        except Exception as exc:
+            self.last_websocket_timing["connection_failed_monotonic"] = time.monotonic()
+            self.last_websocket_timing["connection_terminal_exception"] = type(exc).__name__
+            raise ProviderError(
+                "speech connection failed; payload excluded",
+                code="provider_connect_failed",
+                role=role,
+                error_stage=f"{role}_open",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
+
     @asynccontextmanager
     async def socket(self, params):
-        key = self.authorize()
+        key, request_id = self.authorize()
+        outcome, error_code = "unknown", None
+        socket = None
+        self.last_websocket_timing = {"request_reserved_monotonic": time.monotonic()}
         try:
+            self.last_websocket_timing["websocket_handshake_monotonic"] = time.monotonic()
             async with self.session().ws_connect(
                 self.spec.endpoint + "?" + urlencode(params),
                 headers={"Authorization": "Token " + key},
@@ -131,14 +453,76 @@ class LiveTransport:
                 heartbeat=10,
                 timeout=aiohttp.ClientWSTimeout(ws_receive=self.spec.timeout_seconds, ws_close=1),
             ) as peer:
-                yield Socket(peer, self.spec.timeout_seconds)
-        except (ConfigurationError, ProviderError):
+                self.last_websocket_timing["connection_ready_monotonic"] = time.monotonic()
+                socket = Socket(peer, self.spec.timeout_seconds)
+                yield socket
+            if socket and socket.terminal_outcome:
+                outcome, error_code = socket.terminal_outcome, socket.terminal_error_code
+            elif socket and socket.failure_code:
+                outcome, error_code = "failure", socket.failure_code
+            else:
+                outcome = "success"
+        except asyncio.CancelledError:
+            self.last_websocket_timing["connection_cancelled_monotonic"] = time.monotonic()
+            self.last_websocket_timing["connection_terminal_exception"] = "CancelledError"
             raise
-        except Exception:
-            raise ProviderError("speech connection failed or timed out; payload excluded") from None
+        except ProviderError as exc:
+            outcome, error_code = "failure", exc.code
+            raise
+        except TimeoutError as exc:
+            outcome, error_code = "failure", "provider_timeout"
+            self.last_websocket_timing["connection_failed_monotonic"] = time.monotonic()
+            self.last_websocket_timing["connection_terminal_exception"] = type(exc).__name__
+            raise ProviderError(
+                "speech connection timed out; payload excluded",
+                code=error_code,
+                role="asr",
+                error_stage="asr_open",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
+        except Exception as exc:
+            outcome, error_code = "failure", "provider_connect_failed"
+            self.last_websocket_timing["connection_failed_monotonic"] = time.monotonic()
+            self.last_websocket_timing["connection_terminal_exception"] = type(exc).__name__
+            raise ProviderError(
+                "speech connection failed; payload excluded",
+                code=error_code,
+                role="asr",
+                error_stage="asr_open",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
+        finally:
+            self.last_websocket_timing["socket_closed_monotonic"] = time.monotonic()
+            self.last_websocket_timing["request_outcome"] = outcome
+            if error_code:
+                self.last_websocket_timing["request_error_code"] = error_code
+            self.finish_request(request_id, outcome, error_code)
 
     async def events(self, body, *, terminal_type=None, total_timeout=True, role="llm"):
-        key = self.authorize()
+        if role == "llm":
+            try:
+                input_tokens, _ = conservative_input_token_estimate(body)
+            except RequestBudgetError:
+                raise ProviderError(
+                    "chat request could not be safely estimated; no request was sent",
+                    code="input_token_budget_unavailable",
+                ) from None
+            if input_tokens > self.spec.max_input_tokens:
+                raise ProviderError(
+                    "conservative input-token estimate exceeds the per-request ceiling; no request was sent",
+                    code="input_token_request_limit_reached",
+                )
+            key, request_id = self.authorize(
+                input_tokens=input_tokens,
+                input_token_limit=self.spec.max_input_tokens,
+                input_tokens_total_limit=self.spec.max_input_tokens_total,
+            )
+        else:
+            key, request_id = self.authorize()
         service_name = "tts" if role == "tts" else "reasoning"
         error_stage = "tts" if role == "tts" else "reasoning"
         event_prefix = "tts" if role == "tts" else "llm"
@@ -153,6 +537,7 @@ class LiveTransport:
         )
         headers_received = False
         first_event_received = False
+        outcome, error_code = "unknown", None
         try:
             self.on_event(f"{event_prefix}_request_submission_started")
             async with asyncio.timeout(deadline):
@@ -189,6 +574,7 @@ class LiveTransport:
                             value = "\n".join(data)
                             data, size = [], 0
                             if value == "[DONE]":
+                                outcome = "success"
                                 return
                             try:
                                 event = json.loads(value)
@@ -207,6 +593,7 @@ class LiveTransport:
                                 first_event_received = True
                             yield event
                             if terminal_type and event.get("type") == terminal_type:
+                                outcome = "success"
                                 return
                     raise ProviderError(
                         "reasoning stream disconnected before DONE",
@@ -216,12 +603,15 @@ class LiveTransport:
                         error_detail="incomplete_sse",
                     )
         except ProviderError as exc:
+            outcome = "failure"
+            error_code = exc.code
             if exc.role is None:
                 exc.role = role
             if exc.error_stage is None:
                 exc.error_stage = error_stage
             raise
         except TimeoutError:
+            outcome = "failure"
             boundary = (
                 "response_headers"
                 if not headers_received
@@ -234,6 +624,7 @@ class LiveTransport:
                 "first_sse_event": "the first SSE event",
                 "sse_stream": "the next SSE event",
             }[boundary]
+            error_code = "provider_timeout"
             raise ProviderError(
                 f"{service_name} timed out waiting for {wait_for}; payload excluded",
                 code="provider_timeout",
@@ -242,18 +633,23 @@ class LiveTransport:
                 error_boundary=boundary,
             ) from None
         except Exception:
+            outcome = "failure"
+            error_code = "provider_error"
             raise ProviderError(
                 f"{service_name} connection failed or malformed stream; payload excluded",
                 role=role,
                 error_stage=error_stage,
             ) from None
+        finally:
+            self.finish_request(request_id, outcome, error_code)
 
     async def aclose(self):
         if self.client:
             await self.client.close()
 
     async def json_request(self, body):
-        key = self.authorize()
+        key, request_id = self.authorize()
+        outcome, error_code = "unknown", None
         try:
             async with self.session().post(
                 self.spec.endpoint,
@@ -271,18 +667,25 @@ class LiveTransport:
                 result = json.loads(raw)
                 if not isinstance(result, dict):
                     raise ValueError
+                outcome = "success"
                 return result
-        except ProviderError:
+        except ProviderError as exc:
+            outcome = "failure"
+            error_code = exc.code
             raise
         except Exception:
+            outcome = "failure"
+            error_code = "provider_error"
             raise ProviderError(
                 "service request failed or malformed result; payload excluded"
             ) from None
+        finally:
+            self.finish_request(request_id, outcome, error_code)
 
     async def transcribe(self, pcm):
         if not pcm or len(pcm) % 2 or len(pcm) > MAX_AUDIO_BYTES:
             raise ProviderError("invalid bounded PCM16 input")
-        key = self.authorize()
+        key, request_id = self.authorize()
         wav = io.BytesIO()
         with wave.open(wav, "wb") as writer:
             writer.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
@@ -293,6 +696,7 @@ class LiveTransport:
         if self.spec.protocol == "groq-whisper-v1":
             form.add_field("language", "en")
         form.add_field("file", wav.getvalue(), filename="utterance.wav", content_type="audio/wav")
+        outcome, error_code = "unknown", None
         try:
             async with self.session().post(
                 self.spec.endpoint,
@@ -313,13 +717,91 @@ class LiveTransport:
                 if not isinstance(text, str) or len(text) > 8000:
                     raise ValueError
                 self.last_raw_text = text
+                outcome = "success"
                 return text
-        except ProviderError:
+        except ProviderError as exc:
+            outcome = "failure"
+            error_code = exc.code
             raise
         except Exception:
+            outcome = "failure"
+            error_code = "provider_error"
             raise ProviderError(
                 "ASR request failed or malformed response; payload excluded"
             ) from None
+        finally:
+            self.finish_request(request_id, outcome, error_code)
+
+
+def request_ledger_summary(run_id, ledger_path=None):
+    """Return sanitized request rows for one approved replay/run identity."""
+    if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", run_id):
+        return {"run_id": None, "requests": [], "counts": {}}
+    ledger = Path(
+        ledger_path or os.environ.get("ME3_REQUEST_LEDGER", "var/cache/provider-requests.sqlite")
+    )
+    if not ledger.is_file():
+        return {"run_id": run_id, "requests": [], "counts": {}}
+    try:
+        uri = ledger.resolve().as_uri() + "?mode=ro"
+        with sqlite3.connect(uri, uri=True, timeout=2) as db:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(provider_requests)")}
+            required = {
+                "id",
+                "run_id",
+                "provider",
+                "model",
+                "protocol",
+                "status",
+                "error_code",
+                "created",
+                "updated",
+            }
+            if not required <= columns:
+                return {"run_id": run_id, "requests": [], "counts": {}}
+            rows = db.execute(
+                "SELECT id,provider,model,protocol,status,error_code,created,updated "
+                "FROM provider_requests WHERE run_id=? ORDER BY created,id",
+                (run_id,),
+            ).fetchall()
+    except (OSError, sqlite3.Error, ValueError):
+        return {"run_id": run_id, "requests": [], "counts": {}}
+
+    requests = []
+    counts = {}
+    for identity, provider, model, protocol, status, error_code, created, updated in rows:
+        status = (
+            status
+            if status in {"dispatched_unknown", "success", "failure", "unknown"}
+            else "unknown"
+        )
+        error_code = (
+            error_code
+            if isinstance(error_code, str) and re.fullmatch(r"[a-z0-9_]{1,48}", error_code)
+            else None
+        )
+        row = {
+            "request_id": identity
+            if isinstance(identity, str) and re.fullmatch(r"[a-f0-9]{32}", identity)
+            else None,
+            "provider": provider
+            if isinstance(provider, str) and re.fullmatch(r"[A-Za-z0-9.-]{1,253}", provider)
+            else "unclassified",
+            "model": model
+            if isinstance(model, str) and re.fullmatch(r"[A-Za-z0-9._/-]{1,120}", model)
+            else "unclassified",
+            "protocol": protocol
+            if isinstance(protocol, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,80}", protocol)
+            else "unclassified",
+            "status": status,
+            "error_code": error_code,
+            "created_at": created if isinstance(created, (int, float)) else None,
+            "updated_at": updated if isinstance(updated, (int, float)) else None,
+        }
+        requests.append(row)
+        key = f"{row['provider']}|{row['model']}|{row['protocol']}"
+        counts.setdefault(key, {})[status] = counts.setdefault(key, {}).get(status, 0) + 1
+    return {"run_id": run_id, "requests": requests, "counts": counts}
 
 
 class FileTranscriptionASR:
@@ -527,15 +1009,102 @@ class QwenTTS:
         await self.transport.aclose()
 
 
+class LiveWebSocketConnection:
+    def __init__(self, transport, context, socket):
+        self.transport, self.context, self.socket = transport, context, socket
+        self.closed = False
+
+    async def aclose(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            await self.context.__aexit__(None, None, None)
+        finally:
+            self.transport.last_websocket_timing["socket_closed_monotonic"] = time.monotonic()
+
+
 class Socket:
-    def __init__(self, peer, timeout):
-        self.peer, self.timeout = peer, timeout
+    def __init__(self, peer, timeout, role="asr"):
+        self.peer, self.timeout, self.role = peer, timeout, role
+        self.terminal_outcome = None
+        self.terminal_error_code = None
+        self.failure_code = None
+        self.failure_type = None
+
+    def begin_operation(self):
+        self.terminal_outcome = None
+        self.terminal_error_code = None
+        self.failure_code = None
+        self.failure_type = None
+
+    def mark_failure(self, code="provider_error", exception_type=None):
+        self.failure_code = (
+            code if re.fullmatch(r"[a-z0-9_]{1,48}", code or "") else "provider_error"
+        )
+        self.terminal_outcome = "failure"
+        self.terminal_error_code = self.failure_code
+        if isinstance(exception_type, str) and re.fullmatch(
+            r"[A-Za-z][A-Za-z0-9_.]{0,80}", exception_type
+        ):
+            self.failure_type = exception_type
+
+    def mark_unknown(self, code="stream_incomplete"):
+        if self.terminal_outcome != "failure":
+            self.terminal_outcome = "unknown"
+            self.terminal_error_code = (
+                code if re.fullmatch(r"[a-z0-9_]{1,48}", code or "") else "stream_incomplete"
+            )
+
+    def mark_success(self):
+        if self.terminal_outcome != "failure":
+            self.terminal_outcome = "success"
+            self.terminal_error_code = None
 
     async def send(self, value):
-        if isinstance(value, bytes):
-            await self.peer.send_bytes(value)
-        else:
-            await self.peer.send_json(value)
+        try:
+            if isinstance(value, bytes):
+                await self.peer.send_bytes(value)
+            else:
+                await self.peer.send_json(value)
+        except asyncio.CancelledError:
+            # Local cancellation does not establish whether the remote peer
+            # received the frame. Keep the durable reservation conservative.
+            self.mark_unknown("request_interrupted")
+            raise
+        except TimeoutError as exc:
+            self.mark_failure("provider_timeout", type(exc).__name__)
+            raise ProviderError(
+                "speech send timed out; payload excluded",
+                code="provider_timeout",
+                role=self.role,
+                error_stage=f"{self.role}_send",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
+        except aiohttp.ClientError as exc:
+            self.mark_failure("provider_unavailable", type(exc).__name__)
+            raise ProviderError(
+                "speech send failed; payload excluded",
+                code="provider_unavailable",
+                role=self.role,
+                error_stage=f"{self.role}_send",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
+        except Exception as exc:
+            self.mark_failure("provider_transport_error", type(exc).__name__)
+            raise ProviderError(
+                "speech send failed; payload excluded",
+                code="provider_transport_error",
+                role=self.role,
+                error_stage=f"{self.role}_send",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
 
     async def receive(self):
         try:
@@ -548,11 +1117,44 @@ class Socket:
                 if not isinstance(value, dict):
                     raise ProviderError("invalid speech event")
                 return value
-            raise ProviderError("speech stream disconnected before completion")
-        except ProviderError:
+            self.mark_failure("provider_disconnected", "WebSocketClosed")
+            raise ProviderError(
+                "speech stream disconnected before completion",
+                code="provider_disconnected",
+                role=self.role,
+                error_stage=f"{self.role}_receive",
+                error_boundary="deepgram_websocket",
+                error_detail="WebSocketClosed",
+            )
+        except ProviderError as exc:
+            self.mark_failure(exc.code, exc.error_detail or type(exc).__name__)
+            exc.role = exc.role or self.role
+            exc.error_stage = exc.error_stage or f"{self.role}_receive"
+            exc.error_boundary = exc.error_boundary or "deepgram_websocket"
+            exc.error_detail = exc.error_detail or type(exc).__name__
+            exc.cause_type = exc.cause_type or _cause_type(exc)
             raise
-        except Exception:
-            raise ProviderError("speech receive failed or timed out; payload excluded") from None
+        except TimeoutError as exc:
+            self.mark_failure("provider_timeout", type(exc).__name__)
+            raise ProviderError(
+                "speech receive timed out; payload excluded",
+                code="provider_timeout",
+                role=self.role,
+                error_stage=f"{self.role}_receive",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+                cause_type=_cause_type(exc),
+            ) from None
+        except Exception as exc:
+            self.mark_failure("provider_transport_error", type(exc).__name__)
+            raise ProviderError(
+                "speech receive failed; payload excluded",
+                code="provider_transport_error",
+                role=self.role,
+                error_stage=f"{self.role}_receive",
+                error_boundary="deepgram_websocket",
+                error_detail=type(exc).__name__,
+            ) from None
 
 
 class DeepgramASR:
@@ -569,28 +1171,241 @@ class DeepgramASR:
 
 
 class DeepgramASRStream:
+    # Keep at most five seconds of unsent 16 kHz mono PCM in the MCP process.
+    # The prior two-second cap was shorter than the configured five-second
+    # WebSocket handshake timeout and failed an observed slow cold connect.
+    # This remains a fixed, finite ceiling (about 156 KiB per active stream).
+    OUTBOUND_BUFFER_BYTES = 16000 * 2 * 5
+    OUTBOUND_QUEUE_ITEMS = 160
+
     def __init__(self, provider):
         self.provider = provider
         self.context = self.peer = self.reader = None
+        self.connect_task = None
+        self.writer_task = None
+        self.connection_started_at = None
+        self.handshake_started_at = None
+        self.connection_ready_at = None
+        self.connection_failed_at = None
+        self.closed_at = None
+        self.first_append_at = None
+        self.first_send_started_at = None
+        self.first_send_completed_at = None
+        self.outbound_flush_completed_at = None
+        self.outbound = asyncio.Queue(maxsize=self.OUTBOUND_QUEUE_ITEMS)
+        self.outbound_bytes = 0
+        self.peak_outbound_bytes = 0
+        self.accepted_bytes = 0
+        self.sent_bytes = 0
+        self.inflight_bytes = 0
+        self.discarded_bytes = 0
+        # Honor the selected backend's declared per-stream limit. Campaign
+        # request caps can then bound aggregate submitted audio across runs.
+        self.audio_limit_bytes = min(MAX_AUDIO_BYTES, provider.spec.max_audio_seconds * 16000 * 2)
+        self.background_error = None
         self.parts = []
         self.hypothesis = ""
         self.last = None
         self.total = 0
         self.finishing = self.closed = False
+        self.completed = False
+
+    def start_background(self):
+        """Begin the one provider connection attempt owned by this stream."""
+        if self.closed:
+            raise ProviderError("ASR stream is closed")
+        if self.connect_task is None:
+            self.connection_started_at = time.monotonic()
+            self.connect_task = asyncio.create_task(self._connect())
+            self.connect_task.add_done_callback(self._consume_connect_exception)
+        return self.connect_task
+
+    @staticmethod
+    def _consume_connect_exception(task):
+        # Keep the exception awaitable by start(), while preventing an
+        # unobserved-task warning if cancellation happens before first append.
+        if not task.cancelled():
+            task.exception()
+
+    async def _connect(self):
+        try:
+            self.context = self.provider.transport.socket(
+                {
+                    "model": self.provider.spec.model,
+                    "encoding": "linear16",
+                    "sample_rate": 16000,
+                    "channels": 1,
+                    "interim_results": "true",
+                    "endpointing": "false",
+                }
+            )
+            self.handshake_started_at = time.monotonic()
+            # Bound the HTTP/WebSocket upgrade as well as TCP connect. The
+            # aiohttp session's sock_connect timeout alone does not bound a
+            # server that accepts TCP but never completes the upgrade.
+            async with asyncio.timeout(self.provider.spec.timeout_seconds):
+                self.peer = await self.context.__aenter__()
+            self.connection_ready_at = time.monotonic()
+            self.reader = asyncio.create_task(self.read())
+            self.writer_task = asyncio.create_task(self._write_outbound())
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.connection_failed_at = time.monotonic()
+            self.background_error = exc
+            raise
+
+    def diagnostics(self):
+        """Small, content-free snapshot relayed over the project MCP contract."""
+        state = (
+            "closed"
+            if self.closed
+            else "failed"
+            if self.background_error is not None or self.connection_failed_at is not None
+            else "ready"
+            if self.connection_ready_at is not None
+            else "connecting"
+            if self.connection_started_at is not None
+            else "not_started"
+        )
+        error = self.background_error
+        code = getattr(error, "code", None)
+        if not isinstance(code, str) or not re.fullmatch(r"[a-z0-9_]{1,48}", code):
+            code = None
+        transport_times = getattr(self.provider.transport, "last_websocket_timing", {})
+        stage_keys = (
+            "dns_started",
+            "dns_completed",
+            "dns_cache_hit",
+            "dns_cache_miss",
+            "connection_pool_wait_started",
+            "connection_pool_wait_completed",
+            "connection_establishment_started",
+            "connection_established",
+            "websocket_upgrade_request_sent",
+            "websocket_http_response_received",
+            "connection_failed_monotonic",
+            "connection_cancelled_monotonic",
+            "connection_terminal_exception",
+            "request_outcome",
+            "request_error_code",
+        )
+        return {
+            "connection_state": state,
+            "connection_attempt_monotonic": self.connection_started_at,
+            "provider_request_reserved_monotonic": transport_times.get(
+                "request_reserved_monotonic"
+            ),
+            "websocket_handshake_monotonic": transport_times.get(
+                "websocket_handshake_monotonic", self.handshake_started_at
+            ),
+            "connection_ready_monotonic": transport_times.get(
+                "connection_ready_monotonic", self.connection_ready_at
+            ),
+            "connection_failed_monotonic": self.connection_failed_at,
+            "socket_closed_monotonic": transport_times.get("socket_closed_monotonic"),
+            "connection_closed_monotonic": self.closed_at,
+            "first_append_monotonic": self.first_append_at,
+            "first_send_started_monotonic": self.first_send_started_at,
+            "first_send_completed_monotonic": self.first_send_completed_at,
+            "outbound_flush_completed_monotonic": self.outbound_flush_completed_at,
+            "accepted_audio_bytes": self.accepted_bytes,
+            "sent_audio_bytes": self.sent_bytes,
+            "queued_audio_bytes": self.outbound_bytes,
+            "peak_queued_audio_bytes": self.peak_outbound_bytes,
+            "discarded_audio_bytes": self.discarded_bytes,
+            "audio_limit_bytes": self.audio_limit_bytes,
+            "queue_limit_bytes": self.OUTBOUND_BUFFER_BYTES,
+            "failure_code": code,
+            "connection_stages": {
+                **{key: transport_times[key] for key in stage_keys if key in transport_times},
+                **(
+                    {
+                        "websocket_http_status": transport_times[
+                            "websocket_http_response_received_value"
+                        ]
+                    }
+                    if type(transport_times.get("websocket_http_response_received_value")) is int
+                    and 100 <= transport_times["websocket_http_response_received_value"] <= 599
+                    else {}
+                ),
+            },
+        }
+
+    async def _write_outbound(self):
+        try:
+            while True:
+                pcm = await self.outbound.get()
+                self.inflight_bytes = len(pcm)
+                try:
+                    if self.reader and self.reader.done():
+                        await self.reader
+                        raise ProviderError(
+                            "ASR ended before input commit",
+                            code="provider_disconnected",
+                            role="asr",
+                            error_stage="asr_append",
+                            error_boundary="deepgram_websocket",
+                        )
+                    started = time.monotonic()
+                    if self.first_send_started_at is None:
+                        self.first_send_started_at = started
+                    async with asyncio.timeout(self.provider.spec.timeout_seconds):
+                        await self.peer.send(pcm)
+                    completed = time.monotonic()
+                    if self.first_send_completed_at is None:
+                        self.first_send_completed_at = completed
+                    self.sent_bytes += len(pcm)
+                    self.outbound_bytes -= len(pcm)
+                    self.inflight_bytes = 0
+                finally:
+                    self.outbound.task_done()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.background_error = exc
+            while not self.outbound.empty():
+                with suppress(asyncio.QueueEmpty):
+                    pcm = self.outbound.get_nowait()
+                    self.outbound_bytes -= len(pcm)
+                    self.outbound.task_done()
+            raise
+
+    async def _raise_background_error(self):
+        if self.connect_task and self.connect_task.done():
+            await self.connect_task
+        if self.background_error is not None:
+            raise self.background_error
+
+    async def _flush_outbound(self):
+        await self.start()
+        if self.outbound_bytes:
+            try:
+                async with asyncio.timeout(self.provider.spec.timeout_seconds):
+                    await self.outbound.join()
+            except TimeoutError:
+                raise ProviderError(
+                    "ASR provider audio flush timed out; payload excluded",
+                    code="provider_timeout",
+                    role="asr",
+                    error_stage="asr_open" if self.connection_ready_at is None else "asr_flush",
+                    error_boundary="deepgram_websocket",
+                    error_detail="TimeoutError",
+                ) from None
+        self.outbound_flush_completed_at = time.monotonic()
+        if self.writer_task and self.writer_task.done():
+            await self.writer_task
+        await self._raise_background_error()
 
     async def start(self):
-        self.context = self.provider.transport.socket(
-            {
-                "model": self.provider.spec.model,
-                "encoding": "linear16",
-                "sample_rate": 16000,
-                "channels": 1,
-                "interim_results": "true",
-                "endpointing": "false",
-            }
-        )
-        self.peer = await self.context.__aenter__()
-        self.reader = asyncio.create_task(self.read())
+        task = self.start_background()
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            self.connection_failed_at = asyncio.get_running_loop().time()
+            raise
 
     async def read(self):
         while True:
@@ -621,34 +1436,110 @@ class DeepgramASRStream:
         return " ".join(self.parts + ([self.hypothesis] if self.hypothesis else []))
 
     async def append(self, pcm):
-        if self.closed or self.finishing or len(pcm) % 2 or self.total + len(pcm) > MAX_AUDIO_BYTES:
+        if (
+            self.closed
+            or self.finishing
+            or len(pcm) % 2
+            or self.total + len(pcm) > self.audio_limit_bytes
+        ):
             raise ProviderError("invalid ASR stream input")
-        self.total += len(pcm)
-        if self.peer is None:
-            await self.start()
-        if self.reader.done():
+        self.start_background()
+        await self._raise_background_error()
+        if self.reader and self.reader.done():
             await self.reader
             raise ProviderError("ASR ended before input commit")
-        await self.peer.send(pcm)
-        await asyncio.sleep(0)
+        if self.outbound_bytes + len(pcm) > self.OUTBOUND_BUFFER_BYTES:
+            raise ProviderError(
+                "ASR provider write buffer is full; audio was not accepted",
+                code="asr_buffer_full",
+                role="asr",
+                error_stage="asr_append",
+                error_boundary="deepgram_websocket",
+            )
+        if self.first_append_at is None:
+            self.first_append_at = time.monotonic()
+        try:
+            self.outbound.put_nowait(bytes(pcm))
+        except asyncio.QueueFull:
+            raise ProviderError(
+                "ASR provider write queue is full; audio was not accepted",
+                code="asr_buffer_full",
+                role="asr",
+                error_stage="asr_append",
+                error_boundary="deepgram_websocket",
+            ) from None
+        self.total += len(pcm)
+        self.accepted_bytes += len(pcm)
+        self.outbound_bytes += len(pcm)
+        self.peak_outbound_bytes = max(self.peak_outbound_bytes, self.outbound_bytes)
+        return await self.poll()
+
+    async def poll(self):
+        if self.closed:
+            raise ProviderError("ASR stream is closed")
+        await self._raise_background_error()
+        if self.reader is not None and self.reader.done():
+            await self.reader
+            if not self.finishing:
+                raise ProviderError("ASR ended before input commit")
         text = self.text()
         if text != self.last:
             self.last = text
             return ASRResult(text)
 
     async def finish(self):
-        if self.closed or self.peer is None or self.finishing:
+        if self.closed or self.finishing:
+            raise ProviderError("ASR has no open input")
+        await self._flush_outbound()
+        if self.peer is None:
             raise ProviderError("ASR has no open input")
         self.finishing = True
         # CloseStream has a documented terminal Metadata response. Finalize's
         # optional from_finalize event alone cannot safely delimit an empty tail.
         await self.peer.send({"type": "CloseStream"})
         await self.reader
-        return ASRResult(" ".join(self.parts), final=True)
+        result = ASRResult(" ".join(self.parts), final=True)
+        self.completed = True
+        if hasattr(self.peer, "mark_success"):
+            self.peer.mark_success()
+        return result
 
     async def aclose(self):
-        self.closed = True
+        if not self.closed:
+            self.closed = True
+            self.closed_at = time.monotonic()
+        if self.connect_task and not self.connect_task.done():
+            self.connect_task.cancel()
+            await asyncio.gather(self.connect_task, return_exceptions=True)
+        if self.writer_task and not self.writer_task.done():
+            self.writer_task.cancel()
+            await asyncio.gather(self.writer_task, return_exceptions=True)
+        if self.inflight_bytes:
+            self.outbound_bytes -= self.inflight_bytes
+            self.discarded_bytes += self.inflight_bytes
+            self.inflight_bytes = 0
+        while not self.outbound.empty():
+            with suppress(asyncio.QueueEmpty):
+                pcm = self.outbound.get_nowait()
+                self.outbound_bytes -= len(pcm)
+                self.discarded_bytes += len(pcm)
+                self.outbound.task_done()
         if self.reader:
+            if self.reader.done() and not self.reader.cancelled():
+                with suppress(Exception):
+                    failure = self.reader.exception()
+                    if failure is not None and self.peer and hasattr(self.peer, "mark_failure"):
+                        self.peer.mark_failure(
+                            getattr(failure, "code", "provider_error"),
+                            getattr(failure, "error_detail", None) or type(failure).__name__,
+                        )
+            if (
+                self.peer
+                and not self.completed
+                and hasattr(self.peer, "mark_unknown")
+                and not self.peer.terminal_outcome
+            ):
+                self.peer.mark_unknown("asr_stream_not_finalized")
             self.reader.cancel()
             await asyncio.gather(self.reader, return_exceptions=True)
         if self.peer:
@@ -657,48 +1548,214 @@ class DeepgramASRStream:
 
 
 class DeepgramTTS:
+    # Keep one Aura socket warm for the short gap between sentences/follow-ups.
+    # Longer idle periods release the provider connection/concurrency slot.
+    IDLE_CLOSE_SECONDS = 15.0
+
     def __init__(self, spec, transport=None):
         self.spec, self.transport = spec, transport or LiveTransport(spec)
+        self._last_diagnostics = None
+        self._connection = None
+        self._active = False
+        self._lock = asyncio.Lock()
+        self._idle_close_task = None
+        self._connection_generation = 0
+        self._last_flushed_at = None
+
+    def _reuse_idle_seconds(self):
+        # The WebSocket receive deadline is per read. A provider may also close
+        # an idle Speak socket without a read in progress. Release it before
+        # that deadline instead of sending the next turn to a stale peer.
+        return min(self.IDLE_CLOSE_SECONDS, max(0.1, self.spec.timeout_seconds * 0.8))
+
+    def diagnostics(self):
+        """Return timing/count metadata only; never expose text, headers or PCM."""
+        return dict(self._last_diagnostics) if self._last_diagnostics is not None else None
 
     async def synthesize(self, text):
         if not isinstance(text, str) or not 1 <= len(text) <= 500:
             raise ProviderError("TTS text outside limits")
-        async with self.transport.socket(
-            {"model": self.spec.model, "encoding": "linear16", "sample_rate": 16000}
-        ) as peer:
-            complete = False
-            pending = bytearray()
-            total = 0
+        started = time.monotonic()
+        metrics = {
+            "status": "running",
+            "request_started_monotonic": started,
+            "submitted_characters": len(text),
+            "provider_pcm_packets": 0,
+            "provider_pcm_bytes": 0,
+        }
+        self._last_diagnostics = metrics
+        complete = False
+        pending = bytearray()
+        request_id = None
+        request_outcome, request_error = "unknown", None
+        connection_failed = False
+        try:
+            async with self._lock:
+                await self._cancel_idle_close()
+                self._active = True
+                self._connection_generation += 1
+                try:
+                    if self._connection is not None and (
+                        getattr(self._connection.socket.peer, "closed", False)
+                        or self._last_flushed_at is not None
+                        and time.monotonic() - self._last_flushed_at
+                        >= self._reuse_idle_seconds()
+                    ):
+                        await self._close_connection()
+                    key, request_id = self.transport.authorize()
+                    if self._connection is None or self._connection.closed:
+                        metrics["connection_reused"] = False
+                        connection_started = time.monotonic()
+                        metrics["connection_attempt_monotonic"] = connection_started
+                        self._connection = await self.transport.open_socket(
+                            {
+                                "model": self.spec.model,
+                                "encoding": "linear16",
+                                "sample_rate": 16000,
+                            },
+                            key,
+                            role="tts",
+                        )
+                        metrics["connection_ready_monotonic"] = time.monotonic()
+                        metrics["connection_setup_seconds"] = (
+                            metrics["connection_ready_monotonic"] - connection_started
+                        )
+                        metrics["connection_trace"] = self._connection_trace()
+                    else:
+                        metrics["connection_reused"] = True
+                        metrics["connection_reuse_monotonic"] = time.monotonic()
+                        metrics["connection_ready_monotonic"] = (
+                            self.transport.last_websocket_timing.get("connection_ready_monotonic")
+                        )
+                    connection = self._connection
+                    peer = connection.socket
+                    peer.begin_operation()
+                    metrics["socket_ready_monotonic"] = time.monotonic()
+                    await peer.send({"type": "Speak", "text": text})
+                    metrics["first_text_submitted_monotonic"] = time.monotonic()
+                    await peer.send({"type": "Flush"})
+                    metrics["flush_submitted_monotonic"] = time.monotonic()
+                    while True:
+                        value = await peer.receive()
+                        if isinstance(value, bytes):
+                            metrics["provider_pcm_packets"] += 1
+                            metrics["provider_pcm_bytes"] += len(value)
+                            metrics.setdefault("first_pcm_monotonic", time.monotonic())
+                            metrics["last_pcm_monotonic"] = time.monotonic()
+                            if metrics["provider_pcm_bytes"] > MAX_AUDIO_BYTES:
+                                raise ProviderError("TTS duration exceeds limit", role="tts")
+                            pending.extend(value)
+                            # Emit usable PCM immediately, including partial packets;
+                            # retain only a possible odd byte across wire messages.
+                            while len(pending) >= 2:
+                                size = min(FRAME_BYTES, len(pending) // 2 * 2)
+                                yield bytes(pending[:size])
+                                del pending[:size]
+                        elif value.get("type") == "Flushed":
+                            if pending or not metrics["provider_pcm_bytes"]:
+                                raise ProviderError(
+                                    "TTS completed with invalid/empty PCM", role="tts"
+                                )
+                            complete = True
+                            request_outcome = "success"
+                            peer.mark_success()
+                            metrics["provider_flushed_monotonic"] = time.monotonic()
+                            self._last_flushed_at = metrics["provider_flushed_monotonic"]
+                            metrics["status"] = "completed"
+                            return
+                        elif value.get("type") != "Metadata":
+                            raise ProviderError(
+                                "TTS service returned unsupported/error event", role="tts"
+                            )
+                except (asyncio.CancelledError, GeneratorExit) as exc:
+                    metrics["status"] = "cancelled"
+                    metrics["failure_type"] = type(exc).__name__
+                    if self._connection is not None:
+                        peer = self._connection.socket
+                        with suppress(Exception):
+                            async with asyncio.timeout(0.5):
+                                await peer.send({"type": "Clear"})
+                    raise
+                except BaseException as exc:
+                    connection_failed = True
+                    metrics["status"] = "failed"
+                    metrics["failure_type"] = type(exc).__name__
+                    code = getattr(exc, "code", None)
+                    request_outcome = "failure" if isinstance(exc, Exception) else "unknown"
+                    if isinstance(code, str) and re.fullmatch(r"[a-z0-9_]{1,48}", code):
+                        request_error = code
+                        metrics["error_code"] = code
+                    elif request_outcome == "failure":
+                        request_error = "provider_error"
+                    if self._connection is not None:
+                        peer = self._connection.socket
+                        with suppress(Exception):
+                            async with asyncio.timeout(0.5):
+                                await peer.send({"type": "Clear"})
+                    raise
+                finally:
+                    self._active = False
+                    if request_id is not None:
+                        self.transport.finish_request(request_id, request_outcome, request_error)
+                    if complete and not connection_failed:
+                        self._schedule_idle_close()
+                    else:
+                        await self._close_connection()
+        finally:
+            finished = time.monotonic()
+            if not metrics.get("connection_trace") and not metrics.get("connection_reused"):
+                # Preserve failed/cancelled handshake stages as well as
+                # successful setup timestamps; expose only timing markers,
+                # the numeric HTTP status, and a sanitized exception class.
+                metrics["connection_trace"] = self._connection_trace()
+            metrics["completed_monotonic"] = finished
+            metrics["synthesis_wall_seconds"] = finished - started
+            metrics["provider_audio_seconds"] = metrics["provider_pcm_bytes"] / 32000
+
+    def _connection_trace(self):
+        trace = {}
+        for name, value in getattr(self.transport, "last_websocket_timing", {}).items():
+            if name.endswith("_monotonic") and type(value) in (int, float):
+                trace[name] = value
+            elif name == "websocket_http_response_received_value" and type(value) is int:
+                trace["websocket_http_status"] = value
+            elif name == "connection_terminal_exception" and isinstance(value, str):
+                if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]{0,80}", value):
+                    trace[name] = value
+        return trace
+
+    def _schedule_idle_close(self):
+        generation = self._connection_generation
+        task = self._idle_close_task
+        if task is not None and not task.done():
+            task.cancel()
+
+        async def expire():
             try:
-                await peer.send({"type": "Speak", "text": text})
-                await peer.send({"type": "Flush"})
-                while True:
-                    value = await peer.receive()
-                    if isinstance(value, bytes):
-                        total += len(value)
-                        if total > MAX_AUDIO_BYTES:
-                            raise ProviderError("TTS duration exceeds limit")
-                        pending.extend(value)
-                        # Emit usable PCM immediately, including partial packets;
-                        # retain only a possible odd byte across wire messages.
-                        while len(pending) >= 2:
-                            size = min(FRAME_BYTES, len(pending) // 2 * 2)
-                            yield bytes(pending[:size])
-                            del pending[:size]
-                    elif value.get("type") == "Flushed":
-                        if pending or not total:
-                            raise ProviderError("TTS completed with invalid/empty PCM")
-                        complete = True
-                        return
-                    elif value.get("type") != "Metadata":
-                        raise ProviderError("TTS service returned unsupported/error event")
-            finally:
-                if not complete:
-                    with suppress(Exception):
-                        async with asyncio.timeout(0.5):
-                            await peer.send({"type": "Clear"})
+                await asyncio.sleep(self._reuse_idle_seconds())
+                async with self._lock:
+                    if generation == self._connection_generation and not self._active:
+                        await self._close_connection()
+            except asyncio.CancelledError:
+                raise
+
+        self._idle_close_task = asyncio.create_task(expire(), name="me3-deepgram-tts-idle-close")
+
+    async def _cancel_idle_close(self):
+        task, self._idle_close_task = self._idle_close_task, None
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _close_connection(self):
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            await connection.aclose()
 
     async def aclose(self):
+        await self._cancel_idle_close()
+        async with self._lock:
+            await self._close_connection()
         await self.transport.aclose()
 
 

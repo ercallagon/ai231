@@ -20,7 +20,7 @@
     } catch (_) {}
   }
   let recoveryGeneration = 0;
-  const runtime = {available:false,connected:false,connecting:false,startupTimer:null,status:'disconnected',inputTurnOpen:null,ws:null,media:null,context:null,processor:null,input:null,mute:null,sources:new Map(),playEpoch:0,nextPlay:0,interrupting:false,liveReport:null,aec:null,engagement:null,runId:null,sessionId:null,wakeCueSessionId:null,wakeCueTimer:null,turnId:0,completedTurnId:null,eventSequence:0,statusSequence:0,micMuted:false,micLevel:0,micVisual:0,playLevel:0,toolActive:false,ended:false,mode:null,requestBudget:null,artifactsAvailable:false,deviceCapabilities:null,deviceActionPending:null,deviceActionMessage:'',music:{capabilities:null,capabilitiesLoaded:false,capabilitiesError:false,connectRequested:false,state:null,player:null,sdkLoaded:false,sdkLoading:false,sdkConnecting:false,sdkReady:false,activationRequired:false,deviceId:null,stateUpdatedAt:0,apiTimer:null,operation:0,reportedPlaybackStatus:null,reportedTrackKey:null}};
+  const runtime = {available:false,connected:false,connecting:false,startupTimer:null,status:'disconnected',inputTurnOpen:null,ws:null,media:null,context:null,processor:null,input:null,mute:null,sources:new Map(),playEpoch:0,nextPlay:0,prebuffer:null,prebufferTimer:null,playbackPrimed:false,interrupting:false,liveReport:null,aec:null,lastResearchDiagnostic:null,engagement:null,runId:null,sessionId:null,wakeCueSessionId:null,wakeCueTimer:null,turnId:0,completedTurnId:null,eventSequence:0,statusSequence:0,micMuted:false,micLevel:0,micVisual:0,playLevel:0,toolActive:false,ended:false,mode:null,requestBudget:null,artifactsAvailable:false,deviceCapabilities:null,deviceActionPending:null,deviceActionMessage:'',music:{capabilities:null,capabilitiesLoaded:false,capabilitiesError:false,connectRequested:false,state:null,player:null,sdkLoaded:false,sdkLoading:false,sdkConnecting:false,sdkReady:false,activationRequired:false,deviceId:null,stateUpdatedAt:0,apiTimer:null,operation:0,reportedPlaybackStatus:null,reportedTrackKey:null}};
   const $ = id => document.getElementById(id);
   const spotifyPlayIcon='<svg class="control-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5v14l11-7z"/></svg>';
   const spotifyPauseIcon='<svg class="control-svg" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>';
@@ -299,7 +299,8 @@
           const recovery=t.id===newestUpdate&&(t.status==='failed'||t.status==='unknown'&&!musicUnknown)?`<div class="task-recovery"><strong>${t.status==='failed'?'Needs attention':'Outcome unavailable'}</strong><p>${escape(t.kind.startsWith('music_')?(t.status==='unknown'?'Check current Spotify playback before retrying; the command may already have taken effect.':t.summary?.includes('active playback device')?'Start the configured Spotify receiver, then run the secured terminal device check. Manual song selection is not required.':t.summary?.includes('token expired')?'Renew Spotify access in the secured terminal setup before trying again.':/receiver|Spotify player/.test(t.summary||'')?'Start the configured Spotify receiver, then use the secured terminal device check before trying again.':'Check the music service in Diagnostics before making another request.'):(t.status==='unknown'?'Outcome unknown. Check before retrying.':'Action failed. See details for this request.'))}</p></div>`:'';
           const taskId=t.task_id||t.id;
           const progress=isActive?`<div class="background-task-progress" data-task-started="${escape(t.started_utc||'')}" data-task-finished="${escape(t.finished_utc||'')}" data-task-progress-at="${escape(t.last_progress_utc||'')}" data-task-heartbeat="${escape(t.heartbeat_utc||'')}" data-task-snapshot-at="${escape(taskSnapshotAt)}"><div class="background-task-phase"><strong>${escape(t.phase|| (t.status==='awaiting_input'?'Waiting for your input':t.status==='accepted'?'Accepted · worker starting':'Waiting for worker progress'))}</strong></div>${Array.isArray(t.completed_steps)&&t.completed_steps.length?`<ul class="task-steps">${t.completed_steps.map(step=>`<li>${escape(step)}</li>`).join('')}</ul>`:''}<div class="background-task-meta"><span data-task-elapsed>Elapsed —</span><span data-task-progress-age>Progress not reported</span><span data-task-heartbeat>Worker heartbeat unavailable</span></div></div>`:'';
-          return `<article class="task-card${isActive?' task-card-active':''}" role="listitem" data-task-id="${escape(taskId)}" data-kind="${escape(t.kind)}" data-status="${escape(t.status)}" data-latest="${String(t.id===newest)}"><span class="task-art" aria-hidden="true" data-color="${escape(['red','blue','green'].includes(t.display)?t.display:'none')}">${icon(t)}</span><div class="task-copy"><span class="task-recency">${escape(isActive?'Task '+taskId.slice(0,8):recency(t))}</span><strong>${escape(t.title)}</strong>${visual||t.kind.startsWith('music_')||t.kind==='set_temperature'?'':`<span>${escape(t.summary||'In progress')}</span>`}</div><span class="task-evidence">${escape(evidence(t))}</span>${progress}${visual}${recovery}${fileMarkup}${location}</article>`;
+          const taskControls=liveTranscript&&t.task_id&&isActive?`<div class="task-recovery" aria-label="Task controls">${t.approval?`<p>Approval needed: ${escape(t.approval.action)} · ${escape(t.approval.details)}</p><button type="button" data-task-command="approve" data-task-id="${escape(t.task_id)}" data-approval-id="${escape(t.approval.approval_id)}" data-task-revision="${escape(t.approval.revision)}">Approve</button><button type="button" data-task-command="reject" data-task-id="${escape(t.task_id)}" data-approval-id="${escape(t.approval.approval_id)}" data-task-revision="${escape(t.approval.revision)}">Reject</button>`:t.status==='awaiting_input'?`<button type="button" data-task-command="resume" data-task-id="${escape(t.task_id)}">Resume task</button>`:`<button type="button" data-task-command="pause" data-task-id="${escape(t.task_id)}">Pause task</button>`}<button type="button" data-task-command="cancel" data-task-id="${escape(t.task_id)}">Cancel task</button></div>`:'';
+          return `<article class="task-card${isActive?' task-card-active':''}" role="listitem" data-task-id="${escape(taskId)}" data-kind="${escape(t.kind)}" data-status="${escape(t.status)}" data-latest="${String(t.id===newest)}"><span class="task-art" aria-hidden="true" data-color="${escape(['red','blue','green'].includes(t.display)?t.display:'none')}">${icon(t)}</span><div class="task-copy"><span class="task-recency">${escape(isActive?'Task '+taskId.slice(0,8):recency(t))}</span><strong>${escape(t.title)}</strong>${visual||t.kind.startsWith('music_')||t.kind==='set_temperature'?'':`<span>${escape(t.summary||'In progress')}</span>`}</div><span class="task-evidence">${escape(evidence(t))}</span>${progress}${taskControls}${visual}${recovery}${fileMarkup}${location}</article>`;
         };
         const openDeviceControlTasks=new Set([...document.querySelectorAll('.device-controls[open]')].map(node=>node.closest('[data-task-id]')?.dataset.taskId).filter(Boolean));
         const previousScroll=$('task-items').scrollTop;
@@ -382,7 +383,7 @@
     const label=runtime.connected?(runtime.interrupting?'Stopping speech…':state==='listening'?runtime.inputTurnOpen===false?(runtime.engagement?.awaiting_answer?'Waiting for your answer':runtime.engagement?.mode?'Listening for a follow-up':'Ready for your next request'):'Listening…':{ready:'Waiting for ‘Hey Swift’',activating:'Starting conversation',thinking:runtime.toolActive?'Working on your request…':'Thinking…',speaking:'Speaking…',interrupted:'Interrupted',muted:'Microphone muted'}[state]||'Voice connected'):runtime.ended?'Conversation ended':d?'Recorded session':runtime.available?'Voice disconnected':'Voice not connected';
     text('session-summary',label);
     const replyComplete=state==='listening'&&runtime.completedTurnId===runtime.turnId;
-    const activeContext=replyComplete?'Reply complete · ask a follow-up':'';
+    const activeContext=voiceNode.dataset.wakeConfirmed==='true'?'Wake heard · speak now':replyComplete?'Reply complete · ask a follow-up':'';
     text('voice-status-context',runtime.connected?activeContext:stale?'Saved reports are stale':d?date(d.updated_utc):'');
     document.querySelector('#welcome p').textContent=runtime.available?'Start a conversation to enable voice.':'Connect the voice runtime to begin.';
     text('mic-indicator',runtime.connected?(runtime.micMuted?'Microphone muted':runtime.media?.getAudioTracks()?.[0]?.readyState==='live'?'Microphone on':'Microphone unavailable'):'Microphone not connected');
@@ -392,6 +393,7 @@
     $('voice-interrupt').disabled=!runtime.connected||runtime.status!=='speaking'||runtime.interrupting;
     $('voice-interrupt').hidden=!runtime.connected||runtime.ended||runtime.status!=='speaking'||runtime.interrupting;
     $('voice-mute').hidden=!runtime.connected||runtime.ended;
+    $('voice-arm').hidden=!runtime.connected||runtime.engine!=='native'||runtime.status!=='wake_listening'||runtime.micMuted;
     syncAssistantLayout();
     text('voice-action-hint','Open session details');
     text('footer-note',runtime.connected?(runtime.mode==='mock'?'Mock voice session':'Voice session connected'):'Reports only · voice not connected');
@@ -599,6 +601,7 @@
   function sessionDetails(){
     const report=assistantReport(), d=report?.data;
     const rows=[['Model services',runtime.connected&&runtime.providerRoles?Object.entries(runtime.providerRoles).filter(([role,value])=>['asr','llm','tts'].includes(role)&&typeof value==='string'&&value.length<=200).map(([role,value])=>role.toUpperCase()+': '+value).join(' · '):'See the selected run configuration'],['Conversation context',runtime.connected?'Current engagement only; a new wake starts fresh':'Saved transcript; not restored as model context'],['Action records','Separate from chat; do not resume tasks or timers'],['Voice runtime',runtime.connected?'Browser microphone connected':'Not connected'],['Reported state',runtime.connected?(runtime.status==='wake_listening'?'Wake listening':sessionLabels[runtime.status]||'Connected'):d?sessionLabels[d.state]||'Unknown':'Unknown'],['Echo cancellation',runtime.connected?(runtime.aec===true?'Browser reports on':runtime.aec===false?'Browser reports off':'Browser did not report'): 'Unavailable'],['Reasoning requests',runtime.requestBudget?(runtime.requestBudget.limit===null?`${runtime.requestBudget.used} submitted; provider limits apply`:`${runtime.requestBudget.used} of ${runtime.requestBudget.limit} used this bridge run`):'Unavailable'],['Evidence',runtime.connected?'Live browser transport · acoustic behavior unverified':d?.mode==='mock'?'Simulated session':d?'Reported software session':'No session report'],['Report source',sourceMode==='folder'?'Folder feed':sourceMode==='server'?'Local report feed':sourceMode==='import'?'Imported snapshot':'Saved snapshot'],['Updated',d?date(d.updated_utc):'Unavailable']];
+    rows.splice(8,0,['Last source retrieval',runtime.lastResearchDiagnostic||'No retrieval recorded in this connection']);
     $('session-details').innerHTML=rows.map(([key,value])=>`<div><dt>${escape(key)}</dt><dd>${escape(value)}</dd></div>`).join('');
     const aecNote=runtime.aec===true?'the browser reports echo cancellation enabled':runtime.aec===false?'the browser reports echo cancellation disabled':'the browser did not report its echo cancellation setting';
     text('session-dialog-note',runtime.connected?`Browser microphone capture and playback are connected; ${aecNote}. This setting does not measure acoustic cancellation, and Pi behavior is unverified.`:runtime.available?'Start conversation connects the browser microphone to the loopback voice runtime. Saved reports do not indicate a live connection.':'This is saved report evidence. No browser microphone or voice runtime is connected.');
@@ -651,26 +654,29 @@
   }
   function stopPlayback(){
     runtime.playEpoch++;
+    if(runtime.prebufferTimer!==null){clearTimeout(runtime.prebufferTimer);runtime.prebufferTimer=null;}
+    runtime.prebuffer?.clear();runtime.playbackPrimed=false;
     for(const source of runtime.sources.values())try{source.stop();}catch(_){}
     runtime.sources.clear();runtime.nextPlay=0;runtime.playLevel=0;updateWave();
   }
-  function playWakeCue(sessionId){
+  function playWakeCue(sessionId,cueId=sessionId){
     const context=runtime.context;
-    if(!runtime.connected||!sessionId||runtime.wakeCueSessionId===sessionId)return;
-    runtime.wakeCueSessionId=sessionId;
+    if(!runtime.connected||!sessionId||runtime.wakeCueSessionId===cueId)return;
+    runtime.wakeCueSessionId=cueId;
     voiceNode.dataset.wakeConfirmed='true';
+    voiceStatus();
     if(runtime.wakeCueTimer!==null)clearTimeout(runtime.wakeCueTimer);
     runtime.wakeCueTimer=setTimeout(()=>{
-      if(runtime.wakeCueSessionId===sessionId)delete voiceNode.dataset.wakeConfirmed;
+      if(runtime.wakeCueSessionId===cueId){delete voiceNode.dataset.wakeConfirmed;voiceStatus();}
       runtime.wakeCueTimer=null;
-    },850);
+    },2000);
     if(!context||context.state==='closed')return;
     try{
       const start=context.currentTime+.015;
       [[587.33,0,.105],[880,.12,.13]].forEach(([frequency,offset,duration])=>{
         const oscillator=context.createOscillator(),gain=context.createGain(),when=start+offset;
         oscillator.type='sine';oscillator.frequency.setValueAtTime(frequency,when);
-        gain.gain.setValueAtTime(.0001,when);gain.gain.exponentialRampToValueAtTime(.052,when+.01);gain.gain.exponentialRampToValueAtTime(.0001,when+duration);
+        gain.gain.setValueAtTime(.0001,when);gain.gain.exponentialRampToValueAtTime(.10,when+.01);gain.gain.exponentialRampToValueAtTime(.0001,when+duration);
         oscillator.connect(gain);gain.connect(context.destination);oscillator.start(when);oscillator.stop(when+duration+.012);
       });
     }catch(_){/* The wake confirmation is optional; voice capture must continue if output is unavailable. */}
@@ -679,6 +685,10 @@
     if(!runtime.connected||runtime.status!=='speaking'||runtime.interrupting)return;
     runtime.interrupting=true;stopPlayback();text('voice-control-note','');voiceStatus();
     if(runtime.ws?.readyState===WebSocket.OPEN)runtime.ws.send(JSON.stringify({type:'interrupt'}));
+  }
+  function armVoice(){
+    if(!runtime.connected||runtime.engine!=='native'||runtime.status!=='wake_listening'||runtime.micMuted)return;
+    if(runtime.ws?.readyState===WebSocket.OPEN)runtime.ws.send(JSON.stringify({type:'arm'}));
   }
   async function probeBridgeRecovery(){
     const generation=++recoveryGeneration;
@@ -689,7 +699,7 @@
         const response=await fetch('/api/health',{cache:'no-store',signal:AbortSignal.timeout(2000)});
         const health=response.ok?await response.json():null;
         if(health?.bridge==='ready'&&health.voice_session==='idle'){
-          showNotice('Voice bridge is reachable again. Click Start conversation to open a new session; the previous session was not resumed and no command was replayed.');
+          showNotice('The previous voice session has ended. Click Start conversation to open a new session; it will not resume or replay prior audio.');
           return;
         }
       }catch(_){}
@@ -707,8 +717,9 @@
     runtime.media?.getTracks().forEach(track=>track.stop());
     runtime.context?.close().catch(()=>{});
     runtime.ws=runtime.media=runtime.context=runtime.processor=runtime.input=runtime.mute=null;
+    runtime.prebuffer=null;
     $('fresh-context').hidden=true;
-    runtime.connected=false;runtime.connecting=false;runtime.status='disconnected';runtime.inputTurnOpen=null;runtime.interrupting=false;runtime.aec=null;runtime.micMuted=false;runtime.micLevel=0;runtime.micVisual=0;runtime.playLevel=0;runtime.toolActive=false;runtime.ended=ended;runtime.runId=null;runtime.sessionId=null;runtime.wakeCueSessionId=null;delete voiceNode.dataset.wakeConfirmed;runtime.turnId=0;runtime.completedTurnId=null;runtime.eventSequence=0;runtime.statusSequence=0;
+    runtime.connected=false;runtime.connecting=false;runtime.status='disconnected';runtime.engine=null;runtime.inputTurnOpen=null;runtime.interrupting=false;runtime.aec=null;runtime.lastResearchDiagnostic=null;runtime.micMuted=false;runtime.micLevel=0;runtime.micVisual=0;runtime.playLevel=0;runtime.toolActive=false;runtime.ended=ended;runtime.runId=null;runtime.sessionId=null;runtime.wakeCueSessionId=null;delete voiceNode.dataset.wakeConfirmed;runtime.turnId=0;runtime.completedTurnId=null;runtime.eventSequence=0;runtime.statusSequence=0;
     $('voice-start').textContent='Start conversation';$('voice-start').disabled=false;$('voice-start').setAttribute('aria-busy','false');$('voice-interrupt').disabled=true;$('voice-mute').hidden=true;$('voice-mute').textContent='Mute microphone';
     text('voice-control-note','');history();voiceStatus();
     if(sourceMode==='server')refresh();
@@ -716,15 +727,40 @@
   function receiveAudio(bytes){
     if(!runtime.connected||runtime.interrupting||!runtime.context||bytes.byteLength<6||bytes.byteLength>8196||bytes.byteLength%2)return;
     const view=new DataView(bytes),id=view.getUint32(0,true),frames=(bytes.byteLength-4)/2;
-    if(runtime.sources.size>=12){stopPlayback();showNotice('Playback buffer limit reached. Audio stopped.','error');return;}
+    if(runtime.sources.size+(runtime.prebuffer?.length||0)>=20){stopPlayback();showNotice('Playback buffer limit reached. Audio stopped.','error');return;}
     const buffer=runtime.context.createBuffer(1,frames,16000),out=buffer.getChannelData(0);
     for(let i=0;i<frames;i++)out[i]=view.getInt16(4+i*2,true)/32768;
-    const source=runtime.context.createBufferSource();source.buffer=buffer;source.connect(runtime.context.destination);
     runtime.playLevel=Math.sqrt(out.reduce((sum,value)=>sum+value*value,0)/frames);updateWave();
-    const epoch=runtime.playEpoch,when=Math.max(runtime.context.currentTime+.035,runtime.nextPlay);
-    runtime.nextPlay=when+buffer.duration;runtime.sources.set(id,source);updateWave();
-    source.onended=()=>{if(runtime.sources.get(id)===source)runtime.sources.delete(id);if(!runtime.sources.size){runtime.playLevel=0;updateWave();}if(epoch===runtime.playEpoch&&runtime.ws?.readyState===WebSocket.OPEN)runtime.ws.send(JSON.stringify({type:'audio_ack',id}));};
-    source.start(when);
+    const packet={id,buffer,duration:buffer.duration},epoch=runtime.playEpoch;
+    const schedule=queued=>{
+      for(const item of queued){
+        const source=runtime.context.createBufferSource();source.buffer=item.buffer;source.connect(runtime.context.destination);
+        const when=Math.max(runtime.context.currentTime+.035,runtime.nextPlay);
+        runtime.nextPlay=when+item.duration;runtime.sources.set(item.id,source);updateWave();
+        source.onended=()=>{
+          if(runtime.sources.get(item.id)===source)runtime.sources.delete(item.id);
+          if(!runtime.sources.size){runtime.playLevel=0;updateWave();}
+          if(epoch===runtime.playEpoch&&runtime.ws?.readyState===WebSocket.OPEN)runtime.ws.send(JSON.stringify({type:'audio_ack',id:item.id}));
+        };
+        source.start(when);
+      }
+    };
+    if(runtime.playbackPrimed){schedule([packet]);return;}
+    if(!runtime.prebuffer)runtime.prebuffer=new SwiftAudioPrebuffer(.12,16);
+    let ready;
+    try{ready=runtime.prebuffer.push(packet);}catch(_){stopPlayback();showNotice('Playback buffer limit reached. Audio stopped.','error');return;}
+    if(ready.length){
+      if(runtime.prebufferTimer!==null){clearTimeout(runtime.prebufferTimer);runtime.prebufferTimer=null;}
+      runtime.playbackPrimed=true;schedule(ready);return;
+    }
+    if(runtime.prebufferTimer===null){
+      runtime.prebufferTimer=setTimeout(()=>{
+        runtime.prebufferTimer=null;
+        if(!runtime.connected||runtime.interrupting||epoch!==runtime.playEpoch)return;
+        const pending=runtime.prebuffer?.take()||[];
+        if(pending.length){runtime.playbackPrimed=true;schedule(pending);}
+      },120);
+    }
   }
   function captureBlock(event){
     if(!runtime.connected||runtime.ws?.readyState!==WebSocket.OPEN)return;
@@ -1058,9 +1094,14 @@
         if(event.data instanceof ArrayBuffer){receiveAudio(event.data);return;}
         let message;try{message=JSON.parse(event.data);}catch(_){return;}
         if(message.type==='audio_stop'){stopPlayback();runtime.interrupting=false;return;}
+        if(message.type==='task_control_result'){
+          if(message.error)showNotice('Task control failed: '+String(message.error).replace(/[^a-z0-9_-]/gi,''),'error');
+          else showNotice('Task '+String(message.result?.status||'updated').replace(/[^a-z0-9_-]/gi,''));
+          return;
+        }
         if(message.type==='ready'&&typeof message.run_id==='string'&&typeof message.session_id==='string'){
           if(runtime.startupTimer!==null){clearTimeout(runtime.startupTimer);runtime.startupTimer=null;}
-          $('audio-diagnostic-capture').hidden=message.diagnostic_audio!==true;text('audio-diagnostic-capture',message.diagnostic_audio===true?'Audio diagnostics enabled: up to 60 seconds of received and ASR audio retained privately when this voice connection ends.':'');rememberSession(message.session_id);savedSessions.delete(message.session_id);runtime.runId=message.run_id;runtime.sessionId=message.session_id;runtime.wakeCueSessionId=null;runtime.turnId=0;runtime.completedTurnId=null;runtime.eventSequence=0;runtime.statusSequence=0;runtime.mode=message.mode;runtime.requestBudget=message.reasoning_budget||null;runtime.providerRoles=message.provider_roles||null;runtime.artifactsAvailable=message.task_artifact_access===true;runtime.deviceCapabilities=acceptDeviceCapabilities(message.devices);runtime.deviceActionPending=null;runtime.deviceActionMessage='';runtime.liveReport=null;runtime.connected=true;runtime.connecting=false;runtime.status='wake_listening';runtime.inputTurnOpen=null;runtime.interrupting=false;runtime.toolActive=false;runtime.music.reportedPlaybackStatus=null;runtime.music.reportedTrackKey=null;renderDeviceAdapterStatus();
+          $('audio-diagnostic-capture').hidden=message.diagnostic_audio!==true;text('audio-diagnostic-capture',message.diagnostic_audio===true?(message.engine==='native'?'Audio diagnostics enabled: bounded browser-received audio will be saved privately when this voice connection ends.':'Audio diagnostics enabled: bounded received and ASR audio will be saved privately when this voice connection ends.'):'');rememberSession(message.session_id);savedSessions.delete(message.session_id);runtime.runId=message.run_id;runtime.sessionId=message.session_id;runtime.engine=message.engine;runtime.wakeCueSessionId=null;runtime.turnId=0;runtime.completedTurnId=null;runtime.eventSequence=0;runtime.statusSequence=0;runtime.mode=message.mode;runtime.requestBudget=message.reasoning_budget||null;runtime.providerRoles=message.provider_roles||null;runtime.artifactsAvailable=message.task_artifact_access===true;runtime.deviceCapabilities=acceptDeviceCapabilities(message.devices);runtime.deviceActionPending=null;runtime.deviceActionMessage='';runtime.liveReport=null;runtime.connected=true;runtime.connecting=false;runtime.status='wake_listening';runtime.inputTurnOpen=null;runtime.interrupting=false;runtime.toolActive=false;runtime.music.reportedPlaybackStatus=null;runtime.music.reportedTrackKey=null;renderDeviceAdapterStatus();
           if(runtime.music.state&&!runtime.music.stateStale&&performance.now()-runtime.music.stateUpdatedAt<5000)reportMusicPlayback(runtime.music.state,runtime.music.state.source);
           data.reports=data.reports.filter(r=>r.kind!=='transcript');showNotice('');paint();$('voice-start').textContent='End conversation';$('voice-start').disabled=false;$('voice-start').setAttribute('aria-busy','false');$('voice-mute').hidden=false;text('voice-control-note','');voiceStatus();return;
         }
@@ -1070,6 +1111,7 @@
             rememberSession(message.data.session_id);runtime.sessionId=message.data.session_id;runtime.turnId=0;runtime.completedTurnId=null;runtime.toolActive=false;runtime.liveReport=null;runtime.status='activating';data.reports=data.reports.filter(r=>r.kind!=='transcript');paint();
           }
           if(message.data.event==='wake_detected_file')playWakeCue(message.data.session_id);
+          if(message.data.event==='wake_detected'||message.data.event==='wake_manual_armed')playWakeCue(message.data.session_id,`${message.data.session_id}:${message.sequence}`);
           if(message.data.session_id!==runtime.sessionId)return;
           const eventTurn=message.data.turn_id;
           if(Number.isInteger(eventTurn)&&eventTurn<runtime.turnId)return;
@@ -1078,7 +1120,7 @@
           if(message.data.event==='turn_error'){
             if(message.data.error_code==='context_capacity')$('fresh-context').hidden=false;
             const service=message.data.error_stage==='tool'?'Task':({asr:'Speech recognition',tts:'Speech synthesis',llm:'Reasoning'}[message.data.error_role]||'Model');
-            const messages={request_allowance_exhausted:'This test run has reached its configured model-request limit. No new request was sent. Review the run limit before continuing.',context_capacity:'Context is full. End this conversation, then use Start conversation for fresh context. Saved results remain available.',invalid_context:'Swift could not read the task history safely. Start a new conversation.',request_limit_reached:`${service} request allowance is exhausted for this bridge run. Review the authorized request limit before continuing.`,provider_rate_limited:`${service} is rate-limiting requests. Wait before trying again; Swift did not retry automatically.`,provider_unavailable:`${service} is temporarily unavailable. Any completed task remains recorded; no automatic retry was made.`,provider_timeout:`${service} timed out. Any completed task remains recorded; no automatic retry was made.`,provider_incomplete_response:`${service} response stream ended early. Check task results before retrying.`,turn_deadline_exceeded:'Swift reached the response deadline. Any completed task remains recorded; no automatic retry was made.',provider_rejected:`${service} rejected this request. Check its configuration; Swift did not retry automatically.`,provider_error:`${service} request failed. Any completed task remains recorded; no automatic retry was made.`,english_only_asr:'Speech recognition could not produce a usable English transcript. No task was started.',english_only_output:'Swift blocked text outside its English-script policy. Please ask again in English; no speech was played.',english_only_tts:'Speech synthesis blocked text outside its English-script policy; no audio was generated.'};
+    const messages={request_allowance_exhausted:'This test run has reached its configured model-request limit. No new request was sent. Review the run limit before continuing.',context_capacity:'Context is full. End this conversation, then use Start conversation for fresh context. Saved results remain available.',invalid_context:'Swift could not read the task history safely. Start a new conversation.',request_limit_reached:`${service} request allowance is exhausted for this bridge run. Review the authorized request limit before continuing.`,provider_rate_limited:`${service} is rate-limiting requests. Swift stopped after its bounded retry policy; wait before starting another request.`,provider_unavailable:`${service} is temporarily unavailable. Any completed task remains recorded; no automatic retry was made.`,provider_timeout:`${service} timed out. Any completed task remains recorded; no automatic retry was made.`,provider_incomplete_response:`${service} response stream ended early. Check task results before retrying.`,turn_deadline_exceeded:'Swift reached the response deadline. Any completed task remains recorded; no automatic retry was made.',provider_rejected:`${service} rejected this request. Check its configuration; Swift did not retry automatically.`,provider_error:`${service} request failed. Any completed task remains recorded; no automatic retry was made.`,english_only_asr:'Speech recognition could not produce a usable English transcript. No task was started.',english_only_output:'Swift blocked text outside its English-script policy. Please ask again in English; no speech was played.',english_only_tts:'Speech synthesis blocked text outside its English-script policy; no audio was generated.'};
             const timeoutBoundary={response_headers:'while waiting for response headers',first_sse_event:'before the first streamed event',first_text_delta:'after streaming began but before assistant text',sse_stream:'while receiving the response stream'}[message.data.error_boundary];
             const parseDetails={invalid_sse_json:'a malformed stream event',incomplete_sse:'a response stream that ended early',invalid_event_shape:'an unexpected response structure',event_not_object:'a non-object response event',provider_error_event:'an error event from the reasoning service',missing_choices:'a response event with no choices',choices_not_array:'an invalid choices list',unexpected_choice_count:'an unexpected number of choices',choice_not_object:'an invalid choice item',invalid_choice_index:'an unexpected choice index',invalid_delta_shape:'an invalid response segment',invalid_tool_call_shape:'an invalid task-call structure',invalid_tool_arguments:'invalid task arguments',invalid_tool_identity:'an invalid task-call identifier',unadvertised_tool_name:'an unsupported task name',duplicate_tool_identity:'a duplicate task-call identifier',invalid_finish_reason:'an incomplete model response'};
             const parseDetail=parseDetails[message.data.error_detail];
@@ -1099,7 +1141,20 @@
             // after newer audio; replaying the stop here loses its ACKs.
             if(hadPlayback){runtime.status='interrupted';voiceStatus();}
           }
+          if(message.data.event==='assistant_turn_stopped'&&!message.data.interrupted&&runtime.sources.size===0){
+            runtime.playbackPrimed=false;runtime.nextPlay=0;
+          }
           if(message.data.event==='turn_completed'&&Number.isInteger(eventTurn))runtime.completedTurnId=eventTurn;
+          if(message.data.event==='tool_completed'&&message.data.tool_name==='retrieve_source'){
+            const d=message.data.diagnostics||{},parts=[];
+            if(message.data.source_origin)parts.push(message.data.source_origin);
+            if(Number.isInteger(d.http_status))parts.push(`HTTP ${d.http_status}`);
+            if(d.failure_class)parts.push(String(d.stage||'retrieval')+': '+String(d.failure_class));
+            if(d.fallback_status)parts.push('extract fallback '+String(d.fallback_status));
+            if(d.extraction_method)parts.push(String(d.extraction_method));
+            runtime.lastResearchDiagnostic=parts.join(' · ')|| (message.data.ok?'retrieval succeeded':'retrieval failed; see bridge diagnostics');
+            if($('session-dialog').open)sessionDetails();
+          }
           if(eventTurn===runtime.turnId&&message.data.event==='tool_started'){runtime.toolActive=true;voiceStatus();}
           if(eventTurn===runtime.turnId&&message.data.event==='tool_completed'){
             runtime.toolActive=false;
@@ -1129,12 +1184,12 @@
           }catch(_){showNotice('Voice transcript update was invalid.','error');}
         }
         if(message.type==='error'){
-          const reason=String(message.reason||'runtime setup failed').slice(0,120);
+          const reason=String(message.reason||message.message||'runtime setup failed').slice(0,120);
           if(!runtime.connected){closeVoice();showNotice(`Swift bridge accepted the connection but could not start the voice runtime (${reason}). Check the bridge terminal and wake assets.`, 'error');}
           else showNotice('Voice bridge: '+reason,'error');
         }
       };
-      ws.onclose=()=>{if(runtime.ws===ws){const lost=runtime.connected||runtime.connecting;closeVoice();if(lost){showNotice('Voice bridge connection ended. Checking for recovery; the session will not resume and no command will be replayed.','error');void probeBridgeRecovery();}}};
+      ws.onclose=()=>{if(runtime.ws===ws){const lost=runtime.connected||runtime.connecting;closeVoice();if(lost){showNotice('Voice connection ended. Checking the bridge; previous audio will not replay.','error');void probeBridgeRecovery();}}};
       ws.send(JSON.stringify({type:'hello',rate:context.sampleRate,channels:1,conversation_mode:$('conversation-mode').value,aec_reported:typeof runtime.aec==='boolean'?runtime.aec:null}));
       runtime.startupTimer=setTimeout(()=>{if(runtime.ws===ws&&!runtime.connected){closeVoice();showNotice('Voice runtime did not become ready within 15 seconds. Check the bridge terminal for speech-service or wake-model startup errors.','error');}},15000);
       $('voice-interrupt').disabled=true;voiceStartupStep('Starting voice…');voiceStatus();
@@ -1148,11 +1203,20 @@
       if(event.target.matches('[data-light-color]')){const output=event.target.closest('[data-light-controls]')?.querySelector('[data-color-output]'),value=safeRgbColor(event.target.value)||'Choose a color';if(output&&output.textContent!==value)output.textContent=value;}
     });
     container.addEventListener('click',event=>{
+      const taskButton=event.target.closest('[data-task-command]');
+      if(taskButton){
+        if(runtime.ws?.readyState!==WebSocket.OPEN){showNotice('Connect the voice runtime to control this task.','error');return;}
+        const command=taskButton.dataset.taskCommand,payload={task_id:taskButton.dataset.taskId};
+        if(command==='approve'||command==='reject')Object.assign(payload,{approval_id:taskButton.dataset.approvalId,expected_revision:Number(taskButton.dataset.taskRevision),decision:command});
+        runtime.ws.send(JSON.stringify({type:'task_control',command:command==='reject'?'approve':command,payload}));
+        taskButton.disabled=true;return;
+      }
       const button=event.target.closest('[data-device-action]');
       if(button&&!button.disabled)sendDeviceAction(button);
     });
   }
   $('voice-interrupt').addEventListener('click',interruptVoice);
+  $('voice-arm').addEventListener('click',armVoice);
   $('voice-mute').addEventListener('click',()=>{if(!runtime.connected)return;runtime.micMuted=!runtime.micMuted;runtime.media?.getAudioTracks().forEach(track=>{track.enabled=!runtime.micMuted;});runtime.micLevel=0;runtime.micVisual=0;$('voice-mute').textContent=runtime.micMuted?'Unmute microphone':'Mute microphone';voiceStatus();});
   if(livePage)fetch('/api/voice/capabilities',{cache:'no-store',signal:AbortSignal.timeout(5000)}).then(response=>response.ok?response.json():null).then(capability=>{
     if(!capability?.available){runtime.music.capabilitiesError=true;runtime.music.connectRequested=false;renderMusic();return;}

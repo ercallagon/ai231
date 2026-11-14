@@ -91,29 +91,54 @@ The laptop's OpenVPN Connect session routes **laptop traffic only**. A Pi on the
 
 For a campus-connected Pi, use authorized DILNET and run the network gate below. Otherwise use an approved, device-appropriate VPN profile; do not assume the laptop's OpenVPN client supplies it.
 
-#### Manual VPN start and pre-bridge network gate
+#### One-time VPN credential setup and managed launch
 
-The verified deployment used OpenVPN 2.6.14 installed on Debian after user authorization. Installation is an operator prerequisite, not an application startup action. A personal SHARCHPC profile containing inline CA, certificate, private-key and TLS-auth material was kept only in the Pi user's private `~/.config/openvpn/` directory (0700 directory, 0600 profile). Never commit the profile, its hash, contents, credentials or connection logs. Other users must obtain their own approved profile and access permissions.
+The verified deployment used OpenVPN 2.6.14 on Debian after user authorization. ME3 does not install OpenVPN. Obtain your own approved client profile and network permission; never copy another user's profile. Protect a profile containing inline certificates/keys in the Pi user's `~/.config/openvpn/` directory (0700 directory, 0600 file). Never commit the profile, its hash, contents, credentials or connection logs.
 
-1. **Run on the Pi**, in a dedicated terminal. Replace the generic profile path with your private file; do not put VPN credentials in the command:
-
-   ```bash
-   sudo /usr/sbin/openvpn --auth-nocache --config /path/to/private-profile.ovpn
-   ```
-
-   Enter credentials at the interactive prompts; the password is masked. Wait for **`Initialization Sequence Completed`**. The verified session reached this state despite Windows-specific `register-dns` pushed-option warnings; that does not make authentication or routing errors safe to ignore.
-
-2. **Keep that foreground terminal open.** In another Pi terminal, from the ME3 root, run the existing network gate with the deployed private profile:
+1. **Run once on the Pi** to save VPN credentials using masked prompts. Enter the path to your private profile; username and password are never command arguments:
 
    ```bash
-   bash scripts/swift.sh network --backend-config var/cache/pi_live-backends.json
+   bash scripts/swift.sh vpn-setup --profile /path/to/private-profile.ovpn
    ```
 
-   `pi_live-backends.json` is an ignored local configuration, not a shipped credential/config file. If a new installation uses another profile name, supply that actual path. Require university TTS and Groq roles to report **`tcp_reachable`** before proceeding. The command makes one TCP connection per unique configured host/port with a 3 s timeout; it sends no API key, HTTP or inference request. It does not establish TLS, provider authentication, model health or spoken output.
+   On a fresh installation, the same optional one-time step can be requested as part of dependency setup:
 
-3. **Only after the gate passes**, start the loopback bridge with the matching explicit backend/credential/device configuration using the launch procedure below. Keep the VPN terminal running throughout university-service use. Mock bridge health remains separate from live-provider readiness; audio/GPIO actions still require their own controlled authorization.
+   ```bash
+   bash scripts/setup.sh --pi --vpn-profile /path/to/private-profile.ovpn
+   ```
 
-Ctrl+C in the VPN terminal, or reboot, disconnects the tunnel. Reconnect and rerun the gate before each demo session; the observed tunnel is currently stopped. This flow is interactive and uses `--auth-nocache`: no automatic credential persistence, systemd/boot service or VPN autostart is configured. Stop the ME3 processes you started before ending a real-service demo, then disconnect the VPN explicitly. Do not infer continued routing from an earlier successful check.
+   Omit `--vpn-profile` on later dependency updates: setup refuses to overwrite an existing auth/config file. No VPN connection starts during setup.
+
+   Credentials are saved to `~/.config/openvpn/me3-auth.txt` with mode0600; the launcher settings under `var/cache/` are also mode0600. **The auth file is plaintext protected by Unix permissions, not encrypted at rest.** Anyone with this Pi account or root access can read it. Use this only on a Pi with appropriate disk/user security. To revoke it, stop ME3 and remove the auth file and launcher config; rotate the VPN password if needed. Setup makes no connection.
+
+2. **Start ME3 with its managed VPN command** from the Pi project root, supplying the prepared model/device config and existing bridge arguments:
+
+   ```bash
+   bash scripts/swift.sh vpn \
+     --backend-config var/cache/pi_live-backends.json -- \
+     --secrets-file var/cache/demo-models.env \
+     --device-config var/cache/pi_demo-devices.json \
+     --onit-python "$PWD/var/cache/onit-venv/bin/python" --onit-primary \
+     --onit-reasoning-effort low --onit-max-output-tokens 2048 \
+     --onit-output-root "$PWD/var/scratch/demo-projects" --direct-clock \
+     --receipt-store var/cache/pi-demo-receipts.sqlite3 \
+     --kws-assets var/cache/wake/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 \
+     --keywords-file var/cache/wake/hey-swift-keywords.txt
+   ```
+
+   The wrapper waits up to 120 seconds for OpenVPN’s initialization message, then runs the existing configured TCP gate with a bounded timeout. It starts the loopback bridge only after that gate passes. The gate sends no key, HTTP or inference request; TCP reachability does not confirm TLS, provider authentication, model health or speech. Use a mock device profile for software-only trials; physical outputs need their separate authorization.
+
+The operator may still need to enter the OS sudo password at launch; saved VPN credentials do not grant root permission. No sudoers policy or root-password persistence is added. The managed launcher rejects an existing OpenVPN process and concurrent launches rather than modifying an unowned tunnel. It stops on authentication failure; there is no repeated-password loop. Profiles that daemonize, drop privilege, chroot or use a management interface require manual review instead of managed startup.
+
+3. Keep the launcher terminal open. Ctrl+C/SIGTERM/SIGHUP or bridge exit initiates cleanup of the owned bridge and VPN. If VPN disconnects during operation, the launcher stops its bridge. If routes fail or initialization expires, the bridge is not started. If OS permission expires or OpenVPN will not stop, cleanup failure is reported and the operator must inspect/disconnect that owned tunnel manually. A forced kill or lost power cannot provide graceful cleanup guarantees; a subsequent launch refuses an existing tunnel.
+
+This is opt-in for each ME3 run, not boot-time autostart. Reboot requires running the launcher again. OpenVPN uses `--auth-nocache`; ME3 retains the protected auth file for future starts. The earlier manually started tunnel is stopped. Do not start a second VPN tunnel alongside this command. Managed startup has offline unprivileged-process tests, **not yet a real Pi/OpenVPN qualification**. Until the attended Pi startup/stop check passes, retain the verified manual command as fallback:
+
+```bash
+sudo /usr/sbin/openvpn --auth-nocache --config /path/to/private-profile.ovpn
+```
+
+The saved file is for VPN credentials only; service API keys remain in the existing separate private model-key file. [OpenVPN2.6 documents](https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual/) the two-line auth-user-pass file and auth-nocache behavior.
 
 If neither is available, stop before claiming a network-ready Pi. An explicit private relay/tunnel through an authorized host is a separate setup decision, requires the Pi to reach that host, adds availability/latency dependencies, and is **not implemented or validated here**. The application deliberately rejects arbitrary plaintext/local forwarding endpoints; do not rewrite `10.153.60.233` to localhost or widen that protection silently. An alternative already-supported TTS provider is possible only with its own credentials, documented contract and authorization; no paid fallback is selected automatically. Do not expose university APIs publicly or share a VPN connection by enabling IP forwarding/NAT without network-owner permission.
 

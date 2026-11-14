@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "evidence_class": "offline deterministic providers through the native application",
+  "limitations": [
+    "Provider route choices are scripted; this does not measure Groq routing quality.",
+    "Speech MCP services use mocked inference; no acoustic behavior is qualified."
+  ],
+  "routing_scenarios": [
+    {
+      "id": "stable_direct",
+      "utterance": "What is two plus two?",
+      "expected_route": "direct_answer",
+      "expected_action": "Answer from stable knowledge without research tools."
+    },
+    {
+      "id": "election_ambiguity",
+      "utterance": "Who won the senatorial elections in the US?",
+      "expected_route": "clarify",
+      "expected_action": "Ask whether the user means the latest Senate election, a state election, or a presidential election."
+    },
+    {
+      "id": "election_followup",
+      "utterance": "I mean the most recent nationwide Senate election results.",
+      "expected_route": "research",
+      "expected_action": "Search and retrieve authoritative evidence, retain provenance, and answer with a scoped citation."
+    },
+    {
+      "id": "ecb_unextractable",
+      "utterance": "Who currently leads the European Central Bank?",
+      "expected_route": "research_unavailable",
+      "expected_action": "Report insufficient verified evidence instead of guessing or fabricating a citation."
+    },
+    {
+      "id": "conflicting_sources",
+      "utterance": "Did the reports agree on the policy date?",
+      "expected_route": "multi_source_research",
+      "expected_action": "Retrieve both reports, cite each supported claim, and state that the conflict remains unresolved."
+    },
+    {
+      "id": "historical_event",
+      "utterance": "What happened in the 2024 US presidential election?",
+      "expected_route": "direct_answer",
+      "expected_action": "Answer a clearly historical question without an unnecessary current-search chain."
+    },
+    {
+      "id": "greeting",
+      "utterance": "Hi, Swift.",
+      "expected_route": "direct_answer",
+      "expected_action": "Respond naturally without research, device actions, or task delegation."
+    }
+  ],
+  "scenario": {
+    "id": "persistent_portfolio_task_with_steering",
+    "turns": [
+      "Create a simple personal portfolio website with About, Projects, and Contact sections.",
+      "Change the theme to dark and add another project.",
+      "What is the task status?",
+      "What sections does the portfolio have?",
+      "Which file contains the dark theme?"
+    ],
+    "expected_routes": [
+      "start_task",
+      "steer_task",
+      "task_status",
+      "direct_contextual_answer",
+      "task_status"
+    ],
+    "expected_artifacts": [
+      "portfolio/index.html",
+      "portfolio/about.html",
+      "portfolio/projects.html",
+      "portfolio/contact.html",
+      "portfolio/assets/site.css"
+    ],
+    "expected_checks": [
+      "all local href and src references resolve",
+      "About, Projects, and Contact sections exist",
+      "dark theme CSS is present",
+      "the follow-up project appears in the existing projects page",
+      "LangGraph reports independent artifact readback verification"
+    ]
+  }
+}

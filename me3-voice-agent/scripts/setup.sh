@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# Project-local, locked install. No system services, credentials or devices touched.
+# Project-local locked install; optional masked VPN setup. No services/devices started.
 set -euo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 case "${1:-}" in
-  --help) echo 'Usage: bash scripts/setup.sh [--pi] [--dev]'; exit 0 ;;
+  --help) echo 'Usage: bash scripts/setup.sh [--pi] [--dev] [--vpn-profile PRIVATE_OVPN_PATH]'; exit 0 ;;
 esac
 extras=(--extra kws)
-for option in "$@"; do
-  case "$option" in
-    --pi) extras+=(--extra pi) ;;
-    --dev) extras+=(--extra dev) ;;
-    *) echo "Unknown option: $option" >&2; exit 2 ;;
+vpn_profile=
+while (($#)); do
+  case "$1" in
+    --pi) extras+=(--extra pi); shift ;;
+    --dev) extras+=(--extra dev); shift ;;
+    --vpn-profile)
+      [[ $# -ge 2 && -n "$2" ]] || { echo '--vpn-profile requires a private profile path' >&2; exit 2; }
+      vpn_profile="$2"; shift 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
 python_bin="${ME3_PYTHON:-python3}"
@@ -22,4 +26,7 @@ fi
 var/cache/venv/bin/python -m pip install --cache-dir var/cache/pip 'uv==0.13.4'
 UV_PROJECT_ENVIRONMENT=var/cache/venv UV_PYTHON_DOWNLOADS=never \
   var/cache/venv/bin/uv sync --locked "${extras[@]}"
+if [[ -n "$vpn_profile" ]]; then
+  var/cache/venv/bin/python -B scripts/configure_vpn.py --profile "$vpn_profile"
+fi
 echo 'Installed editable application. Next: bash scripts/swift.sh check'

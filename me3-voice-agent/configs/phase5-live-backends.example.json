@@ -1,0 +1,19 @@
+{
+  "asr": {
+    "backend": "mock"
+  },
+  "llm": {
+    "backend": "external",
+    "protocol": "chat-completions-v1",
+    "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+    "auth_env": "ME3_GROQ_API_KEY",
+    "model": "openai/gpt-oss-120b",
+    "allow_live": true,
+    "request_limit": 12,
+    "max_input_tokens": 32000,
+    "max_input_tokens_total": 64000
+  },
+  "tts": {
+    "backend": "mock"
+  }
+}

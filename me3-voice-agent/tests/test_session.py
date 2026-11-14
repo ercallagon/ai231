@@ -86,6 +86,10 @@ def test_clock_route_rejects_location_corrections_and_incomplete_requests():
         "value": "Asia/Manila",
     }
     assert direct_clock_query("What time is it in Japan?", 3).arguments["value"] == "Asia/Tokyo"
+    assert direct_clock_query("time is it in Manila", 4).arguments == {
+        "action": "get_time",
+        "value": "Asia/Manila",
+    }
     assert direct_clock_query("What time is it in London?", 4) is None
     for text in (
         "what time is it and set a timer",
@@ -189,6 +193,7 @@ async def test_light_percentage_followup_is_contextual_and_preserves_prior_actio
 def test_direct_light_commands_are_exact_and_reject_ambiguous_phrases():
     expected = {
         "Turn on the lights.": {"action": "light_on"},
+        "Can you turn on the light?": {"action": "light_on"},
         "Switch the lights off.": {"action": "light_off"},
         "Set the lights to blue.": {"action": "set_color", "value": "blue"},
         "Change light color to red.": {"action": "set_color", "value": "red"},
@@ -212,6 +217,31 @@ def test_direct_light_commands_are_exact_and_reject_ambiguous_phrases():
         "Set brightness to 150 percent.",
     ):
         assert direct_light_command(text, 4) is None
+
+
+def test_light_followup_uses_conversation_turn_receipt_and_supports_dim_and_color_corrections():
+    from me3_voice.fast_commands import direct_light_followup
+
+    history = [
+        {"role": "user", "content": "Can you turn on the light?", "turn_id": 1},
+        {
+            "role": "tool",
+            "turn_id": 1,
+            "tool_request": {
+                "name": "run_device_action",
+                "arguments": '{"action": "light_on"}',
+            },
+            "content": '{"ok": true, "result_status": "simulated"}',
+        },
+    ]
+    dim = direct_light_followup("dim it to thirty percent", 12, history, history_turn=2)
+    assert dim is not None
+    assert dim.arguments == {"action": "set_brightness", "value": "30"}
+    color = direct_light_followup("sorry you can set it to red", 13, history, history_turn=2)
+    assert color is not None
+    assert color.arguments == {"action": "set_color", "value": "red"}
+    history[-1]["content"] = '{"ok": false, "result_status": "failed"}'
+    assert direct_light_followup("dim it to thirty percent", 14, history, history_turn=2) is None
 
 
 async def test_exact_light_commands_use_shared_device_executor_without_reasoning():

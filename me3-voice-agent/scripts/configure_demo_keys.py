@@ -1,4 +1,4 @@
-"""Masked setup for the explicit Groq ASR/LLM + university TTS demo profile."""
+"""Masked setup for the explicit Groq Whisper/LLM + Qwen TTS demo profile."""
 
 import argparse
 import getpass
@@ -18,8 +18,10 @@ def main():
     with warnings.catch_warnings():
         warnings.simplefilter("error", getpass.GetPassWarning)
         values = {
-            "ME3_LLM_API_KEY": getpass.getpass("Groq API key for ASR and reasoning (hidden): "),
-            "ME3_TTS_API_KEY": getpass.getpass("University TTS API key (hidden): "),
+            "ME3_GROQ_API_KEY": getpass.getpass(
+                "Groq API key for Whisper ASR and reasoning (hidden): "
+            ),
+            "ME3_QWEN_TTS_API_KEY": getpass.getpass("Qwen TTS service credential (hidden): "),
         }
     write_secrets(args.output, values)
     print("Private demo credentials saved; no inference sent. Existing files were not overwritten.")

@@ -12,123 +12,24 @@ from pipecat.frames.frames import (
     InputAudioRawFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
-    TranscriptionFrame,
-    InterimTranscriptionFrame,
     TTSStartedFrame,
     TTSStoppedFrame,
-    TTSAudioRawFrame,
     InterruptionFrame,
     LLMTextFrame,
     ErrorFrame,
 )
-from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineWorker, PipelineParams
 from pipecat.workers.runner import WorkerRunner
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
-from pipecat.turns.user_start import VADUserTurnStartStrategy
-from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
-    SpeechTimeoutUserTurnStopStrategy,
-)
-from pipecat.services.settings import STTSettings, TTSSettings
-from pipecat.services.stt_service import STTService
-from pipecat.services.tts_service import TTSService
 from pipecat.services.groq.llm import GroqLLMService
 from pipecat.transports.base_output import BaseOutputTransport
 from pipecat.transports.base_transport import TransportParams
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from me3_voice.contracts import TurnKey, encode_pcm
+from me3_voice.contracts import TurnKey
 from me3_voice.speech import SpeechClient
-
-
-class McpSTT(STTService):
-    """Native adapter: append while speaking, finalize on fixture VAD stop.
-
-    VAD frames are injected as annotated fixture events; not acoustic inference.
-    This proves current 32ms contract only, not the proposed batched/events API.
-    """
-
-    def __init__(self, speech, events):
-        super().__init__(
-            sample_rate=16000, settings=STTSettings(model="project-mock", language=None)
-        )
-        self.speech, self.events = speech, events
-        self.operation = None
-        self.turn = 0
-        self.appended = asyncio.Event()
-
-    async def run_stt(self, audio):
-        if self.operation is None:
-            self.turn += 1
-            self.key = TurnKey(session_id="native-proof", turn_id=self.turn)
-            opened = await self.speech.open_operation("asr", "asr_open", self.key.model_dump())
-            self.operation, self.sequence = opened["operation_id"], 0
-        result = await self.speech.call(
-            "asr",
-            "asr_append",
-            {
-                "operation_id": self.operation,
-                "sequence": self.sequence,
-                "pcm_b64": encode_pcm(audio),
-            },
-        )
-        self.speech.check_key(self.key, result)
-        self.sequence += 1
-        if result.get("partial"):
-            self.events.append({"event": "asr_partial", "at": time.monotonic()})
-            yield InterimTranscriptionFrame(result["partial"]["text"], "user", "offline")
-        self.appended.set()
-
-    async def process_frame(self, frame, direction):
-        # Operation cancellation is resource cleanup, not another turn controller.
-        if isinstance(frame, VADUserStoppedSpeakingFrame) and self.operation:
-            identifier, self.operation = self.operation, None
-            try:
-                result = await self.speech.call("asr", "asr_finish", {"operation_id": identifier})
-                self.speech.check_key(self.key, result)
-                self.events.append(
-                    {"event": "asr_final", "text": result["text"], "at": time.monotonic()}
-                )
-                await self.push_frame(
-                    TranscriptionFrame(result["text"], "user", "offline", finalized=True)
-                )
-            finally:
-                await self.speech.release("asr", identifier)
-        await super().process_frame(frame, direction)
-
-    async def cleanup(self):
-        if self.operation:
-            await self.speech.release("asr", self.operation)
-            self.operation = None
-        await super().cleanup()
-
-
-class McpTTS(TTSService):
-    def __init__(self, speech, events):
-        super().__init__(
-            sample_rate=16000, settings=TTSSettings(model="project-mock", voice=None, language=None)
-        )
-        self.speech, self.events, self.operation = speech, events, 0
-
-    async def run_tts(self, text, context_id):
-        self.operation += 1
-        key = TurnKey(session_id="native-proof", turn_id=self.operation)
-        self.events.append({"event": "tts_start", "text": text, "at": time.monotonic()})
-        yield TTSStartedFrame()
-        stream = self.speech.synthesize(key, text)
-        try:
-            async for pcm in stream:
-                yield TTSAudioRawFrame(pcm, 16000, 1)
-        finally:
-            await stream.aclose()
-            self.events.append({"event": "tts_released", "at": time.monotonic()})
-        yield TTSStoppedFrame()
+from me3_voice.native_pipeline import make_native_pipeline
 
 
 class OfflineGroq(GroqLLMService):
@@ -237,6 +138,16 @@ async def until(predicate, timeout=8):
             await asyncio.sleep(0.01)
 
 
+def distribution(values):
+    values = sorted(values)
+    return {
+        "n": len(values),
+        "p50": values[len(values) // 2] if values else None,
+        "p95": values[min(len(values) - 1, int(len(values) * 0.95))] if values else None,
+        "max": max(values) if values else None,
+    }
+
+
 async def run_case(interrupt=False, background=False):
     events = []
     cpu_started = time.process_time()
@@ -244,12 +155,13 @@ async def run_case(interrupt=False, background=False):
     background_release = asyncio.Event()
     handler_cancelled = []
     lag = []
+    pipeline_ready_at = None
 
     async def heartbeat():
         while True:
             expected = time.monotonic() + 0.01
             await asyncio.sleep(0.01)
-            lag.append(max(0, time.monotonic() - expected) * 1000)
+            lag.append((time.monotonic(), max(0, time.monotonic() - expected) * 1000))
 
     heartbeat_task = asyncio.create_task(heartbeat())
     async with SpeechClient(
@@ -265,18 +177,7 @@ async def run_case(interrupt=False, background=False):
                 ]
             ),
         )
-        pair = LLMContextAggregatorPair(
-            context,
-            user_params=LLMUserAggregatorParams(
-                user_turn_strategies=UserTurnStrategies(
-                    start=[VADUserTurnStartStrategy()],
-                    stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.05)],
-                )
-            ),
-        )
-        stt = McpSTT(speech, events)
         llm = OfflineGroq(events, background=background)
-        tts = McpTTS(speech, events)
         rec = Recorder(events)
         output = MemoryOutput(events)
 
@@ -292,8 +193,18 @@ async def run_case(interrupt=False, background=False):
             await params.result_callback({"stored": "amber"})
 
         llm.register_function("remember", remember, cancel_on_interruption=not background)
+        parts = make_native_pipeline(
+            speech,
+            llm,
+            output,
+            context=context,
+            after_tts=[rec],
+            session_id="native-proof",
+            silence_seconds=0.05,
+            on_event=events.append,
+        )
         worker = PipelineWorker(
-            Pipeline([stt, pair.user(), llm, tts, rec, output, pair.assistant()]),
+            parts.pipeline,
             params=PipelineParams(audio_in_sample_rate=16000, audio_out_sample_rate=16000),
             enable_rtvi=False,
             enable_turn_tracking=False,
@@ -303,6 +214,8 @@ async def run_case(interrupt=False, background=False):
 
         @worker.event_handler("on_pipeline_started")
         async def started(*_):
+            nonlocal pipeline_ready_at
+            pipeline_ready_at = time.monotonic()
             ready.set()
 
         runner = WorkerRunner(handle_sigint=False)
@@ -310,10 +223,10 @@ async def run_case(interrupt=False, background=False):
         task = asyncio.create_task(runner.run())
 
         async def utterance():
-            stt.appended.clear()
+            before = sum(e["event"] == "asr_append" for e in events)
             await worker.queue_frame(VADUserStartedSpeakingFrame())
             await worker.queue_frame(InputAudioRawFrame(b"\x01\0" * 512, 16000, 1))
-            await asyncio.wait_for(stt.appended.wait(), 8)
+            await until(lambda: sum(e["event"] == "asr_append" for e in events) > before)
             await worker.queue_frame(VADUserStoppedSpeakingFrame())
 
         try:
@@ -385,12 +298,14 @@ async def run_case(interrupt=False, background=False):
                 "speech_protocols": speech.protocols,
                 "external_requests": 0,
                 "background_handler_cancelled": handler_cancelled,
-                "event_loop_lag_ms": {
-                    "n": len(lag),
-                    "p50": sorted(lag)[len(lag) // 2] if lag else None,
-                    "p95": sorted(lag)[min(len(lag) - 1, int(len(lag) * 0.95))] if lag else None,
-                    "max": max(lag) if lag else None,
-                },
+                "event_loop_lag_ms": distribution([value for _, value in lag]),
+                "loop_lag_startup_ms": distribution(
+                    [value for at, value in lag if at < pipeline_ready_at + 0.2]
+                ),
+                "loop_lag_steady_ms": distribution(
+                    [value for at, value in lag if at >= pipeline_ready_at + 0.2]
+                ),
+                "lag_window": "startup includes process/pipeline startup and first200ms after ready; steady follows",
                 "cpu_process_seconds": time.process_time() - cpu_started,
                 "resource_snapshot": resources(),
                 "limitations": "HPC software fixture; no acoustic or provider performance inference",
@@ -435,6 +350,13 @@ def resources():
                     values[key + "_kib"] = int(value.split()[0])
         except (PermissionError, FileNotFoundError):
             values["unavailable"] = True
+        try:
+            status = Path(f"/proc/{pid}/status").read_text()
+            values["threads"] = int(
+                next(line.split()[1] for line in status.splitlines() if line.startswith("Threads:"))
+            )
+        except (OSError, StopIteration, ValueError):
+            values["threads"] = None
         result.append(values)
     return result
 

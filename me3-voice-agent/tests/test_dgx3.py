@@ -27,6 +27,13 @@ from me3_voice.remote import (
 )
 
 
+@pytest.fixture(autouse=True)
+def isolated_provider_accounting(tmp_path, monkeypatch):
+    """Every local-provider fixture gets its own durable offline run identity."""
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "dgx3-offline-fixture-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "provider-requests.sqlite"))
+
+
 def test_dgx3_profile_is_explicit_final_asr_streaming_tts_and_narrow_http_exception():
     values = dgx3.profile()
     for role, spec in values.items():
@@ -73,6 +80,8 @@ def test_user_provided_qwen_reasoning_ports_are_allowed_but_other_routes_are_not
             allow_live=True,
             request_limit=1,
             allow_private_http=True,
+            max_input_tokens=32000,
+            max_input_tokens_total=64000,
         )
         assert spec.validate("llm", runnable=True).endpoint.endswith("/v1/chat/completions")
 
@@ -85,6 +94,8 @@ def test_user_provided_qwen_reasoning_ports_are_allowed_but_other_routes_are_not
         allow_live=True,
         request_limit=1,
         allow_private_http=True,
+        max_input_tokens=32000,
+        max_input_tokens_total=64000,
     )
     for endpoint in (
         "http://202.92.159.240:9000/v1/chat/completions",
@@ -170,8 +181,8 @@ def test_masked_setup_private_storage_non_tty_rejection_and_no_overwrite(
     monkeypatch.setattr(dgx3.getpass, "getpass", lambda prompt: next(entered))
     dgx3.configure(args)
     assert os.stat(args.secrets_file).st_mode & 0o777 == 0o600
-    assert credentials.load_secrets(args.secrets_file, {"ME3_ASR_API_KEY"}) == {
-        "ME3_ASR_API_KEY": "offline-asr-key"
+    assert credentials.load_secrets(args.secrets_file, {"ME3_QWEN_ASR_API_KEY"}) == {
+        "ME3_QWEN_ASR_API_KEY": "offline-asr-key"
     }
     output = capsys.readouterr().out
     assert "offline-asr-key" not in output and "offline-tts-key" not in output
@@ -255,12 +266,12 @@ async def test_qwen_audio_input_and_tts_sse_native_rate_conversion_on_local_peer
             replace(selected["asr"], endpoint=str(server.make_url("/asr"))),
             LiveTransport(
                 replace(selected["asr"], endpoint=str(server.make_url("/asr"))),
-                {"ME3_ASR_API_KEY": "offline-asr-key"},
+                {"ME3_QWEN_ASR_API_KEY": "offline-asr-key"},
             ),
         )
         tts_transport = LiveTransport(
             replace(selected["tts"], endpoint=str(server.make_url("/tts"))),
-            {"ME3_TTS_API_KEY": "offline-tts-key"},
+            {"ME3_QWEN_TTS_API_KEY": "offline-tts-key"},
         )
         tts_events = []
         synthesis = QwenTTS(
@@ -362,7 +373,7 @@ async def test_local_qwen_asr_reasoning_tts_route_preserves_user_assistant_roles
         tts_spec = replace(selected["tts"], endpoint=str(server.make_url("/tts")))
         llm_spec = BackendSpec(
             backend="external",
-            protocol="chat-completions-sse-v1",
+            protocol="chat-completions-v1",
             endpoint=str(server.make_url("/llm")),
             auth_env="ME3_LLM_API_KEY",
             model="Qwen/Qwen3.8-27B",
@@ -370,15 +381,19 @@ async def test_local_qwen_asr_reasoning_tts_route_preserves_user_assistant_roles
             timeout_seconds=1,
             allow_live=True,
             request_limit=1,
+            max_input_tokens=32000,
+            max_input_tokens_total=64000,
         )
-        asr = QwenAudioASR(asr_spec, LiveTransport(asr_spec, {"ME3_ASR_API_KEY": "offline-asr"}))
+        asr = QwenAudioASR(
+            asr_spec, LiveTransport(asr_spec, {"ME3_QWEN_ASR_API_KEY": "offline-asr"})
+        )
         llm = ChatReasoning(
             llm_spec,
             LiveTransport(llm_spec, {"ME3_LLM_API_KEY": "offline-llm"}),
         )
         tts_provider = QwenTTS(
             tts_spec,
-            LiveTransport(tts_spec, {"ME3_TTS_API_KEY": "offline-tts"}),
+            LiveTransport(tts_spec, {"ME3_QWEN_TTS_API_KEY": "offline-tts"}),
         )
         sink_chunks = []
 
@@ -450,7 +465,7 @@ async def test_qwen_tts_http_rejection_is_reported_as_tts_without_provider_body(
         spec = replace(selected, endpoint=str(server.make_url("/tts")))
         provider = QwenTTS(
             spec,
-            LiveTransport(spec, {"ME3_TTS_API_KEY": "offline-tts-key"}),
+            LiveTransport(spec, {"ME3_QWEN_TTS_API_KEY": "offline-tts-key"}),
         )
         try:
             with pytest.raises(ProviderError) as caught:
@@ -595,16 +610,16 @@ async def test_only_role_key_enters_mcp_environment_never_arguments(monkeypatch)
     async with speech.SpeechClient(
         backends=dgx3.profile(),
         credentials={
-            "ME3_ASR_API_KEY": "offline-asr-key",
-            "ME3_TTS_API_KEY": "offline-tts-key",
+            "ME3_QWEN_ASR_API_KEY": "offline-asr-key",
+            "ME3_QWEN_TTS_API_KEY": "offline-tts-key",
             "ME3_LLM_API_KEY": "never-forward-this",
         },
     ):
         pass
-    assert captured[0].env["ME3_ASR_API_KEY"] == "offline-asr-key"
-    assert "ME3_TTS_API_KEY" not in captured[0].env
-    assert captured[1].env["ME3_TTS_API_KEY"] == "offline-tts-key"
-    assert "ME3_ASR_API_KEY" not in captured[1].env
+    assert captured[0].env["ME3_QWEN_ASR_API_KEY"] == "offline-asr-key"
+    assert "ME3_QWEN_TTS_API_KEY" not in captured[0].env
+    assert captured[1].env["ME3_QWEN_TTS_API_KEY"] == "offline-tts-key"
+    assert "ME3_QWEN_ASR_API_KEY" not in captured[1].env
     assert all("ME3_LLM_API_KEY" not in parameters.env for parameters in captured)
     assert all(
         "offline-asr-key" not in str(parameters.args)

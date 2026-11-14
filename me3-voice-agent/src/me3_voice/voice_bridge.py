@@ -22,16 +22,13 @@ from aiohttp import WSMsgType, web
 
 from .audio import SileroVAD
 from .artifacts import output_path
-from .configuration import load_backends
+from .configuration import ConfigurationError, load_backends, load_runtime
 from .credentials import load_secrets
 from .dashboard import render, render_audio_probe, snapshot
-from .harness import PipecatAudioInput
 from .music import MusicController, MusicUnavailable
 from .readiness import build_wake
 from .recording_lab import add_recording_routes
 from .remote import LiveTransport, make_provider
-from .runtime import AudioApplication
-from .session import Session
 from .speech import SpeechClient
 from .telemetry import TraceJournal, summarize
 from .transcript import Transcript, TranscriptPublisher
@@ -179,15 +176,17 @@ def local_request(request):
 
 
 class BrowserSink:
-    """At most eight browser-scheduled chunks; confirm a segment after onended ACKs."""
+    """At most sixteen browser-scheduled chunks; confirm playback by ACK."""
 
     def __init__(self, ws):
         self.delivery = "sink_confirmed"
         self.ws = ws
         self.send_lock = asyncio.Lock()
-        self.pending = set()
+        self.pending = {}  # packet ID -> monotonic browser delivery time
+        self.pending_responses = {}  # packet ID -> response context ID
         self.changed = asyncio.Event()
         self.sequence = 0
+        self.generation = 0
         self.closed = False
 
     async def send(self, value):
@@ -195,27 +194,48 @@ class BrowserSink:
             await self.ws.send_json(value)
 
     async def __call__(self, pcm):
+        return await self.send_audio(pcm)
+
+    async def send_audio(self, pcm, response_id=None):
+        generation = self.generation
         if self.closed:
             raise RuntimeError("browser audio closed")
         async with asyncio.timeout(10):
-            while len(self.pending) >= 8:
+            while len(self.pending) >= 16:
                 self.changed.clear()
                 await self.changed.wait()
+        if generation != self.generation:
+            return False
         self.sequence += 1
         number = self.sequence
-        self.pending.add(number)
+        self.pending[number] = time.monotonic()
+        self.pending_responses[number] = response_id
         try:
             async with self.send_lock:
+                if generation != self.generation:
+                    self.pending.pop(number, None)
+                    self.pending_responses.pop(number, None)
+                    self.changed.set()
+                    return False
                 await self.ws.send_bytes(struct.pack("<I", number) + pcm)
+            return number
         except BaseException:
-            self.pending.discard(number)
+            self.pending.pop(number, None)
+            self.pending_responses.pop(number, None)
             self.changed.set()
             raise
 
     def acknowledge(self, number):
+        result = self.acknowledge_with_response(number)
+        return result[0] if result else None
+
+    def acknowledge_with_response(self, number):
         if type(number) is int and number in self.pending:
-            self.pending.remove(number)
+            elapsed = time.monotonic() - self.pending.pop(number)
+            response_id = self.pending_responses.pop(number, None)
             self.changed.set()
+            return elapsed, response_id
+        return None
 
     async def flush(self):
         async with asyncio.timeout(30):
@@ -224,7 +244,9 @@ class BrowserSink:
                 await self.changed.wait()
 
     async def stop(self):
+        self.generation += 1
         self.pending.clear()
+        self.pending_responses.clear()
         self.changed.set()
         if not self.ws.closed:
             with suppress(ConnectionError, RuntimeError):
@@ -478,6 +500,19 @@ async def publish_state(ws, session, transcript, sink, request_budget, journal=N
 
 
 def build_app(root, backends, credentials, wake_args, *, trace_dir=None):
+    options = getattr(wake_args, "runtime_options", None) or load_runtime(
+        getattr(wake_args, "runtime_config", None), engine=getattr(wake_args, "engine", None)
+    )
+    if options.engine == "native":
+        from .native_bridge import build_native_app
+
+        return build_native_app(
+            root, backends, credentials, wake_args, options, trace_dir=trace_dir
+        )
+    from .session import Session
+    from .runtime import AudioApplication
+    from .harness import PipecatAudioInput
+
     app = web.Application(client_max_size=16384)
     add_recording_routes(app, root)
     busy = False
@@ -561,6 +596,7 @@ def build_app(root, backends, credentials, wake_args, *, trace_dir=None):
         return web.json_response(
             {
                 "available": True,
+                "engine": "legacy",
                 "capture": "browser-pcm16",
                 "playback": "browser-acknowledged-pcm16",
                 "wake": "Hey Swift" if wake_args.kws_assets else "configured model",
@@ -1030,6 +1066,8 @@ def loopback_host(host):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--runtime-config", type=Path)
+    parser.add_argument("--engine", choices=["legacy", "native"], default=None)
     parser.add_argument("--backend-config", type=Path, help="omit for deterministic mock providers")
     parser.add_argument(
         "--device-config",
@@ -1041,6 +1079,11 @@ def main():
         "--llm-secrets-file",
         type=Path,
         help="private LLM credential file, overrides only the LLM key",
+    )
+    parser.add_argument(
+        "--research-secrets-file",
+        type=Path,
+        help="private research credential file; read only when native research is enabled",
     )
     parser.add_argument(
         "--onit-secrets-file",
@@ -1103,7 +1146,7 @@ def main():
         type=Path,
         help="opt-in private SQLite device/music dispatch ledger under var/cache; pending records are never replayed",
     )
-    parser.add_argument("--followup-seconds", type=float, default=7)
+    parser.add_argument("--followup-seconds", type=float, default=20)
     parser.add_argument("--answer-seconds", type=float, default=18)
     parser.add_argument("--extended-seconds", type=float, default=20)
     parser.add_argument("--kws-assets", type=Path, required=True)
@@ -1131,6 +1174,16 @@ def main():
         help="1..180 seconds retained per newly opted-in audio diagnostic stream",
     )
     args = parser.parse_args()
+    try:
+        args.runtime_options = load_runtime(args.runtime_config, engine=args.engine)
+    except ConfigurationError as exc:
+        parser.error(str(exc))
+    if args.research_secrets_file and not args.runtime_options.research.allow_live:
+        parser.error(
+            "--research-secrets-file requires live research to be enabled in runtime config"
+        )
+    if args.runtime_options.research.allow_live and args.runtime_options.engine != "native":
+        parser.error("live research credential support requires the native engine")
     if not 1 <= args.diagnostic_max_seconds <= 180:
         parser.error("--diagnostic-max-seconds must be 1..180")
     if args.device_config:
@@ -1240,6 +1293,20 @@ def main():
     )
     if args.llm_secrets_file:
         credentials.update(load_secrets(args.llm_secrets_file, {backends["llm"].auth_env}))
+    if args.research_secrets_file:
+        research_credentials = load_secrets(
+            args.research_secrets_file, {"ME3_RESEARCH_TAVILY_API_KEY"}
+        )
+        if "ME3_RESEARCH_TAVILY_API_KEY" not in research_credentials:
+            parser.error(
+                "live research is enabled but its key is absent from --research-secrets-file"
+            )
+        credentials.update(research_credentials)
+    if args.runtime_options.research.allow_live and not (
+        credentials.get("ME3_RESEARCH_TAVILY_API_KEY")
+        or os.environ.get("ME3_RESEARCH_TAVILY_API_KEY")
+    ):
+        parser.error("live research is enabled but the Tavily credential is unavailable")
     if args.onit_tavily_credits or args.onit_github_readonly:
         if not args.onit_secrets_file:
             parser.error("enabled Onit integrations require --onit-secrets-file")
@@ -1258,7 +1325,7 @@ def main():
         credentials.update(onit_credentials)
     for spec in backends.values():
         if spec.backend == "external":
-            LiveTransport(spec, credentials).authorize()
+            LiveTransport(spec, credentials).check_credentials()
     lock_path = Path("var/cache/voice-runtime.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)

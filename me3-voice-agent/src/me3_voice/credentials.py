@@ -8,9 +8,17 @@ from .configuration import ConfigurationError
 
 CACHE_ROOT = Path(__file__).resolve().parents[2] / "var/cache"
 NAMES = {
+    # Provider/model-qualified names are canonical for new profiles.
+    "ME3_DEEPGRAM_API_KEY",
+    "ME3_GROQ_API_KEY",
+    "ME3_QWEN_ASR_API_KEY",
+    "ME3_QWEN_LLM_API_KEY",
+    "ME3_QWEN_TTS_API_KEY",
+    # Generic role names remain accepted only for existing installations.
     "ME3_ASR_API_KEY",
     "ME3_TTS_API_KEY",
     "ME3_LLM_API_KEY",
+    "ME3_RESEARCH_TAVILY_API_KEY",
     "ME3_SPOTIFY_ACCESS_TOKEN",
     "ME3_SPOTIFY_REFRESH_TOKEN",
     "ME3_ONIT_GITHUB_TOKEN",

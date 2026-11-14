@@ -1,0 +1,8 @@
+{
+  "engine": "native",
+  "silence_seconds": 0.5,
+  "research": {
+    "allow_live": true,
+    "request_limit": 8
+  }
+}

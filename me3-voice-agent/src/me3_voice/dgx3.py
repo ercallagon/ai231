@@ -25,7 +25,7 @@ def profile(*, enable=False, request_limit=0, voice="ryan", language="English"):
             backend="external",
             protocol="vllm-qwen-audio-v1",
             endpoint=f"http://{HOST}:8000/v1/chat/completions",
-            auth_env="ME3_ASR_API_KEY",
+            auth_env="ME3_QWEN_ASR_API_KEY",
             model="Qwen/Qwen2-Audio-7B-Instruct",
             streaming=False,
             timeout_seconds=60,
@@ -37,7 +37,7 @@ def profile(*, enable=False, request_limit=0, voice="ryan", language="English"):
             backend="external",
             protocol="vllm-qwen-tts-v1",
             endpoint=f"http://{HOST}:8001/v1/audio/speech",
-            auth_env="ME3_TTS_API_KEY",
+            auth_env="ME3_QWEN_TTS_API_KEY",
             model="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
             timeout_seconds=60,
             allow_live=enable,
@@ -141,7 +141,10 @@ def configure(args):
         raise ConfigurationError("this terminal cannot mask key entry; nothing saved") from None
     if not valid_key(asr_key) or not valid_key(tts_key):
         raise ConfigurationError("invalid key input; nothing saved")
-    write_secrets(secrets, {"ME3_ASR_API_KEY": asr_key, "ME3_TTS_API_KEY": tts_key})
+    write_secrets(
+        secrets,
+        {"ME3_QWEN_ASR_API_KEY": asr_key, "ME3_QWEN_TTS_API_KEY": tts_key},
+    )
     try:
         fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as stream:

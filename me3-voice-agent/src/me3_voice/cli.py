@@ -5,18 +5,32 @@ import asyncio
 import importlib.metadata
 import json
 import platform
+import time
 from contextlib import AsyncExitStack
 from pathlib import Path
 
 from .artifacts import output_path
-from .configuration import ConfigurationError
+from .configuration import ConfigurationError, load_runtime
 from .providers import MockLLM
-from .session import Session
 from .speech import SpeechClient
 
 
-async def mock_conversation(utterances, trace=None, transcript=False, backends=None):
+async def mock_conversation(
+    utterances, trace=None, transcript=False, backends=None, *, runtime=None, transcripts=None
+):
+    if runtime and runtime.engine == "native":
+        from .native_app import run_native_utterances
+
+        return await run_native_utterances(
+            utterances,
+            backends=backends,
+            transcripts=transcripts,
+            options=runtime,
+            trace=trace,
+            transcript=transcript,
+        )
     from .harness import run_utterances
+    from .session import Session
 
     chunks = []
 
@@ -24,7 +38,7 @@ async def mock_conversation(utterances, trace=None, transcript=False, backends=N
         await asyncio.sleep(0)
         chunks.append(pcm)
 
-    async with SpeechClient(backends=backends) as speech:
+    async with SpeechClient(backends=backends, transcript=transcripts or "Mock question") as speech:
         protocols = dict(speech.protocols)
         async with AsyncExitStack() as stack:
             display = None
@@ -41,10 +55,14 @@ async def mock_conversation(utterances, trace=None, transcript=False, backends=N
                 llm_timeout=backends["llm"].timeout_seconds if backends else 5,
             ) as session:
                 session.activate()
+                ready_at = time.monotonic()
                 await run_utterances(session, utterances)
                 history = list(session.history)
         result = {
             "mode": "mock",
+            "engine": "legacy",
+            "application_ready_at": ready_at,
+            "turn_completion": "explicit-utterance boundary, no extra silence wait",
             "python": platform.python_version(),
             "protocols": protocols,
             "versions": {
@@ -58,7 +76,9 @@ async def mock_conversation(utterances, trace=None, transcript=False, backends=N
             "events": session.events,
             "limitations": "Mock ASR/LLM; TTS tones; memory sink; no acoustic timing",
         }
-    if len(history) != 2 * len(utterances) or len(chunks) != 4 * len(utterances):
+    if len([m for m in history if m.get("role") == "user"]) != len(utterances) or len(
+        chunks
+    ) < 4 * len(utterances):
         raise RuntimeError("mock follow-up integration did not complete")
     if trace:
         from .telemetry import write_trace
@@ -67,7 +87,9 @@ async def mock_conversation(utterances, trace=None, transcript=False, backends=N
     return result
 
 
-async def demo(output, trace=None, transcript=False, backends=None):
+async def demo(
+    output, trace=None, transcript=False, backends=None, *, runtime=None, transcripts=None
+):
     current = Path("var/results/ui-transcript.json").resolve()
     if transcript and (output.resolve() == current or trace and trace.resolve() == current):
         raise ValueError("transcript state must be separate from diagnostic/demo output")
@@ -80,6 +102,8 @@ async def demo(output, trace=None, transcript=False, backends=None):
         trace=trace,
         transcript=transcript,
         backends=backends,
+        runtime=runtime,
+        transcripts=transcripts,
     )
     output.write_text(json.dumps(result, indent=2) + "\n")
     print(
@@ -105,9 +129,15 @@ def replay(args):
         args.output.write_text(json.dumps(result, indent=2) + "\n")
         print(f"CPU frontend diagnostics only; no speech MCP/providers started; {args.output}")
         return
-    from .runtime import replay_application
+    options = load_runtime(args.runtime_config, engine=args.engine)
+    if options.engine == "native":
+        from .native_app import replay_native_application
 
-    result = asyncio.run(replay_application(args))
+        result = asyncio.run(replay_native_application(args, options))
+    else:
+        from .runtime import replay_application
+
+        result = asyncio.run(replay_application(args))
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(
         f"Application replay: {result['utterances']} utterances; actual CPU frontend / {result['agent_mode']}; {args.output}"
@@ -180,6 +210,9 @@ def main():
         default=output_path("var/results/016-background-task-ui/terminal-states"),
         help="fresh experiment output directory under var/",
     )
+    mock.add_argument("--runtime-config", type=Path)
+    mock.add_argument("--engine", choices=["legacy", "native"], default=None)
+    mock.add_argument("--mock-transcripts-json", help="explicit mock upstream script; no live ASR")
     mock.add_argument("--backend-config", type=Path)
     mock.add_argument("--output", type=output_path, default="var/results/mock-demo.json")
     mock.add_argument("--trace", type=output_path, help="exclusive JSONL diagnostic export")
@@ -191,6 +224,8 @@ def main():
     add_replay_options(recorded)
     recorded.set_defaults(output=output_path("var/results/application-replay.json"))
     recorded.add_argument("--wake-frame", type=int)
+    recorded.add_argument("--runtime-config", type=Path)
+    recorded.add_argument("--engine", choices=["legacy", "native"], default=None)
     recorded.add_argument("--backend-config", type=Path)
     recorded.add_argument(
         "--direct-clock",
@@ -254,6 +289,34 @@ def main():
     )
     args = parser.parse_args()
     try:
+        options = load_runtime(args.runtime_config, engine=args.engine)
+        if (
+            args.command == "demo"
+            and options.engine == "native"
+            and any(
+                (
+                    args.scenarios,
+                    args.background_task,
+                    args.background_ack_comparison,
+                    args.background_terminal_scenarios,
+                )
+            )
+        ):
+            parser.error("legacy scenario harness requires --engine legacy")
+        transcripts = None
+        if args.command == "demo" and args.mock_transcripts_json:
+            try:
+                transcripts = json.loads(args.mock_transcripts_json)
+            except json.JSONDecodeError:
+                parser.error("invalid mock transcript JSON")
+            if (
+                not isinstance(transcripts, list)
+                or not 1 <= len(transcripts) <= 100
+                or any(not isinstance(t, str) or len(t) > 500 for t in transcripts)
+            ):
+                parser.error("mock transcripts require1..100 bounded strings")
+        if args.command == "replay" and options.engine == "native" and not args.mock_conversation:
+            parser.error("native replay requires --conversation")
         if args.trace and args.trace.resolve() == args.output.resolve():
             parser.error("report and trace must use distinct paths")
         if args.command == "demo":
@@ -351,7 +414,16 @@ def main():
                 if not all(case["passed"] for case in result["scenarios"]):
                     raise SystemExit(1)
             else:
-                asyncio.run(demo(args.output, args.trace, args.transcript, backends))
+                asyncio.run(
+                    demo(
+                        args.output,
+                        args.trace,
+                        args.transcript,
+                        backends,
+                        runtime=options,
+                        transcripts=transcripts,
+                    )
+                )
         else:
             if args.turn_policy != "silence" and not args.mock_conversation:
                 parser.error("turn-policy requires --conversation")

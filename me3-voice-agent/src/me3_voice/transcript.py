@@ -132,8 +132,10 @@ def normalize_transcript(data):
                 raise ValueError("invalid assistant generation state")
             if row["delivery"] in {"asr_partial", "asr_final"} or not text.startswith(confirmed):
                 raise ValueError("invalid assistant delivery prefix")
-            if row["status"] in {"final", "interrupted", "error"} and text != confirmed:
-                raise ValueError("terminal assistant text must exclude unconfirmed output")
+            if row["status"] == "final" and text != confirmed:
+                raise ValueError("completed assistant text must be playback-confirmed")
+            if row["status"] in {"interrupted", "error"} and not text.startswith(confirmed):
+                raise ValueError("confirmed assistant text must be a prefix of generated text")
             if row["status"] == "final" and row["delivery"] == "generated":
                 raise ValueError("generated text is not confirmed delivery")
         normalized = {
@@ -149,6 +151,56 @@ def normalize_transcript(data):
             normalized["generation_complete"] = row.get(
                 "generation_complete", row["status"] == "final"
             )
+            response = row.get("response")
+            if response is not None:
+                if (
+                    not isinstance(response, dict)
+                    or not isinstance(response.get("response_id"), str)
+                    or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", response["response_id"])
+                    or response.get("state")
+                    not in {"pending", "completed", "interrupted", "superseded", "failed"}
+                    or response.get("generation")
+                    not in {"streaming", "completed", "interrupted", "failed", "unknown"}
+                    or response.get("tts")
+                    not in {"pending", "submitted", "completed", "interrupted", "failed", "unknown"}
+                    or response.get("playback")
+                    not in {
+                        "pending",
+                        "queued",
+                        "browser_acknowledged",
+                        "partially_acknowledged",
+                        "not_acknowledged",
+                        "unknown",
+                    }
+                    or response.get("archive") not in {"pending", "included"}
+                    or type(response.get("packets")) is not int
+                    or type(response.get("acks")) is not int
+                    or not 0 <= response["acks"] <= response["packets"]
+                    or response.get("superseded_by_turn_id") is not None
+                    and (
+                        type(response["superseded_by_turn_id"]) is not int
+                        or response["superseded_by_turn_id"] < 1
+                    )
+                    or not isinstance(response.get("segments"), list)
+                    or len(response["segments"]) > 50
+                ):
+                    raise ValueError("invalid assistant response lifecycle")
+                for segment in response["segments"]:
+                    if (
+                        not isinstance(segment, dict)
+                        or type(segment.get("segment_id")) is not int
+                        or type(segment.get("characters")) is not int
+                        or segment.get("state")
+                        not in {"submitted", "completed", "cancelled", "failed", "unknown"}
+                        or segment.get("text_sha256") is not None
+                        and not re.fullmatch(r"[a-f0-9]{16}", segment["text_sha256"])
+                    ):
+                        raise ValueError("invalid assistant response segment")
+                if response.get("interruption_reason") is not None and not isinstance(
+                    response["interruption_reason"], str
+                ):
+                    raise ValueError("invalid assistant interruption reason")
+                normalized["response"] = response
         messages.append(normalized)
     if sum(len(m["text"]) + len(m["confirmed_text"]) for m in messages) > MAX_CHARACTERS:
         raise ValueError("transcript exceeds total text bounds")

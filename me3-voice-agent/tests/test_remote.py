@@ -1,17 +1,60 @@
 """Offline contract peers, not live provider/quality or acoustic verification."""
 
 import asyncio
+import base64
+import json
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from pathlib import Path
+import sqlite3
+import time
 
 import pytest
 
 from me3_voice.configuration import BackendSpec, ConfigurationError
-from me3_voice.remote import ChatReasoning, DeepgramASR, DeepgramTTS, LiveTransport, ProviderError
-from me3_voice.providers import MockLLM
+from me3_voice.remote import (
+    ChatReasoning,
+    DeepgramASR,
+    DeepgramASRStream,
+    DeepgramTTS,
+    LiveTransport,
+    ProviderError,
+    request_ledger_summary,
+)
+from me3_voice.providers import MockLLM, MockTTS
 from me3_voice.playback import MemorySink
 from me3_voice.session import Session
 from me3_voice.servers import SpeechService
 from me3_voice.contracts import TurnKey, encode_pcm
+
+
+async def test_asr_pending_connection_flush_timeout_preserves_failure_stage():
+    from types import SimpleNamespace
+
+    stream = DeepgramASRStream(
+        SimpleNamespace(spec=SimpleNamespace(timeout_seconds=0.01, max_audio_seconds=30))
+    )
+
+    async def started():
+        return None
+
+    stream.start = started
+    stream.outbound.put_nowait(b"\1\0")
+    stream.outbound_bytes = 2
+    with pytest.raises(ProviderError) as caught:
+        await stream._flush_outbound()
+    assert (caught.value.code, caught.value.error_stage) == ("provider_timeout", "asr_open")
+    stream.connection_ready_at = time.monotonic()
+    with pytest.raises(ProviderError) as caught:
+        await stream._flush_outbound()
+    assert (caught.value.code, caught.value.error_stage) == ("provider_timeout", "asr_flush")
+
+
+@pytest.fixture(autouse=True)
+def isolated_request_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "provider-requests.sqlite"))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "pytest-run-0001")
 
 
 def spec(role):
@@ -27,7 +70,1003 @@ def spec(role):
         else "wss://example.invalid/" + role,
         auth_env="ME3_TEST_ONLY_KEY",
         model="documented-test-model",
+        # Transport tests exercise timeouts/tool lifecycle, not campaign
+        # exhaustion. Dedicated ledger tests below use small explicit caps.
+        max_input_tokens=32000 if role == "llm" else 0,
+        max_input_tokens_total=64000 if role == "llm" else 0,
     )
+
+
+def _ledger_transport(path, limit=1):
+    import os
+
+    os.environ["ME3_REQUEST_LEDGER"] = str(path)
+    return LiveTransport(
+        replace(spec("llm"), allow_live=True, request_limit=limit),
+        {"ME3_TEST_ONLY_KEY": "offline-key"},
+    )
+
+
+def authorize_chat(transport, *, estimate=1, per_request=100, total=500):
+    return transport.authorize(
+        input_tokens=estimate,
+        input_token_limit=per_request,
+        input_tokens_total_limit=total,
+    )
+
+
+def test_durable_request_reservation_and_outcome_survive_restart(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    transport = _ledger_transport(path)
+    _, request_id = authorize_chat(transport)
+    transport.finish_request(request_id, "success")
+    with sqlite3.connect(path) as db:
+        row = db.execute(
+            "SELECT provider, model, status, error_code FROM provider_requests"
+        ).fetchone()
+    assert row == ("example.invalid", "documented-test-model", "success", None)
+    restarted = _ledger_transport(path)
+    with pytest.raises(ProviderError, match="durable provider request allowance exhausted"):
+        authorize_chat(restarted)
+
+
+def test_concurrent_durable_reservations_enforce_single_slot(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    transports = [_ledger_transport(path) for _ in range(2)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda t: _reserve_result(t), transports))
+    assert sorted(results) == ["rejected", "reserved"]
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM provider_requests").fetchone()[0] == 1
+
+
+def test_concurrent_input_token_reservations_are_atomic(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    transports = [_ledger_transport(path, limit=5) for _ in range(2)]
+
+    def reserve(transport):
+        try:
+            transport.authorize(
+                input_tokens=400,
+                input_token_limit=500,
+                input_tokens_total_limit=500,
+            )
+            return "reserved"
+        except ProviderError as exc:
+            return exc.code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(reserve, transports))
+    assert sorted(results) == ["input_token_budget_exhausted", "reserved"]
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT COUNT(*),SUM(input_tokens_reserved) FROM provider_requests"
+        ).fetchone() == (1, 400)
+
+
+def test_unknown_outcome_keeps_aggregate_input_tokens_consumed_after_restart(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    transport = _ledger_transport(path, limit=5)
+    _, request_id = authorize_chat(transport, estimate=300, per_request=400, total=500)
+    # Leave the dispatched row unknown, as if the process died before a
+    # terminal update. A restart must retain the input-token reservation.
+    restarted = _ledger_transport(path, limit=5)
+    with pytest.raises(ProviderError) as exhausted:
+        authorize_chat(restarted, estimate=201, per_request=400, total=500)
+    assert exhausted.value.code == "input_token_budget_exhausted"
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT status,input_tokens_reserved FROM provider_requests WHERE id=?", (request_id,)
+        ).fetchone() == ("dispatched_unknown", 300)
+
+
+def _reserve_result(transport):
+    try:
+        authorize_chat(transport)
+        return "reserved"
+    except ProviderError:
+        return "rejected"
+
+
+def test_dispatched_unknown_crash_row_remains_consumed(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    transport = _ledger_transport(path)
+    _, request_id = authorize_chat(transport)
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT status FROM provider_requests WHERE id=?", (request_id,)
+        ).fetchone() == ("dispatched_unknown",)
+    with pytest.raises(ProviderError):
+        authorize_chat(_ledger_transport(path))
+
+
+@pytest.mark.parametrize(
+    "legacy_columns",
+    [
+        None,
+        "id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, "
+        "protocol TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, "
+        "created REAL NOT NULL, updated REAL NOT NULL",
+        "id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, "
+        "status TEXT NOT NULL, created REAL NOT NULL",
+    ],
+    ids=["fresh", "phase7-run-id-appended", "older-legacy"],
+)
+def test_authorize_uses_named_columns_for_fresh_and_migrated_ledgers(
+    tmp_path, monkeypatch, legacy_columns
+):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    if legacy_columns:
+        with sqlite3.connect(path) as db:
+            db.execute(f"CREATE TABLE provider_requests ({legacy_columns})")
+            if "protocol" in legacy_columns:
+                db.execute(
+                    "INSERT INTO provider_requests "
+                    "(id,provider,model,protocol,status,error_code,created,updated) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (
+                        "historical",
+                        "old.example",
+                        "old-model",
+                        "old-protocol",
+                        "success",
+                        None,
+                        1.0,
+                        1.0,
+                    ),
+                )
+            else:
+                db.execute(
+                    "INSERT INTO provider_requests (id,provider,model,status,created) "
+                    "VALUES(?,?,?,?,?)",
+                    ("historical", "old.example", "old-model", "success", 1.0),
+                )
+
+    transport = _ledger_transport(path)
+    _, request_id = authorize_chat(transport)
+    with sqlite3.connect(path) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(provider_requests)")}
+        assert {
+            "id",
+            "run_id",
+            "provider",
+            "model",
+            "protocol",
+            "status",
+            "error_code",
+            "created",
+            "updated",
+        } <= columns
+        reserved = db.execute(
+            "SELECT run_id,provider,model,protocol,status,error_code,created,updated "
+            "FROM provider_requests WHERE id=?",
+            (request_id,),
+        ).fetchone()
+        assert reserved[:6] == (
+            "pytest-run-0001",
+            "example.invalid",
+            "documented-test-model",
+            "chat-completions-v1",
+            "dispatched_unknown",
+            None,
+        )
+        assert reserved[6] > 0 and reserved[7] == reserved[6]
+        expected_rows = 2 if legacy_columns else 1
+        assert db.execute("SELECT COUNT(*) FROM provider_requests").fetchone()[0] == expected_rows
+        if legacy_columns:
+            assert db.execute(
+                "SELECT status FROM provider_requests WHERE id='historical'"
+            ).fetchone() == ("success",)
+
+    # A reservation consumes the run/provider/model/protocol allowance even
+    # before completion, and another transport cannot authorize a duplicate.
+    with pytest.raises(ProviderError, match="durable provider request allowance exhausted"):
+        authorize_chat(_ledger_transport(path))
+
+
+def test_terminal_and_unknown_reservations_remain_consumed_on_migrated_ledger(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "legacy.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE provider_requests (id TEXT PRIMARY KEY, provider TEXT NOT NULL, "
+            "model TEXT NOT NULL, protocol TEXT NOT NULL, status TEXT NOT NULL, "
+            "error_code TEXT, created REAL NOT NULL, updated REAL NOT NULL)"
+        )
+        db.execute(
+            "INSERT INTO provider_requests "
+            "(id,provider,model,protocol,status,error_code,created,updated) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (
+                "legacy-success",
+                "example.invalid",
+                "documented-test-model",
+                "chat-completions-v1",
+                "success",
+                None,
+                1.0,
+                1.0,
+            ),
+        )
+    transport = _ledger_transport(path, limit=3)
+    _, failed_id = authorize_chat(transport)
+    transport.finish_request(failed_id, "failure", "provider_timeout")
+    _, unknown_id = authorize_chat(transport)
+    # A crash after dispatch leaves the reservation consumed as unknown.
+    restarted = _ledger_transport(path, limit=3)
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT status,error_code FROM provider_requests WHERE id=?", (failed_id,)
+        ).fetchone() == ("failure", "provider_timeout")
+        assert db.execute(
+            "SELECT status,error_code FROM provider_requests WHERE id=?", (unknown_id,)
+        ).fetchone() == ("dispatched_unknown", None)
+    _, success_id = authorize_chat(restarted)
+    restarted.finish_request(success_id, "success")
+    with sqlite3.connect(path) as db:
+        assert db.execute(
+            "SELECT status FROM provider_requests WHERE id=?", (success_id,)
+        ).fetchone() == ("success",)
+    with pytest.raises(ProviderError, match="durable provider request allowance exhausted"):
+        authorize_chat(_ledger_transport(path, limit=3))
+
+
+async def test_asr_append_uses_real_ledger_authorization_with_mocked_provider_socket(
+    tmp_path, monkeypatch
+):
+    """Exercise SpeechService ASR append through LiveTransport's real SQLite SQL."""
+    from me3_voice.remote import DeepgramASR
+    from me3_voice.servers import SpeechService
+    from me3_voice.providers import MockTTS
+    from aiohttp import WSMsgType
+    from aiohttp.http_websocket import WSMessage
+
+    path = tmp_path / "migrated.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "asr-mcp-test-01")
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "CREATE TABLE provider_requests (id TEXT PRIMARY KEY, provider TEXT NOT NULL, "
+            "model TEXT NOT NULL, protocol TEXT NOT NULL, status TEXT NOT NULL, "
+            "error_code TEXT, created REAL NOT NULL, updated REAL NOT NULL)"
+        )
+
+    spec_asr = replace(spec("asr"), allow_live=True, request_limit=1)
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+
+    class MockPeer:
+        def __init__(self):
+            self.messages = asyncio.Queue()
+
+        async def send_bytes(self, _pcm):
+            pass
+
+        async def send_json(self, message):
+            if message.get("type") == "CloseStream":
+                await self.messages.put(
+                    WSMessage(
+                        WSMsgType.TEXT,
+                        json.dumps(
+                            {
+                                "type": "Results",
+                                "is_final": True,
+                                "channel": {
+                                    "alternatives": [{"transcript": "mocked provider transcript"}]
+                                },
+                            }
+                        ),
+                        None,
+                    )
+                )
+                await self.messages.put(
+                    WSMessage(
+                        WSMsgType.TEXT,
+                        json.dumps({"type": "Metadata"}),
+                        None,
+                    )
+                )
+
+        async def receive(self):
+            return await self.messages.get()
+
+    peer = MockPeer()
+
+    class SocketContext:
+        async def __aenter__(self):
+            return peer
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class MockSession:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: MockSession())
+    service = SpeechService(DeepgramASR(spec_asr, transport), MockTTS())
+    try:
+        opened = await service.open("session-ledger-01", 1)
+        appended = await service.append(
+            opened["operation_id"], 0, base64.b64encode(b"\x01\x00" * 512).decode("ascii")
+        )
+        assert appended["next_sequence"] == 1
+        final = await service.finish(opened["operation_id"])
+        assert final["text"] == "mocked provider transcript"
+    finally:
+        await service.close()
+
+    with sqlite3.connect(path) as db:
+        rows = db.execute(
+            "SELECT run_id,provider,model,protocol,status,error_code,created,updated "
+            "FROM provider_requests"
+        ).fetchall()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row[:6] == (
+        "asr-mcp-test-01",
+        "example.invalid",
+        "documented-test-model",
+        "deepgram-listen-v1",
+        "success",
+        None,
+    )
+    assert row[6] > 0 and row[7] >= row[6]
+    with pytest.raises(ProviderError, match="durable provider request allowance exhausted"):
+        transport.authorize()
+
+
+async def test_labeled_nine_second_wav_uses_production_deepgram_asr_service_with_delayed_socket(
+    tmp_path, monkeypatch
+):
+    import wave
+    from aiohttp import WSMsgType
+    from aiohttp.http_websocket import WSMessage
+
+    from me3_voice.contracts import FRAME_BYTES
+
+    recording = Path("var/results/native-live-smoke/boiling-question-16k.wav")
+    assert recording.is_file()
+    with wave.open(str(recording), "rb") as wav:
+        pcm = wav.readframes(wav.getnframes())
+        assert wav.getframerate() == 16000 and wav.getnchannels() == 1
+        assert wav.getsampwidth() == 2 and len(pcm) == 9 * 16000 * 2
+
+    path = tmp_path / "deepgram-service.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "labeled-asr-service-01")
+    spec_asr = replace(spec("asr"), allow_live=True, request_limit=1, timeout_seconds=20)
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+
+    class Peer:
+        def __init__(self):
+            self.messages = asyncio.Queue()
+            self.writes = []
+
+        async def send_bytes(self, value):
+            index = len(self.writes)
+            await asyncio.sleep({7: 0.18, 31: 0.24, 68: 0.16}.get(index, 0.001))
+            self.writes.append(value)
+
+        async def send_json(self, value):
+            if value.get("type") == "CloseStream":
+                await asyncio.sleep(0.025)  # Delayed provider finalization response.
+                await self.messages.put(
+                    WSMessage(
+                        WSMsgType.TEXT,
+                        json.dumps(
+                            {
+                                "type": "Results",
+                                "is_final": True,
+                                "channel": {
+                                    "alternatives": [
+                                        {"transcript": "What is the boiling point of water?"}
+                                    ]
+                                },
+                            }
+                        ),
+                        None,
+                    )
+                )
+                await self.messages.put(
+                    WSMessage(WSMsgType.TEXT, json.dumps({"type": "Metadata"}), None)
+                )
+
+        async def receive(self):
+            return await self.messages.get()
+
+    peer = Peer()
+
+    class SocketContext:
+        async def __aenter__(self):
+            return peer
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Session:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: Session())
+    service = SpeechService(DeepgramASR(spec_asr, transport), MockTTS())
+    opened = await service.open("labeled-asr-service", 1)
+    sequence = 0
+    for offset in range(0, len(pcm), FRAME_BYTES):
+        frame = pcm[offset : offset + FRAME_BYTES]
+        if len(frame) % 2:
+            frame = frame[:-1]
+        await service.append(opened["operation_id"], sequence, encode_pcm(frame))
+        sequence += 1
+        # Preserve live replay cadence. Sending nine seconds of audio as a
+        # burst would correctly exceed the two-second outbound bound.
+        await asyncio.sleep(0.032)
+    final = await service.finish(opened["operation_id"])
+    assert final["final"] and final["text"] == "What is the boiling point of water?"
+    assert b"".join(peer.writes) == pcm
+    assert len(peer.writes) == sequence
+    with sqlite3.connect(path) as db:
+        rows = db.execute("SELECT status,error_code FROM provider_requests").fetchall()
+    assert rows == [("success", None)]
+    with pytest.raises(ProviderError, match="durable provider request allowance exhausted"):
+        transport.authorize()
+    await service.close()
+
+
+@pytest.mark.parametrize("connect_delay", [0.5, 0.9, 1.2, 1.5, 2.5, 4.5])
+async def test_deepgram_connection_starts_on_open_and_buffers_audio_once_in_order(
+    tmp_path, monkeypatch, connect_delay
+):
+    from aiohttp import WSMsgType
+    from aiohttp.http_websocket import WSMessage
+
+    path = tmp_path / f"connect-{int(connect_delay * 1000)}.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", f"connect-{int(connect_delay * 1000)}")
+    spec_asr = replace(spec("asr"), allow_live=True, request_limit=1)
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+
+    class Peer:
+        def __init__(self):
+            self.messages = asyncio.Queue()
+            self.writes = []
+
+        async def send_bytes(self, pcm):
+            self.writes.append(pcm)
+
+        async def send_json(self, value):
+            self.writes.append(value)
+            if value.get("type") == "CloseStream":
+                await self.messages.put(
+                    WSMessage(
+                        WSMsgType.TEXT,
+                        json.dumps(
+                            {
+                                "type": "Results",
+                                "is_final": True,
+                                "channel": {"alternatives": [{"transcript": "recognized"}]},
+                            }
+                        ),
+                        None,
+                    )
+                )
+                await self.messages.put(
+                    WSMessage(WSMsgType.TEXT, json.dumps({"type": "Metadata"}), None)
+                )
+
+        async def receive(self):
+            return await self.messages.get()
+
+    peer = Peer()
+
+    class SocketContext:
+        async def __aenter__(self):
+            await asyncio.sleep(connect_delay)
+            return peer
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Session:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: Session())
+    service = SpeechService(DeepgramASR(spec_asr, transport), MockTTS())
+    opened_at = asyncio.get_running_loop().time()
+    opened = await service.open("startup", 1)
+    assert asyncio.get_running_loop().time() - opened_at < 0.05
+    stream = service.operations[opened["operation_id"]].asr_stream
+    await asyncio.sleep(0)
+    assert stream.connect_task is not None and not stream.connect_task.done()
+    assert stream.connection_started_at is not None
+
+    # Pace through readiness even for the 2.5 s delay, then check final flush.
+    frame_count = max(50, int(connect_delay / 0.032) + 6)
+    frames = [bytes([i % 255 + 1, 0]) * 512 for i in range(frame_count)]
+    first_append_seconds = None
+    first_diagnostics = None
+    for sequence, frame in enumerate(frames):
+        append_started = asyncio.get_running_loop().time()
+        row = await service.append(opened["operation_id"], sequence, encode_pcm(frame))
+        if sequence == 0:
+            first_append_seconds = asyncio.get_running_loop().time() - append_started
+            first_diagnostics = row["provider_diagnostics"]
+        assert row["next_sequence"] == sequence + 1
+        if sequence < len(frames) - 2:
+            await asyncio.sleep(0.032)
+    assert first_append_seconds < 0.05
+    assert first_diagnostics["connection_state"] == "connecting"
+    assert first_diagnostics["first_append_monotonic"] is not None
+    assert first_diagnostics["accepted_audio_bytes"] == len(frames[0])
+    assert stream.peak_outbound_bytes <= stream.OUTBOUND_BUFFER_BYTES
+    assert stream.peak_outbound_bytes > 0
+    assert stream.connection_ready_at is not None
+    ready_delay = stream.connection_ready_at - stream.connection_started_at
+    # Includes local process scheduling and SQLite reservation time around the
+    # controlled handshake; the fake socket delay itself is exact.
+    assert connect_delay <= ready_delay <= connect_delay + 0.3
+    assert stream.first_send_started_at >= stream.connection_ready_at
+    (tmp_path / "connection-timing.json").write_text(
+        json.dumps(
+            {
+                "connection_started_monotonic": stream.connection_started_at,
+                "connection_ready_monotonic": stream.connection_ready_at,
+                "connection_ready_delay_ms": round(ready_delay * 1000, 3),
+                "first_append_wait_ms": round(first_append_seconds * 1000, 3),
+                "accepted_bytes": stream.accepted_bytes,
+                "sent_bytes": stream.sent_bytes,
+                "peak_queued_bytes": stream.peak_outbound_bytes,
+                "queue_limit_bytes": stream.OUTBOUND_BUFFER_BYTES,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    final = await service.finish(opened["operation_id"])
+    assert final["text"] == "recognized"
+    assert b"".join(value for value in peer.writes if isinstance(value, bytes)) == b"".join(frames)
+    assert stream.accepted_bytes == stream.sent_bytes == sum(map(len, frames))
+    assert stream.outbound_bytes == 0
+    final_diag = final["provider_diagnostics"]
+    assert final_diag["connection_state"] == "closed"
+    assert (
+        final_diag["connection_attempt_monotonic"]
+        <= final_diag["websocket_handshake_monotonic"]
+        <= final_diag["connection_ready_monotonic"]
+        <= final_diag["first_send_completed_monotonic"]
+        <= final_diag["connection_closed_monotonic"]
+    )
+    assert final_diag["accepted_audio_bytes"] == final_diag["sent_audio_bytes"]
+    assert final_diag["outbound_flush_completed_monotonic"] is not None
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT status,error_code FROM provider_requests").fetchall() == [
+            ("success", None)
+        ]
+    await service.close()
+
+
+async def test_deepgram_connection_timeout_is_explicit_and_consumes_one_slot(tmp_path, monkeypatch):
+    path = tmp_path / "connect-timeout.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "connect-timeout")
+    spec_asr = replace(spec("asr"), allow_live=True, request_limit=1)
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+
+    class SocketContext:
+        async def __aenter__(self):
+            await asyncio.sleep(0.01)
+            raise ProviderError(
+                "speech connection timed out; payload excluded",
+                code="provider_timeout",
+                role="asr",
+                error_stage="asr_open",
+                error_boundary="deepgram_websocket",
+                error_detail="TimeoutError",
+            )
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Session:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: Session())
+    service = SpeechService(DeepgramASR(spec_asr, transport), MockTTS())
+    opened = await service.open("startup-timeout", 1)
+    stream = service.operations[opened["operation_id"]].asr_stream
+    appended = await service.append(opened["operation_id"], 0, encode_pcm(b"\x01\x00" * 512))
+    assert appended["next_sequence"] == 1
+    with pytest.raises(ProviderError) as caught:
+        await service.finish(opened["operation_id"])
+    assert caught.value.code == "provider_timeout"
+    assert caught.value.error_stage == "asr_open"
+    assert caught.value.error_boundary == "deepgram_websocket"
+    assert stream.connection_started_at is not None and stream.connection_failed_at is not None
+    (tmp_path / "connection-failure-timing.json").write_text(
+        json.dumps(
+            {
+                "connection_started_monotonic": stream.connection_started_at,
+                "connection_failed_monotonic": stream.connection_failed_at,
+                "failure_elapsed_ms": round(
+                    (stream.connection_failed_at - stream.connection_started_at) * 1000, 3
+                ),
+                "error_code": caught.value.code,
+                "error_stage": caught.value.error_stage,
+            },
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT status,error_code FROM provider_requests").fetchall() == [
+            ("failure", "provider_timeout")
+        ]
+    await service.close()
+
+
+async def test_deepgram_startup_buffer_is_bounded_and_rejects_without_silent_loss(
+    tmp_path, monkeypatch
+):
+    from me3_voice.servers import speech_tool
+
+    path = tmp_path / "connection-buffer.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "connection-buffer")
+    spec_asr = replace(spec("asr"), allow_live=True, request_limit=1)
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+
+    class SocketContext:
+        async def __aenter__(self):
+            await asyncio.sleep(0.5)
+            return Peer()
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Session:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: Session())
+    service = SpeechService(DeepgramASR(spec_asr, transport), MockTTS())
+    opened = await service.open("connection-buffer", 1)
+    identifier = opened["operation_id"]
+    stream = service.operations[identifier].asr_stream
+    # Shrink only this isolated test's buffer to hit the same fail-closed path
+    # without allocating a long speech fixture.
+    stream.OUTBOUND_BUFFER_BYTES = 2048
+    first = await service.append(identifier, 0, encode_pcm(b"\1\0" * 512))
+    second = await service.append(identifier, 1, encode_pcm(b"\2\0" * 512))
+    assert first["next_sequence"] == 1 and second["next_sequence"] == 2
+    failed = await speech_tool(service.append, "asr")(identifier, 2, encode_pcm(b"\3\0" * 512))
+    assert failed["speech_error"]["code"] == "asr_buffer_full"
+    assert failed["speech_error"]["stage"] == "asr_append"
+    assert stream.accepted_bytes == 2048
+    assert stream.peak_outbound_bytes == 2048
+    assert (
+        stream.accepted_bytes == stream.sent_bytes + stream.discarded_bytes + stream.outbound_bytes
+    )
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT status,error_code FROM provider_requests").fetchall() == [
+            ("unknown", None)
+        ]
+    await service.close()
+
+
+async def test_deepgram_stream_honors_configured_audio_duration_limit():
+    spec_asr = replace(spec("asr"), max_audio_seconds=1)
+    spec_asr.validate("asr", runnable=True)
+    stream = DeepgramASR(spec_asr, transport=None).open_stream()
+    stream.total = 16000 * 2 - 2
+    with pytest.raises(ProviderError, match="invalid ASR stream input"):
+        await stream.append(b"\0\0\0\0")
+    assert stream.total == 16000 * 2 - 2
+    assert stream.accepted_bytes == 0
+    assert stream.diagnostics()["audio_limit_bytes"] == 32000
+
+
+async def test_deepgram_default_startup_buffer_fails_closed_at_five_seconds(tmp_path, monkeypatch):
+    path = tmp_path / "five-second-buffer.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "five-second-buffer")
+    spec_asr = replace(spec("asr"), allow_live=True, request_limit=1)
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+    entered = asyncio.Event()
+
+    class SocketContext:
+        async def __aenter__(self):
+            entered.set()
+            await asyncio.Event().wait()
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Session:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: Session())
+    stream = DeepgramASR(spec_asr, transport).open_stream()
+    frame = b"\1\0" * 512
+    for _ in range(156):
+        await stream.append(frame)
+    await asyncio.sleep(0)
+    await entered.wait()
+    await stream.append(b"\1\0" * 128)
+    with pytest.raises(ProviderError) as caught:
+        await stream.append(b"\0\0")
+    assert caught.value.code == "asr_buffer_full"
+    assert stream.accepted_bytes == stream.peak_outbound_bytes == 160000
+    assert stream.sent_bytes == stream.discarded_bytes == 0
+    assert stream.outbound.qsize() <= stream.OUTBOUND_QUEUE_ITEMS
+    await stream.aclose()
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT status FROM provider_requests").fetchone() == ("unknown",)
+
+
+async def test_deepgram_pending_connection_cancellation_is_joined_and_remains_unknown(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "connect-cancel.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "connect-cancel")
+    spec_asr = replace(spec("asr"), allow_live=True, request_limit=1)
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+    entered = asyncio.Event()
+
+    class SocketContext:
+        async def __aenter__(self):
+            entered.set()
+            await asyncio.Event().wait()
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Session:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: Session())
+    service = SpeechService(DeepgramASR(spec_asr, transport), MockTTS())
+    opened = await service.open("startup-cancel", 1)
+    stream = service.operations[opened["operation_id"]].asr_stream
+    first_task = stream.start_background()
+    assert stream.start_background() is first_task
+    await entered.wait()
+    result = await service.cancel(opened["operation_id"])
+    assert result["cancelled"] is True
+    assert result["provider_diagnostics"]["connection_state"] == "closed"
+    assert result["provider_diagnostics"]["connection_closed_monotonic"] is not None
+    assert (
+        result["provider_diagnostics"]["connection_stages"]["connection_cancelled_monotonic"]
+        is not None
+    )
+    assert result["provider_diagnostics"]["connection_stages"]["request_outcome"] == "unknown"
+    assert first_task.done() and first_task.cancelled()
+    assert stream.connection_failed_at is None
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT status,error_code FROM provider_requests").fetchall() == [
+            ("unknown", None)
+        ]
+    with pytest.raises(ProviderError, match="durable provider request allowance exhausted"):
+        transport.authorize()
+    await service.close()
+
+
+async def test_deepgram_aiohttp_trace_records_safe_connection_stages():
+    transport = LiveTransport(spec("asr"))
+    session = transport.session()
+    config = session._trace_configs[0]
+    assert len(config.on_dns_resolvehost_start) == 1
+    assert len(config.on_dns_resolvehost_end) == 1
+    assert len(config.on_connection_create_start) == 1
+    assert len(config.on_connection_create_end) == 1
+    assert len(config.on_request_headers_sent) == 1
+    assert len(config.on_request_end) == 1
+    assert not config.on_request_headers_sent[0].__closure__ or all(
+        "Authorization" not in str(cell.cell_contents)
+        for cell in config.on_request_headers_sent[0].__closure__
+    )
+    await session.close()
+
+
+@pytest.mark.parametrize(
+    "failure_mode", ["incomplete_close", "receive_timeout", "provider_disconnect"]
+)
+async def test_deepgram_asr_terminal_ledger_state_and_mcp_error_diagnostics(
+    tmp_path, monkeypatch, failure_mode
+):
+    from types import SimpleNamespace
+    from me3_voice.servers import speech_tool
+
+    path = tmp_path / f"{failure_mode}.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", f"asr-{failure_mode}-01")
+    spec_asr = replace(
+        spec("asr"),
+        allow_live=True,
+        request_limit=1,
+        timeout_seconds=0.03 if failure_mode == "receive_timeout" else 2,
+    )
+    transport = LiveTransport(spec_asr, {"ME3_TEST_ONLY_KEY": "offline-key"})
+
+    class Peer:
+        def __init__(self):
+            self.sent = []
+            self.receiving = asyncio.Event()
+            self.messages = asyncio.Queue()
+
+        async def send_bytes(self, pcm):
+            await asyncio.sleep(0.01)  # Lowest-boundary write delay.
+            self.sent.append(pcm)
+
+        async def send_json(self, value):
+            self.sent.append(value)
+
+        async def receive(self):
+            self.receiving.set()
+            if failure_mode == "receive_timeout":
+                await asyncio.Event().wait()
+            if failure_mode == "provider_disconnect":
+                from aiohttp import WSMsgType
+
+                await asyncio.sleep(0.02)
+                return SimpleNamespace(type=WSMsgType.CLOSED, data=None)
+            return await self.messages.get()
+
+    peer = Peer()
+
+    class SocketContext:
+        async def __aenter__(self):
+            return peer
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Session:
+        def ws_connect(self, *_args, **_kwargs):
+            return SocketContext()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: Session())
+    service = SpeechService(DeepgramASR(spec_asr, transport), MockTTS())
+    opened = await service.open("asr-diagnostic", 1)
+    identifier = opened["operation_id"]
+    first = await service.append(identifier, 0, encode_pcm(b"\1\0" * 512))
+    assert first["next_sequence"] == 1
+    await peer.receiving.wait()
+
+    if failure_mode == "incomplete_close":
+        await service.cancel(identifier)
+        expected = ("unknown", "request_interrupted")
+    else:
+        await asyncio.sleep(0.05)
+        error_result = await speech_tool(service.append, "asr")(
+            identifier, 1, encode_pcm(b"\2\0" * 512)
+        )
+        expected_code = (
+            "provider_timeout" if failure_mode == "receive_timeout" else "provider_disconnected"
+        )
+        expected_type = "TimeoutError" if failure_mode == "receive_timeout" else "WebSocketClosed"
+        assert error_result["speech_error"]["code"] == expected_code
+        assert error_result["speech_error"]["stage"] == "asr_receive"
+        assert error_result["speech_error"]["boundary"] == "deepgram_websocket"
+        assert error_result["speech_error"]["exception_type"] == expected_type
+        from me3_voice.speech import SpeechClient
+
+        class ToolResult:
+            async def call_tool(self, *_args):
+                return SimpleNamespace(is_error=False, structured_content=error_result)
+
+        client = SpeechClient(timeout=1, backends={"asr": spec_asr})
+        client.clients = {"asr": ToolResult()}
+        with pytest.raises(ProviderError) as caught:
+            await client.call("asr", "asr_append", {})
+        assert caught.value.code == expected_code
+        assert caught.value.error_stage == "asr_receive"
+        assert caught.value.error_boundary == "deepgram_websocket"
+        assert caught.value.error_detail == expected_type
+        expected = ("failure", expected_code)
+
+    with sqlite3.connect(path) as db:
+        status = db.execute(
+            "SELECT status,error_code FROM provider_requests WHERE run_id=?",
+            (f"asr-{failure_mode}-01",),
+        ).fetchone()
+    assert status == expected
+    with pytest.raises(ProviderError, match="durable provider request allowance exhausted"):
+        transport.authorize()
+    await service.close()
+
+
+async def test_speech_client_transport_error_preserves_only_exception_class_chain():
+    from me3_voice.speech import SpeechClient
+
+    class BrokenTool:
+        async def call_tool(self, *_args):
+            try:
+                raise ValueError("private payload should not be retained")
+            except ValueError as cause:
+                raise RuntimeError("private transport message should not be retained") from cause
+
+    client = SpeechClient(timeout=1, backends={"asr": spec("asr")})
+    client.clients = {"asr": BrokenTool()}
+    with pytest.raises(ProviderError) as caught:
+        await client.call("asr", "asr_append", {})
+    assert caught.value.code == "mcp_transport_error"
+    assert caught.value.error_stage == "asr_append"
+    assert caught.value.error_detail == "RuntimeError"
+    assert caught.value.cause_type == "ValueError"
+    assert "private" not in str(caught.value)
+
+
+def test_request_ledger_summary_is_run_scoped_and_sanitized(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    transport = _ledger_transport(path, limit=2)
+    _, request_id = authorize_chat(transport)
+    transport.finish_request(request_id, "failure", "provider_timeout")
+    _, other_id = authorize_chat(transport)
+    transport.finish_request(other_id, "success")
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO provider_requests "
+            "(id,run_id,provider,model,protocol,status,error_code,created,updated) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "x" * 32,
+                "another-run-0001",
+                "example.invalid",
+                "other-model",
+                "other-protocol",
+                "success",
+                None,
+                1.0,
+                1.0,
+            ),
+        )
+    summary = request_ledger_summary("pytest-run-0001", path)
+    assert len(summary["requests"]) == 2
+    assert summary["counts"] == {
+        "example.invalid|documented-test-model|chat-completions-v1": {"failure": 1, "success": 1}
+    }
+    assert [request["request_id"] for request in summary["requests"]] == [request_id, other_id]
+    assert {request["status"] for request in summary["requests"]} == {"failure", "success"}
+    assert request_ledger_summary("another-run-0001", path)["requests"][0]["model"] == "other-model"
+    invalid = request_ledger_summary("api_key=do-not-echo", path)
+    assert invalid["run_id"] is None and "do-not-echo" not in repr(invalid)
 
 
 class Peer:
@@ -51,6 +1090,12 @@ class Peer:
             )
             self.queue.put_nowait({"type": "Metadata"})
 
+    async def send_json(self, value):
+        await self.send(value)
+
+    async def send_bytes(self, value):
+        await self.send(value)
+
     async def receive(self):
         value = await self.queue.get()
         self.received.set()
@@ -64,6 +1109,59 @@ class Wire:
         self.peer, self.values = peer, events
         self.params = self.body = None
         self.closed = False
+        self.connection_count = 0
+        self.requests = []
+        self.connect_delay = 0.0
+        self.last_websocket_timing = {}
+
+    def authorize(self):
+        request_id = f"test-request-{len(self.requests) + 1}"
+        self.requests.append({"id": request_id, "status": "dispatched_unknown"})
+        return "offline-test-key", request_id
+
+    def finish_request(self, request_id, outcome, error_code=None):
+        for request in self.requests:
+            if request["id"] == request_id:
+                request.update(status=outcome, error_code=error_code)
+                return
+        raise AssertionError("unknown offline request identity")
+
+    async def open_socket(self, params, _key, *, role="tts"):
+        from me3_voice.remote import Socket
+        from aiohttp import WSMsgType
+        from aiohttp.http_websocket import WSMessage
+
+        self.params = params
+        self.connection_count += 1
+        self.last_websocket_timing = {"websocket_handshake_monotonic": time.monotonic()}
+        if self.connect_delay:
+            await asyncio.sleep(self.connect_delay)
+        self.last_websocket_timing["connection_ready_monotonic"] = time.monotonic()
+        actual_peer = self.peer
+
+        class AiohttpPeerAdapter:
+            async def send_json(self, value):
+                await actual_peer.send(value)
+
+            async def send_bytes(self, value):
+                await actual_peer.send(value)
+
+            async def receive(self):
+                value = await actual_peer.receive()
+                if isinstance(value, bytes):
+                    return WSMessage(WSMsgType.BINARY, value, None)
+                return WSMessage(WSMsgType.TEXT, json.dumps(value), None)
+
+        class Connection:
+            def __init__(self, peer):
+                self.socket = Socket(peer, 1, role)
+                self.closed = False
+
+            async def aclose(self):
+                self.closed = True
+                actual_peer.closed = True
+
+        return Connection(AiohttpPeerAdapter())
 
     @asynccontextmanager
     async def socket(self, params):
@@ -135,6 +1233,10 @@ async def test_asr_cancel_during_receive_and_disconnected_result_never_finalizes
     provider = DeepgramASR(spec("asr"), Wire(peer))
     stream = provider.open_stream()
     await stream.append(b"\1\0")
+    # Append now admits PCM while the one connection task starts in the
+    # background; explicitly wait for readiness to test cancellation during
+    # the provider receive lifecycle, rather than assuming eager connect.
+    await stream.start()
     await stream.aclose()
     assert stream.reader.done() and peer.closed
     peer = Peer([ProviderError("controlled disconnect")])
@@ -148,15 +1250,217 @@ async def test_asr_cancel_during_receive_and_disconnected_result_never_finalizes
 
 async def test_tts_wire_packet_boundaries_first_audio_flush_and_clear_on_cancel():
     peer = Peer([b"\1", b"\0\2\0", {"type": "Flushed", "sequence_id": 0}])
-    provider = DeepgramTTS(spec("tts"), Wire(peer))
+    wire = Wire(peer)
+    provider = DeepgramTTS(spec("tts"), wire)
     chunks = [chunk async for chunk in provider.synthesize("Hello.")]
-    assert b"".join(chunks) == b"\1\0\2\0" and peer.closed
+    assert b"".join(chunks) == b"\1\0\2\0" and not peer.closed
+    assert wire.connection_count == 1 and wire.requests[0]["status"] == "success"
     assert peer.sent == [{"type": "Speak", "text": "Hello."}, {"type": "Flush"}]
+    diagnostics = provider.diagnostics()
+    assert diagnostics["status"] == "completed"
+    assert diagnostics["connection_reused"] is False
+    assert diagnostics["connection_attempt_monotonic"] <= diagnostics["connection_ready_monotonic"]
+    assert diagnostics["connection_trace"]
+    assert diagnostics["provider_pcm_packets"] == 2
+    assert diagnostics["provider_pcm_bytes"] == 4
+    assert diagnostics["provider_audio_seconds"] == pytest.approx(4 / 32000)
+    assert diagnostics["first_pcm_monotonic"] <= diagnostics["last_pcm_monotonic"]
+    assert diagnostics["last_pcm_monotonic"] <= diagnostics["provider_flushed_monotonic"]
+    assert diagnostics["synthesis_wall_seconds"] >= 0
+    await provider.aclose()
+    assert peer.closed
+
     peer = Peer([b"\1\0"])
-    stream = DeepgramTTS(spec("tts"), Wire(peer)).synthesize("Hello.")
+    cancelled_provider = DeepgramTTS(spec("tts"), Wire(peer))
+    stream = cancelled_provider.synthesize("Hello.")
     assert await anext(stream) == b"\1\0"
     await stream.aclose()
     assert peer.sent[-1] == {"type": "Clear"} and peer.closed
+    assert cancelled_provider.transport.requests[0]["status"] == "unknown"
+    assert cancelled_provider.diagnostics()["status"] == "cancelled"
+
+
+async def test_tts_provider_and_mcp_pull_timing_are_separately_reported():
+    peer = Peer([b"\1", b"\0\2\0", {"type": "Flushed", "sequence_id": 0}])
+    provider = DeepgramTTS(spec("tts"), Wire(peer))
+    service = SpeechService(None, provider)
+    try:
+        opened = await service.open("tts-timing-session", 1, "Hello.")
+        chunk = await service.next(opened["operation_id"])
+        terminal = await service.next(opened["operation_id"])
+        assert not chunk["done"] and terminal["done"]
+        diagnostics = terminal["tts_diagnostics"]
+        assert diagnostics["status"] == "completed"
+        assert diagnostics["mcp"]["tts_next_count"] == 2
+        assert diagnostics["mcp"]["pcm_chunks"] == 1
+        assert diagnostics["mcp"]["pcm_bytes"] == 4
+        assert diagnostics["mcp"]["audio_seconds"] == pytest.approx(4 / 32000)
+        assert diagnostics["provider"]["status"] == "completed"
+        assert diagnostics["provider"]["provider_flushed_monotonic"] is not None
+        assert diagnostics["provider"]["provider_pcm_packets"] == 2
+        assert diagnostics["provider"]["provider_pcm_bytes"] == 4
+        assert diagnostics["mcp"]["tts_next_seconds"]["sample_count"] == 2
+    finally:
+        await service.close()
+
+
+async def test_tts_reuses_one_deepgram_connection_across_mcp_segments_and_reduces_setup_wall():
+    class SegmentedPeer(Peer):
+        def __init__(self, responses):
+            super().__init__()
+            self.responses = iter(responses)
+
+        async def send(self, value):
+            await super().send(value)
+            if value == {"type": "Flush"}:
+                for message in next(self.responses):
+                    self.queue.put_nowait(message)
+
+    texts = (
+        "Short answer.",
+        "A medium answer uses another sentence.",
+        "A longer explanation uses a third segment.",
+    )
+    segment_audio = [b"\1\0" * 80 for _ in texts]
+
+    # Baseline emulates the prior per-segment socket lifecycle with the same
+    # fixed 40 ms handshake cost and same output for each segment.
+    cold_started = time.perf_counter()
+    cold_connections = 0
+    for text, pcm in zip(texts, segment_audio, strict=True):
+        wire = Wire(Peer([pcm, {"type": "Flushed", "sequence_id": 0}]))
+        wire.connect_delay = 0.04
+        provider = DeepgramTTS(spec("tts"), wire)
+        _ = [chunk async for chunk in provider.synthesize(text)]
+        cold_connections += wire.connection_count
+        await provider.aclose()
+    cold_wall = time.perf_counter() - cold_started
+
+    warm_peer = SegmentedPeer(
+        [
+            [pcm, {"type": "Flushed", "sequence_id": index}]
+            for index, pcm in enumerate(segment_audio)
+        ]
+    )
+    wire = Wire(warm_peer)
+    wire.connect_delay = 0.04
+    provider = DeepgramTTS(spec("tts"), wire)
+    service = SpeechService(None, provider)
+    warm_started = time.perf_counter()
+    outputs = []
+    try:
+        for index, text in enumerate(texts, start=1):
+            opened = await service.open("tts-reuse-session", index, text)
+            chunks = []
+            while True:
+                result = await service.next(opened["operation_id"])
+                if result["done"]:
+                    assert result["tts_diagnostics"]["status"] == "completed"
+                    break
+                chunks.append(base64.b64decode(result["pcm_b64"]))
+            outputs.append(b"".join(chunks))
+        warm_wall = time.perf_counter() - warm_started
+        assert outputs == segment_audio
+        assert wire.connection_count == 1
+        assert [request["status"] for request in wire.requests] == ["success"] * len(texts)
+        assert warm_peer.sent == [
+            item for text in texts for item in ({"type": "Speak", "text": text}, {"type": "Flush"})
+        ]
+        assert warm_wall < cold_wall
+        assert cold_connections == len(texts)
+    finally:
+        await service.close()
+    assert warm_peer.closed
+    print(
+        json.dumps(
+            {
+                "kind": "offline_fake_websocket_setup_benchmark",
+                "segments": len(texts),
+                "fixed_fake_handshake_seconds": 0.04,
+                "cold_connections": cold_connections,
+                "reused_connections": wire.connection_count,
+                "cold_wall_seconds": cold_wall,
+                "reused_wall_seconds": warm_wall,
+                "wall_reduction_seconds": cold_wall - warm_wall,
+                "provider_evidence": False,
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def test_live_chat_input_budget_is_frozen_aggregate_and_fail_closed(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    transport = _ledger_transport(path, limit=5)
+
+    # An over-cap first request freezes the campaign profile but creates no
+    # billable request reservation or network client.
+    with pytest.raises(ProviderError) as too_large:
+        transport.authorize(input_tokens=101, input_token_limit=100, input_tokens_total_limit=500)
+    assert too_large.value.code == "input_token_request_limit_reached"
+    assert transport.client is None and transport.requests == 0
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT COUNT(*) FROM provider_requests").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT request_limit,input_tokens_per_request_limit,input_tokens_limit FROM provider_campaign_caps"
+        ).fetchone() == (5, 100, 500)
+    # A later process cannot widen the frozen profile after this rejection.
+    with pytest.raises(ProviderError) as widened:
+        transport.authorize(input_tokens=101, input_token_limit=101, input_tokens_total_limit=500)
+    assert widened.value.code == "campaign_cap_increase_rejected"
+
+    aggregate_path = tmp_path / "aggregate-requests.sqlite"
+    aggregate_transport = _ledger_transport(aggregate_path, limit=5)
+    _, first = aggregate_transport.authorize(
+        input_tokens=300, input_token_limit=400, input_tokens_total_limit=500
+    )
+    aggregate_transport.finish_request(first, "failure", "provider_timeout")
+    # Failed/unknown provider outcomes still consume their reserved input size.
+    with pytest.raises(ProviderError) as exhausted:
+        aggregate_transport.authorize(
+            input_tokens=201, input_token_limit=400, input_tokens_total_limit=500
+        )
+    assert exhausted.value.code == "input_token_budget_exhausted"
+    with sqlite3.connect(aggregate_path) as db:
+        assert db.execute(
+            "SELECT status,input_tokens_reserved FROM provider_requests WHERE id=?", (first,)
+        ).fetchone() == ("failure", 300)
+        assert db.execute("SELECT COUNT(*) FROM provider_requests").fetchone()[0] == 1
+
+    # The same run identity cannot enlarge any frozen campaign ceiling.
+    with pytest.raises(ProviderError) as cap_increase:
+        _ledger_transport(aggregate_path, limit=6).authorize(
+            input_tokens=1, input_token_limit=400, input_tokens_total_limit=500
+        )
+    assert cap_increase.value.code == "campaign_cap_increase_rejected"
+
+
+def test_conservative_estimator_covers_actual_serialized_request():
+    from me3_voice.request_budget import conservative_input_token_estimate, serialized_request
+
+    params = {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+            {"role": "system", "content": "Answer in English."},
+            {"role": "user", "content": "What is in the 🐢 image?"},
+        ],
+        "tools": [{"type": "function", "function": {"name": "read_file", "parameters": {}}}],
+    }
+    encoded = serialized_request(params)
+    estimate, serialized_bytes = conservative_input_token_estimate(params)
+    assert serialized_bytes == len(encoded)
+    assert estimate == len(encoded) + max(128, (len(encoded) + 3) // 4)
+    assert encoded.startswith(b'{"messages"')
+
+
+def test_conservative_estimator_fails_closed_for_unserializable_or_oversize_params():
+    from me3_voice.request_budget import RequestBudgetError, serialized_request
+
+    with pytest.raises(RequestBudgetError, match="safely serialized"):
+        serialized_request({"opaque": object()})
+    with pytest.raises(RequestBudgetError, match="estimation limits"):
+        serialized_request({"content": "x" * 4_000_001})
 
 
 @pytest.mark.parametrize(
@@ -638,12 +1942,12 @@ def test_live_gate_precedes_credentials_and_network_and_budget_is_bounded(monkey
         transport.authorize()
     assert transport.client is None and transport.requests == 0
     transport = LiveTransport(replace(spec("llm"), allow_live=True, request_limit=1))
-    assert transport.authorize() == "offline-test-not-a-project-credential"
+    assert authorize_chat(transport)[0] == "offline-test-not-a-project-credential"
     with pytest.raises(ProviderError, match="allowance exhausted"):
-        transport.authorize()
+        authorize_chat(transport)
     monkeypatch.delenv("ME3_TEST_ONLY_KEY")
     with pytest.raises(ConfigurationError, match="missing"):
-        LiveTransport(replace(spec("llm"), allow_live=True, request_limit=1)).authorize()
+        authorize_chat(LiveTransport(replace(spec("llm"), allow_live=True, request_limit=1)))
     assert transport.client is None
 
 
@@ -653,8 +1957,37 @@ def test_explicitly_unbounded_provider_counts_without_a_local_ceiling(monkeypatc
     monkeypatch.setenv("ME3_TEST_ONLY_KEY", "offline-test-not-a-project-credential")
     transport = LiveTransport(replace(spec("llm"), allow_live=True, request_limit=None))
     for _ in range(25):
-        assert transport.authorize() == "offline-test-not-a-project-credential"
+        assert authorize_chat(transport)[0] == "offline-test-not-a-project-credential"
     assert transport.requests == 25
+
+
+def test_runnable_live_chat_requires_both_input_token_ceilings():
+    from dataclasses import replace
+
+    unbounded = replace(
+        spec("llm"),
+        allow_live=True,
+        request_limit=1,
+        max_input_tokens=0,
+        max_input_tokens_total=0,
+    )
+    with pytest.raises(ConfigurationError, match="live chat requires"):
+        unbounded.validate("llm", runnable=True)
+
+
+def test_phase7_campaign_example_has_finite_caps_but_cannot_dispatch():
+    from me3_voice.configuration import load_backends
+
+    profile = Path(__file__).resolve().parents[1] / "configs/phase7-live-campaign.example.json"
+    values = load_backends(profile, runnable=True)
+    assert all(not backend.allow_live for backend in values.values())
+    assert values["asr"].request_limit == 6 and values["asr"].max_audio_seconds == 20
+    assert values["llm"].request_limit == 8
+    assert (values["llm"].max_input_tokens, values["llm"].max_input_tokens_total) == (
+        32000,
+        64000,
+    )
+    assert values["tts"].request_limit == 16
 
 
 async def test_pause_aware_gate_keeps_800ms_pause_and_bounds_incomplete_turn():
@@ -757,6 +2090,14 @@ async def test_actual_http_sse_and_websocket_transport_against_local_contract_pe
             assert model.transport.requests == 2
         finally:
             await model.aclose()
+        import os
+        import sqlite3
+
+        with sqlite3.connect(os.environ["ME3_REQUEST_LEDGER"]) as db:
+            llm_outcomes = db.execute(
+                "SELECT status, error_code FROM provider_requests WHERE protocol='chat-completions-v1' ORDER BY created"
+            ).fetchall()
+        assert llm_outcomes == [("success", None), ("failure", "provider_rate_limited")]
         tts = DeepgramTTS(
             replace(
                 spec("tts"),
@@ -769,10 +2110,131 @@ async def test_actual_http_sse_and_websocket_transport_against_local_contract_pe
             assert b"".join([x async for x in tts.synthesize("Hello.")]) == b"\1\0\2\0"
         finally:
             await tts.aclose()
+        with sqlite3.connect(os.environ["ME3_REQUEST_LEDGER"]) as db:
+            assert db.execute(
+                "SELECT status FROM provider_requests WHERE protocol='deepgram-speak-v1'"
+            ).fetchone() == ("success",)
     assert (
         seen[0][0] == "Bearer offline-contract-key" and seen[1][0] == "Token offline-contract-key"
     )
     assert seen[1][1]["sample_rate"] == "16000"
+
+
+async def test_native_aura_cycles_reuse_one_real_local_websocket_without_mixing_audio(
+    monkeypatch,
+):
+    """The local peer exercises aiohttp + multiple Speak/Flush cycles, no provider."""
+    from dataclasses import replace
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+
+    connections = []
+    spoken_texts = []
+
+    async def speak(request):
+        peer = web.WebSocketResponse()
+        await peer.prepare(request)
+        connections.append(peer)
+        sequence = 0
+        try:
+            while True:
+                message = await peer.receive()
+                if message.type in {WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR}:
+                    break
+                if message.type != WSMsgType.TEXT:
+                    continue
+                value = json.loads(message.data)
+                if value.get("type") == "Speak":
+                    spoken_texts.append(value["text"])
+                elif value.get("type") == "Flush":
+                    await peer.send_bytes((b"\1\0" * 80) + bytes([sequence, 0]))
+                    await peer.send_json({"type": "Flushed", "sequence_id": sequence})
+                    sequence += 1
+        finally:
+            if not peer.closed:
+                await peer.close()
+        return peer
+
+    app = web.Application()
+    app.router.add_get("/speak", speak)
+    monkeypatch.setenv("ME3_TEST_ONLY_KEY", "offline-contract-key")
+    async with TestServer(app, host="127.0.0.1") as server:
+        tts_spec = replace(
+            spec("tts"),
+            endpoint=str(server.make_url("/speak")).replace("http:", "ws:"),
+            allow_live=True,
+            request_limit=2,
+        )
+        provider = DeepgramTTS(tts_spec)
+        try:
+            first = b"".join([chunk async for chunk in provider.synthesize("First answer.")])
+            first_diagnostics = provider.diagnostics()
+            second = b"".join([chunk async for chunk in provider.synthesize("Follow-up answer.")])
+            second_diagnostics = provider.diagnostics()
+            assert first == (b"\1\0" * 80) + b"\0\0"
+            assert second == (b"\1\0" * 80) + b"\1\0"
+            assert len(connections) == 1
+            assert spoken_texts == ["First answer.", "Follow-up answer."]
+            assert first_diagnostics["connection_reused"] is False
+            assert first_diagnostics["connection_setup_seconds"] >= 0
+            trace = first_diagnostics["connection_trace"]
+            assert trace["websocket_handshake_monotonic"] <= trace["connection_ready_monotonic"]
+            assert second_diagnostics["connection_reused"] is True
+            assert second_diagnostics["connection_reuse_monotonic"] > 0
+            assert "offline-contract-key" not in json.dumps(first_diagnostics)
+        finally:
+            await provider.aclose()
+        import os
+
+        with sqlite3.connect(os.environ["ME3_REQUEST_LEDGER"]) as db:
+            assert db.execute(
+                "SELECT status FROM provider_requests WHERE protocol='deepgram-speak-v1' "
+                "ORDER BY created"
+            ).fetchall() == [("success",), ("success",)]
+    assert connections[0].closed
+
+
+async def test_aura_releases_idle_socket_before_receive_deadline(monkeypatch):
+    """A follow-up after the provider read deadline opens a fresh socket."""
+    from dataclasses import replace
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestServer
+
+    connections = []
+
+    async def speak(request):
+        peer = web.WebSocketResponse()
+        await peer.prepare(request)
+        connections.append(peer)
+        async for message in peer:
+            if message.type != WSMsgType.TEXT:
+                continue
+            if json.loads(message.data).get("type") == "Flush":
+                await peer.send_bytes(b"\1\0" * 80)
+                await peer.send_json({"type": "Flushed"})
+        return peer
+
+    app = web.Application()
+    app.router.add_get("/speak", speak)
+    monkeypatch.setenv("ME3_TEST_ONLY_KEY", "offline-contract-key")
+    async with TestServer(app, host="127.0.0.1") as server:
+        provider = DeepgramTTS(
+            replace(
+                spec("tts"),
+                endpoint=str(server.make_url("/speak")).replace("http:", "ws:"),
+                timeout_seconds=0.3,
+                allow_live=True,
+                request_limit=2,
+            )
+        )
+        try:
+            assert b"".join([c async for c in provider.synthesize("First.")]) == b"\1\0" * 80
+            await asyncio.sleep(0.27)
+            assert b"".join([c async for c in provider.synthesize("Second.")]) == b"\1\0" * 80
+            assert len(connections) == 2
+            assert provider.diagnostics()["connection_reused"] is False
+        finally:
+            await provider.aclose()
 
 
 async def test_live_chat_stream_waits_past_configured_deadline_for_provider_output(monkeypatch):
@@ -1041,3 +2503,25 @@ async def test_openrouter_free_reasoning_adds_zero_price_guard_and_rejects_paid_
         "allow_fallbacks": True,
     }
     assert peer.body["model"] == model_id
+
+
+async def test_deepgram_partial_arrives_between_audio_appends_via_mcp_event_read():
+    peer = Peer()
+    service = SpeechService(DeepgramASR(spec("asr"), Wire(peer)), DeepgramTTS(spec("tts"), Wire()))
+    identifier = (await service.open("late-partial", 1))["operation_id"]
+    await service.append(identifier, 0, encode_pcm(b"\1\0" * 512))
+    peer.queue.put_nowait(
+        {
+            "type": "Results",
+            "is_final": False,
+            "channel": {"alternatives": [{"transcript": "arrived while paused"}]},
+        }
+    )
+    await peer.received.wait()
+    row = await service.events(identifier)
+    assert row["partial"]["text"] == "arrived while paused" and not row["partial"]["final"]
+    assert (await service.events(identifier))["partial"] is None
+    # No second audio append was needed to observe the new hypothesis.
+    assert len([x for x in peer.sent if isinstance(x, bytes)]) == 1
+    await service.cancel(identifier)
+    assert peer.closed

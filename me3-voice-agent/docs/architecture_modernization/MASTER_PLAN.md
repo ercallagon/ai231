@@ -78,3 +78,61 @@ The user authorized Phase 1 only: complete explicit end-to-end tooling/model dec
 ## Final architecture priority correction — 2026-11-09
 
 The user reopened the final decision. Final correctness/full-duplex capability, elimination of redundant custom orchestration and reuse of mature framework functionality take priority over migration effort. Existing Session/Onit and the proposed custom step executor have no preservation preference. The current target and exact replacement/retention inventory are in PHASE1_REDUNDANCY_ELIMINATION.md: Pipecat-native conversation, two functional project speech MCP services, and one LangGraph task runtime/checkpoint authority. Retain custom hardware/adapters/security/independent verification. Do not recreate framework context, tool loops, playback or checkpoints under a new name. Prior Phase 1 and simplification controller choices are explicitly superseded. This correction authorizes assessment/documentation only, with no production migration, installation, inference, destructive work or phase advancement. Revised Phase 2–8 sequence includes native pipeline contract work before optimizing speech code slated for removal.
+
+## Hardware-independent continuation authorization — 2026-11-10
+
+This explicit user extension supersedes the earlier physical-gate sequencing for the currently authorized repository-local work. Finish offline Phase2 harness/cue repairs, EOF classification/regressions, delayed-finalization cancellation, separate startup/steady measurements and an operator-ready procedure. Proceed to repository-local Phase3 native speech adapters/MCP streaming/parity/benchmarks while Phase2 physical qualification remains pending. Target remains Pipecat-native conversation, one future LangGraph runtime and two functional project-owned speech MCP services.
+
+Use reversible source changes; preserve Session/sidecar rollback. No paid inference, HPC/GPU model calls, Pi SSH, framework installation/replacement, automatic hardware success claims, Phase4 or LangGraph migration. Native speech providers remain provisional Nova-3/Aura-2. Statuses are independent: Phase2 PENDING_OPERATOR_VALIDATION, Phase3 local complete or partial according to evidence. Current checkpoint/report: PHASE3_REPORT.md. Physical access is not requested to finish offline tasks; remaining physical or paid-provider gates stay explicit.
+
+## Phase 3 application-entrypoint authorization — 2026-11-10
+
+The user extended repository-local Phase3 to bind the tested native pipeline to
+actual CLI/replay/browser entrypoints behind explicit configuration, retaining
+legacy as default and rollback. This supersedes the earlier statement that all
+application binding necessarily waits for Phase4. Scope includes mocked-upstream
+real MCP regression, matched endpoint semantics, startup/steady measurements,
+reconnect/failure/cancellation fencing and a protected local Git checkpoint.
+No default cutover, legacy deletion, model replacement, LangGraph migration,
+paid inference, remote push, SSH or Phase4 is authorized. Phase2 remains
+PENDING_OPERATOR_VALIDATION. PHASE3_REPORT.md owns implementation evidence and
+remaining acceptance gates. Phase4 remains a separate authorization decision.
+
+## Phase4 conversational intelligence authorization — 2026-11-10
+
+The user explicitly authorized the sole coding agent to inspect/preserve Onit's
+unfinished work and implement feasible repository-local Phase4: native multi-turn
+context, actual runtime clock, Groq streaming/tools, read-only web research and
+source grounding, contextual follow-ups, errors, validation and stale-turn safety.
+This supersedes previous statements that Phase4 is unauthorized. Preserve
+Pipecat-native ownership, legacy default/rollback and both speech MCP services.
+No implicit paid/provider calls, Pi access, framework install, LangGraph/Phase5,
+external write/push or new commit authorization is inferred. PHASE4_REPORT.md owns
+scope/evidence, bounded read permissions, prepared evaluation and live gates.
+
+## Phase5 LangGraph implementation authorization — 2026-11-10
+
+The user explicitly authorized repository-local Phase5 implementation: one
+lightweight LangGraph task runtime integrated with the native Pipecat
+conversation, SQLite checkpoints, human steering and controls, restart
+recovery, approval boundaries, independent local outcome checks, mock
+failure-injection tests, concurrency validation, and a bounded but unexecuted
+Phase4 live evaluation preparation. Use the existing Groq-compatible
+`openai/gpt-oss-120b` configuration and shared budget. Preserve legacy
+Session/Onit as temporary rollback. Keep both project speech MCP services.
+
+This does not authorize a Pi connection, live/paid inference, a real external
+write, publishing, Git push, or Phase6. Phase2 physical qualification remains
+`PENDING_OPERATOR_VALIDATION`. The four-case evaluation has caps of12 Groq
+requests and8 Tavily requests/credits but is `PREPARED_NOT_EXECUTED`; explicit
+user approval and a current price/balance check are required before any call.
+Do not move to Phase6 automatically. Canonical implementation evidence,
+limitations, and rollback are in PHASE5_REPORT.md.
+
+### Phase5 independent review checkpoint — 2026-11-10
+
+Current authorization includes source review, bounded corrective rework, offline failure injection, actual subprocess SIGKILL/reopen tests and expanded mock benchmarks. Assessment is CONDITIONAL; PHASE5_REPORT.md records fixes, final regression and remaining semantic-verification/spoken-delivery gates. Phase2 physical validation remains pending. No Phase6 or paid/live execution is authorized by this checkpoint.
+
+## Phase 6 implementation authorization — 2026-11-11
+
+The user authorized repository-local Phase6 to recover ME2 actions, reuse working handlers, integrate fast Pipecat commands and current media/device adapters, preserve LangGraph for delegated tasks, validate action safety, and run offline end-to-end mocks/regression. This authorization does not permit Raspberry Pi access, live/paid APIs, Spotify/phone actions, external writes/publication, destructive operations, remote push, or Phase7. Preserve Phase2/4/5 gates and legacy rollback. Current action wiring and exact capability statuses are in `PHASE6_REPORT.md`. LangGraph now exposes bounded task-private workspace file/directory operations with normalized relative paths, private permissions, durable write identities, crash readback reconciliation, and nonblocking filesystem I/O. Arbitrary host/project filesystem access, shell, browser execution, and real external writes remain unavailable. Stop at the Phase6 offline checkpoint.

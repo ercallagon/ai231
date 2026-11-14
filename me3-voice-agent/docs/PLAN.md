@@ -1,14 +1,143 @@
 # Delivery plan and status
 
-Updated: 2026-11-04, Asia/Manila. Latest software/UI verification and user-reported laptop-session review: 2026-11-04. Current connected voice-prototype record is at the end of this document; earlier status tables are historical milestones.
+2026-11-14 naturalness readiness: one newer live turn completed with two Aura segments and `turn_completed`, but the next ASR connection timed out; earlier traces still show intermittent TTS pacing gaps and incomplete turns. Latest code-only checks passed 8/8. This sandbox's socket/MCP-dependent selection was 8 passed/7 blocked by local IPC permissions. README and test-fixture follow-up defaults were aligned to 20 seconds. Tavily remains unconfigured/disabled in the saved laptop profile; KWS recall, sustained live turn-taking, task UX, and smooth TTS are not qualified. Recommend a staged short diagnostic only, not a 10–15-turn demo. Details: `docs/architecture_modernization/PHASE7_PREPARATION.md`.
 
-Latest provider gate (2026-11-02): **hold further laptop voice testing**. Current Qwen2-Audio failed a known synthetic verbatim-transcription case; direct Qwen3.8 reasoning returned no HTTP headers within 45 seconds; Qwen3-TTS passed standalone and application/MCP-to-memory-sink smoke checks. See the last provider-smoke entry for exact artifacts and limits. A fresh 19:26–19:27 Manila recheck again found both model catalogs healthy but port-8001 generation timing out before response headers; see the newest provider-check entry.
+2026-11-14 native voice stabilization: follow-up standby now starts after a completed response, defaults to configurable 20 seconds, resets on a valid next turn, and cannot expire during thinking or speaking. Historical `f137` trace had two standby transitions followed by new wake detections; Sherpa provides no probability scores for missed attempts, so wake recall is not yet measured. Wake event diagnostics now retain detector backend/score when available; the existing chime remains, with a bounded manual “Speak without wake phrase” fallback in native UI. Punctuation-only streamed TTS fragments no longer open synthesis requests; malformed model output, provider pacing and the post-PCM timeout remain unresolved. Seven focused wake/idle/barge-in/action/TTS/recovery checks passed; Ruff clean. A broader 156-case run was stopped after 35 passes and one test-fixture compatibility failure, which was fixed and retested. The prior 31 failures lack a complete saved traceback, so exact classification is pending. See Phase7 preparation for evidence and limits.
+
+2026-11-14 live-session resilience correction: a completed provider turn error
+was latched by `NativeApplication.feed()` and re-raised on the next browser PCM
+frame, forcing the bridge to close even after the pipeline had already fenced
+the failed turn and cleared pending frames. When no input frames remain pending,
+the application now resets partial PCM framing, aborts the prior STT generation,
+records `turn_recovered`, and accepts the next command on the same connection.
+If frames are still pending, it keeps the existing fail-closed behavior. Focused
+offline recovery tests passed 2/2 with local MCP subprocess IPC; Ruff passed.
+This supports recovery after turn-scoped errors, not transport/worker death or
+provider readiness. Next laptop sequence should verify error → next command on
+the same session before broad routing trials.
+
+2026-11-14 targeted browser retry (`native-68d752c403784ba9ac0294795ace70f3`):
+the operator reported no stutter. One wake, a final Nova transcript, Groq
+request, two completed Aura segments (11.64 s PCM), 291 acknowledged browser
+packets and `turn_completed` were recorded. The next utterance opened ASR in
+29 ms but its provider WebSocket never reported ready; 30,720 bytes remained
+buffered, and `asr_finish` ended about five seconds after connection attempt
+with a generic MCP `TimeoutError`. This is an ASR connection readiness timeout,
+not a playback failure. `_flush_outbound` now classifies the race as
+`provider_timeout` at `asr_open` (or `asr_flush` when connected); its focused
+failure test and Ruff passed. This improves diagnosis only; live connection
+reliability remains unresolved. No further provider call was made by the agent.
+
+2026-11-13 wake feedback correction: the existing two-tone browser chime was
+called only for the legacy `wake_detected_file` event; native sessions emit
+`wake_detected`, so the operator heard no confirmation. Native wake now invokes
+the same cue, with a louder but short signal and a two-second visible
+"Wake heard · speak now" status. A distinct native event ID permits a later
+wake after standby to cue again. JavaScript syntax and three focused offline
+browser checks passed with local IPC. This corrects feedback, not detector
+recall. Replaying the 60-second browser capture through Sherpa found two hits
+at both 0.25 and 0.15 thresholds; the prior tests did not measure missed
+operator wake phrases. A replacement model is deferred until attempts can be
+time-labeled and compared for misses and false activations.
+
+2026-11-13 browser follow-up: the latest native trace had 7 final ASR results
+from 8 VAD segments and 5 completed turns. TTS completion still took 23.31 s
+for 9.32 s of PCM in one segment and 30.92 s for 8.04 s in another; 40 ms
+browser packets frequently reached the eight-packet (320 ms) delivery window.
+The bounded browser delivery window is now sixteen packets (640 ms), with the
+matching browser source cap raised to twenty. Cancellation still clears pending
+packets; two focused sink/interruption tests passed and Ruff/JS syntax passed.
+This is an offline-tested jitter buffer adjustment, not a verified acoustic fix.
+An opt-in 60 s browser recording replayed through the existing Sherpa Hey Swift
+detector yielded the same two hits at decoder thresholds 0.25 and 0.15, so
+lowering that threshold is unsupported. The only available OpenWakeWord model
+targets Hey Jarvis. Wake misses need operator-labeled attempt times before a
+reliable model or keyword change can be selected. An unrelated native browser
+diagnostic test could not acquire the live bridge's task database (`TaskError`);
+the focused sink tests passed independently.
+
+2026-11-13 later browser session (`native-1e0b60f48a4b4a648ded0e5b857a6697.jsonl`):
+the first 0.51 s VAD utterance was cancelled when speech restarted 0.50 s later,
+so its words never reached a final transcript; raw microphone audio was not
+captured, and recognition quality cannot be isolated from the VAD split. Browser
+playback frequently had all eight 40 ms packets pending, while some packet gaps
+exceeded 0.5 s. The final Aura request failed with `provider_timeout` in
+`tts_receive` only 0.05 s after starting, about five seconds after the prior
+successful `Flushed`; the native pipeline then ended its WebSocket session.
+The TTS socket now closes before its configured receive deadline when idle,
+while prompt follow-up segments still reuse it. Native status/transcript UI
+updates now avoid repainting the whole dashboard on every PCM event, and the
+bridge records playback ACK latency for the next trial. Focused offline tests:
+three TTS socket tests, three native browser tests, one sink test passed; Ruff
+and JavaScript syntax checks passed. These changes require a bridge restart.
+Their effect on real audible stutter and Aura reliability is not yet validated.
+The native bridge now honors the existing opt-in `--diagnostic-audio` switch
+for a bounded, private browser-received WAV and manifest under
+`var/recordings/diagnostics/<run-id>/`; it does not yet capture the PCM after
+VAD/ASR admission. The next browser run should use that capture to resolve the
+first-utterance question. Preserve the existing provider ledger and do not
+repeat unknown outcomes automatically.
+
+2026-11-13 first persistent Windows browser live session: wake, microphone/VAD,
+three Nova-3 final transcripts, three Groq answers and browser audio packets were
+observed. No `turn_completed` occurred. The provider ledger recorded Nova-3
+3 success/1 unknown, Groq 3 success, Aura-2 3 success/3 unknown. Two answers
+were interrupted during TTS; the final 93-character TTS request produced no PCM
+before Pipecat's 3 s empty-audio-context timeout, which raised a pipeline error.
+A deterministic 3.2 s first-PCM replay reproduced that failure. The native MCP
+TTS context timer now follows the existing configured MCP call deadline plus
+1 s, so the MCP timeout rather than a premature context idle check owns failure.
+The delayed-first-PCM replay and focused TTS/replay selection passed 8 tests;
+Ruff passed. This correction is offline-tested only and requires a bridge
+restart before another live turn. The same approved campaign ledger is retained;
+unknown reservations have not been cleared. Longer responses remain slow and
+laptop audible latency/AEC/barge-in remain unqualified for this session.
+
+The same browser trace also confirms a response-length and delivery problem.
+The second Groq answer generated four Aura segments totaling 486 characters;
+three completed and the fourth was interrupted. Those segments produced 33.84 s
+of PCM, while 846 browser output packets spanned 87.79 s. Packet gaps had
+p95 0.463 s and maximum 1.663 s; 205 of 845 gaps exceeded 0.1 s. These
+software gaps are consistent with the operator's reported stutter, but the
+existing trace cannot separate provider PCM pacing from browser ACK pressure.
+The operator confirmed both speech-onset events during assistant playback were
+intentional barge-ins, not false echo activations. Backend playback-stop events
+followed those onsets in 53.6 ms and 31.0 ms respectively; audible speaker
+stop latency remains unmeasured.
+The native playback event now records pending browser packets, and private
+JSONL TTS summaries retain only numeric provider/MCP timing fields for the
+next observation. Prompt policy ME3-VOICE-4 narrows ordinary factual spoken
+answers to about 30 words while preserving requested depth and essential
+qualifications. Its effect on real Groq is unverified. Focused prompt,
+projection and browser-sink tests passed 3/3; no further provider requests.
+
+2026-11-13 browser preparation: the native bridge now persists private, sanitized,
+session-correlated JSONL events under `var/results/native-<run-id>.jsonl` when started
+through the CLI with `--trace-dir`; the operator's shell captures stderr under
+`var/logs/`. Wake detection and UI interruption now emit explicit runtime events.
+Reconnect preserves the in-process conversation session and creates a new trace
+file. Focused native browser/wake/interruption tests passed 6/6 with local IPC enabled;
+both MCP mock startup handshakes passed and a mock bridge health check returned
+`engine: native`. No billable calls or physical browser interaction occurred.
+The existing private live profiles lack the now-required Groq input-token ceilings,
+so a fresh approved and validated campaign profile is required before a real
+laptop conversation. See `docs/architecture_modernization/OPERATOR_TEST_RUNBOOK.md`.
+
+Updated: 2026-11-13, Asia/Manila. Two real native Nova-3 → Groq → Aura-2 WAV replays passed earlier today, including valid output WAVs and `turn_completed`; the concise ME3-VOICE-3 version returned first backend audio in4.156 s, above the provisional2 s target. The latest offline work adds Aura WebSocket reuse and fail-closed Groq input-budget reservations; a fixed-delay three-segment mock measured79.97 ms setup-only savings, while post-change live latency remains unmeasured. The same seven-case native routing matrix and five-turn same-application LangGraph website task remain offline/scripted evidence, not autonomous live Groq qualification. The new campaign example is disabled and no provider calls were made. Full regression passed704 tests with one existing Pipecat warning. Live persistent conversation, browser rendering, physical audio and laptop speaker latency remain unqualified. See the newest Phase7 addendum and `BENCHMARKS.md`. Laptop AEC Test B remains PASS only for the operator-tested setup; Raspberry Pi Phase2 remains `PENDING_OPERATOR_VALIDATION`.
+
+Earlier focused fixes retained: native replay timeout parity with the bridge, native `/audio-probe`, and ASR onset buffering. The broader session below corrects four stale test fixtures; it does not change production routing or increase provider budgets.
+
+Historical provider gate (2026-11-02; superseded for backend WAV replay, still relevant to the separate Qwen profile): hold further Qwen laptop voice testing. Qwen2-Audio failed a known synthetic verbatim-transcription case; direct Qwen3.8 reasoning returned no HTTP headers within 45 seconds; Qwen3-TTS passed standalone and application/MCP-to-memory-sink smoke checks. See the last provider-smoke entry for exact artifacts and limits. A fresh 19:26–19:27 Manila recheck again found both model catalogs healthy but port-8001 generation timing out before response headers; see the newest provider-check entry.
 
 Current physical milestone: **M1 reliable audio front end and hardware qualification**. Latest active HPC scope also includes provider-independent M2–M3, mock tasks, benchmark preparation and dashboard refinement, explicitly reauthorized by the user; this supersedes the earlier wake-only deferral without claiming physical M1 completion. The user reordered M1 to echo cancellation, preprocessing, wake-word and VAD readiness, followed by M2 harness/MCP integration. Earlier milestone labels in historical evidence refer to the original plan. Existing MCP/session mock work is retained as preliminary M2/M3 evidence; it does not bypass the new M1 exit gate. No Pi verification or acoustic full-duplex claim is made.
 
 Current execution order, explicitly directed by the user: existing hardware sufficiency first (to expose procurement lead time), reliable wake/audio/AEC prerequisites second, onit and mostly-free integration third, then latency and model rankings. Reliability/correct task behavior is an entry requirement for any integration candidate. Continue useful provider-independent HPC integration while physical access and model hosting remain undecided; keep device qualification separate.
 
 The earlier HPC authorization extended the original M1-only handoff through useful mock/file portions of the then-labelled M2–M3. That work is preserved under the reordered milestones. Staging/commits remain deferred. No ME2 modifications, scheduler/GPU jobs, hardware actions, shared-service changes or public endpoints were used.
+
+### Phase 7 current checkpoint — 2026-11-13
+
+Two bounded native Pipecat WAV replays completed live Nova-3 → Groq GPT-OSS-120B → Aura-2 with successful ledger outcomes, complete decodable WAVs and `turn_completed`. The measured first backend packet was4.156 s; TTS WebSocket readiness accounted for about2.402 s of the first 2.730 s request-to-first-PCM interval, while local MCP pull median was about1 ms. No safe internal optimization has yet been demonstrated; physical audible latency is unmeasured. An offline same-session, five-turn test exercised task creation, steering, status, contextual follow-up and actual workspace writes. The new task files were hash-checked under `var/qualification/task_workspace/portfolio`. Scripted upstream choices and mock speech mean this is not live Groq task-routing evidence. Persistent live conversation needs a fresh approved campaign. Phase2 stays `PENDING_OPERATOR_VALIDATION`; laptop microphone/speaker/AEC and browser interaction remain pending operator qualification.
 
 | Milestone | Implemented/tested here | Remaining exit evidence | Status |
 |---|---|---|---|
@@ -18,6 +147,8 @@ The earlier HPC authorization extended the original M1-only handoff through usef
 | M3 Conversation and interruption | CPU wake/VAD through Session and local MCP; recorded and browser-protocol inputs; transcript; cancellation, queue clearing/stale fencing, browser output acknowledgments | Real mic/speaker correction, echo control, acoustic interruption and Pi trials | HPC software/mock protocol and limited live service trials; acoustic/Pi pending |
 | M4 Real tasks | Stateful in-memory light connected through typed reasoning tool calls, completed-effect idempotency, status and correction scenarios | General tool-using agent: web/files/code and configured services; task lifecycle, effect verification; Pi hardware optional | Not complete |
 | M5 Benchmark and deployment | Correlated mock diagnostic traces, endpoint/final/tool spans, per-clock/mode p50/p95, deterministic scenarios, source-correlated dashboard, file offsets and lock | Acoustic/device events, task/usage instrumentation, real trials, targets and deployment/runbook | Diagnostic prerequisite implemented; benchmark not complete |
+
+Latest Phase7 verification (2026-11-13): `var/cache/venv/bin/python -B -m pytest -q tests/test_remote.py tests/test_native_entrypoint.py tests/test_phase5_tasks.py tests/test_phase4.py tests/test_voice_bridge.py tests/test_dgx3.py` passed **284 tests**; full `var/cache/venv/bin/python -B -m pytest -q` passed **704 tests** (one existing Pipecat deprecation warning); Ruff check and format passed on11 changed Python files. The first full run had702 passes and two telemetry tests failed because their pytest `/tmp/.../var` paths were outside the application output root; both fixtures now chdir to isolated temporary roots and pass. TTS comparison: three fake40 ms handshakes/segments0.120997 s vs one reused connection0.041024 s; provider timing after reuse remains unmeasured. No provider API call was made. Details and limitations: `docs/architecture_modernization/PHASE7_PREPARATION.md`.
 
 ## Immediate readiness gates
 
@@ -306,7 +437,7 @@ Added a no-local-port terminal path to avoid the unresolved Windows bind issue: 
 Windows setup (run in local PowerShell, using the already working SSH alias):
 
 ~~~powershell
-scp n002.ai.internal:/mnt/jfs_hpc/home/edgardo.callagon.jr/sandbox/ME3-VoiceAgent/scripts/watch_dashboard.ps1 "$env:USERPROFILE\Downloads\watch_dashboard.ps1"
+scp n002.ai.internal:$ME3_ROOT/scripts/watch_dashboard.ps1 "$env:USERPROFILE\Downloads\watch_dashboard.ps1"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\watch_dashboard.ps1"
 ~~~
 
@@ -774,7 +905,7 @@ Limitations: all conversation screenshots use saved report, mock or explicit bro
 
 ## Existing Onit installation located, 2026-10-28
 
-User identified an existing sandbox installation. Targeted read-only inspection located /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/onit and its Python interpreter. Distribution metadata reports Python 3.12.14, onit 0.1.5a0, fastmcp 3.4.7 and mcp 1.29.1. `command -v onit` previously failed because this environment is absent from the development shell PATH, not because Onit is uninstalled. No Onit configuration, credentials, service or environment was modified or imported into ME3. Metadata was inspected with the environment's python -B and importlib.metadata only; no reasoning/task execution occurred.
+User identified an existing sandbox installation. Targeted read-only inspection located the separately installed Onit executable and its Python interpreter. Distribution metadata reports Python 3.12.14, onit 0.1.5a0, fastmcp 3.4.7 and mcp 1.29.1. `command -v onit` previously failed because this environment is absent from the development shell PATH, not because Onit is uninstalled. No Onit configuration, credentials, service or environment was modified or imported into ME3. Metadata was inspected with the environment's python -B and importlib.metadata only; no reasoning/task execution occurred.
 
 Reuse this existing installation via an explicit subprocess for an initial trial, with an isolated ME3 working directory under var/ and deliberately supplied project model/auth configuration. Preserve the distinct ME3 environment (MCP 2.3.0) rather than mixing package versions. Before claiming runtime compatibility verify the installed CLI/adapter API and configuration precedence. Reasoning-model selection and bounded access remain pending; sandbox installation alone does not establish usable model entitlement. A later Pi deployment will still need reproducible dependencies and target qualification.
 
@@ -789,7 +920,7 @@ Initial offline attempts caught an installed API requirement: safety_queue defau
 Verification commands from ME3 root:
 
 ```bash
-env PYTHONDONTWRITEBYTECODE=1 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B scripts/check_onit_trial.py > var/logs/onit-offline-current.log 2>&1
+env PYTHONDONTWRITEBYTECODE=1 the Onit environment Python interpreter -B scripts/check_onit_trial.py > var/logs/onit-offline-current.log 2>&1
 var/cache/venv/bin/ruff check scripts/onit_trial.py scripts/check_onit_trial.py
 var/cache/venv/bin/ruff format --check scripts/onit_trial.py scripts/check_onit_trial.py
 env PYTHONDONTWRITEBYTECODE=1 var/cache/venv/bin/python -B scripts/onit_trial.py --help
@@ -810,10 +941,10 @@ Third receipt var/results/onit-reasoning-compatible.json: **HTTP 200, one reques
 Exact commands from ME3 root (approved network/IPC execution):
 
 ```bash
-env PYTHONDONTWRITEBYTECODE=1 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B scripts/onit_trial.py run > var/logs/onit-reasoning-smoke.log 2>&1
-env PYTHONDONTWRITEBYTECODE=1 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B scripts/onit_trial.py run --output var/results/onit-reasoning-diagnostic.json > var/logs/onit-reasoning-diagnostic.log 2>&1
-env PYTHONDONTWRITEBYTECODE=1 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B scripts/onit_trial.py run --output var/results/onit-reasoning-compatible.json > var/logs/onit-reasoning-compatible.log 2>&1
-env PYTHONDONTWRITEBYTECODE=1 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B scripts/check_onit_trial.py > var/logs/onit-offline-current.log 2>&1
+env PYTHONDONTWRITEBYTECODE=1 the Onit environment Python interpreter -B scripts/onit_trial.py run > var/logs/onit-reasoning-smoke.log 2>&1
+env PYTHONDONTWRITEBYTECODE=1 the Onit environment Python interpreter -B scripts/onit_trial.py run --output var/results/onit-reasoning-diagnostic.json > var/logs/onit-reasoning-diagnostic.log 2>&1
+env PYTHONDONTWRITEBYTECODE=1 the Onit environment Python interpreter -B scripts/onit_trial.py run --output var/results/onit-reasoning-compatible.json > var/logs/onit-reasoning-compatible.log 2>&1
+env PYTHONDONTWRITEBYTECODE=1 the Onit environment Python interpreter -B scripts/check_onit_trial.py > var/logs/onit-offline-current.log 2>&1
 var/cache/venv/bin/ruff check scripts/onit_trial.py scripts/check_onit_trial.py
 var/cache/venv/bin/ruff format --check scripts/onit_trial.py scripts/check_onit_trial.py
 ```
@@ -1079,7 +1210,7 @@ Next: add independent held-out prerecorded clips with real user speech and annot
 
 ## Opt-in Onit draft-task integration and latency review, 2026-10-31
 
-The user requested initial Onit task integration and continued latency checks. Read AGENTS.md, README.md, this plan, the session/provider/task contracts, recent traces, the existing Onit trial, and upstream Onit README/source. The installed editable Onit checkout is `/mnt/jfs_hpc/home/edgardo.callagon.jr/onit` at revision `3d014cfae043130d956ac042de7142516146e96b`, distribution `0.1.5a0` in its separate Python 3.12 environment. Onit's source `chat()` accepts a tool registry and its `process_task()` offers stream/tool callbacks. The current `OnIt` constructor adds default MCP servers and performs discovery during initialization, so this first voice integration uses the tested `chat()` loop directly with an explicit one-tool registry; it neither adopts Onit's broad default tools nor claims Onit MCP discovery has been exercised. Upstream: https://github.com/sibyl-oracles/onit and https://github.com/sibyl-oracles/onit/blob/main/src/onit.py .
+The user requested initial Onit task integration and continued latency checks. Read AGENTS.md, README.md, this plan, the session/provider/task contracts, recent traces, the existing Onit trial, and upstream Onit README/source. The installed editable Onit checkout is `the separately installed Onit checkout` at revision `3d014cfae043130d956ac042de7142516146e96b`, distribution `0.1.5a0` in its separate Python 3.12 environment. Onit's source `chat()` accepts a tool registry and its `process_task()` offers stream/tool callbacks. The current `OnIt` constructor adds default MCP servers and performs discovery during initialization, so this first voice integration uses the tested `chat()` loop directly with an explicit one-tool registry; it neither adopts Onit's broad default tools nor claims Onit MCP discovery has been exercised. Upstream: https://github.com/sibyl-oracles/onit and https://github.com/sibyl-oracles/onit/blob/main/src/onit.py .
 
 Implemented in the one ME3 source tree: `onit_tasks.py` is an optional Session task executor, selected only by `voice_bridge --onit-python ... --onit-max-requests N`; default remains off. It starts a separate, persistent Onit Python worker and prewarms it when the voice Session opens. `onit_worker.py` uses Onit's actual chat/tool loop with only `write_artifact`: at most eight bounded HTML/CSS/JS/Markdown/text/JSON draft files, exclusive create, under an ignored per-operation `var/scratch/onit-tasks/` directory. No shell, GitHub, deployment, account task, GPIO, hardware or Onit default MCP tool is exposed. The existing Swift Session remains the one voice/task owner; its task ledger shields and deduplicates by session/turn/call identity, marks running/reported/unknown correctly, and never treats a reported artifact as Pi-verified. The UI receives a bounded, sanitized task receipt and filename, not raw tool arguments or credentials. An interrupted in-flight worker can finish its confined action but does not replay the call; automatic post-interruption receipt reconciliation remains pending. The worker currently supports only the exact configured free-only OpenRouter chat-completions route, with zero-price routing, no fallback/SDK retries, max 512 output tokens per request and a separately explicit total Onit request budget of 1–8 per browser connection. Each task reserves at most three calls, refunds only worker-confirmed unused calls, and uncertain failures consume the reservation. No live request was made in this milestone; the earlier candidate model's arithmetic error still disqualifies it from a quality claim.
 
@@ -1087,7 +1218,7 @@ Relevant exact checks from the ME3 root:
 
 ```bash
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m pytest -q tests/test_onit_tasks.py tests/test_session.py tests/test_remote.py tests/test_voice_bridge.py --basetemp=var/scratch/pytest-onit-task-final-2
-env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 timeout 150 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -u -B scripts/check_onit_worker.py
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 timeout 150 the Onit environment Python interpreter -u -B scripts/check_onit_worker.py
 var/cache/venv/bin/ruff check src/me3_voice/onit_tasks.py src/me3_voice/onit_worker.py src/me3_voice/providers.py src/me3_voice/remote.py src/me3_voice/session.py src/me3_voice/voice_bridge.py tests/test_onit_tasks.py scripts/check_onit_worker.py
 var/cache/venv/bin/ruff format --check src/me3_voice/onit_tasks.py src/me3_voice/onit_worker.py src/me3_voice/providers.py src/me3_voice/remote.py src/me3_voice/session.py src/me3_voice/voice_bridge.py tests/test_onit_tasks.py scripts/check_onit_worker.py
 ```
@@ -1108,7 +1239,7 @@ Additional exact commands run from the ME3 root (the two commands requiring live
 
 ```bash
 env PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 NUMBA_CACHE_DIR=var/cache/numba var/cache/venv/bin/python -B scripts/check_onit_session.py
-env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 timeout 150 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -u -B scripts/check_onit_worker.py --output var/results/onit-task-offline-prewarm.json
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 timeout 150 the Onit environment Python interpreter -u -B scripts/check_onit_worker.py --output var/results/onit-task-offline-prewarm.json
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m pytest -q tests/test_onit_tasks.py tests/test_session.py tests/test_remote.py tests/test_voice_bridge.py tests/test_telemetry.py --basetemp=var/scratch/pytest-onit-metrics-final
 var/cache/venv/bin/ruff check src/me3_voice/onit_tasks.py src/me3_voice/onit_worker.py src/me3_voice/providers.py src/me3_voice/remote.py src/me3_voice/session.py src/me3_voice/voice_bridge.py tests/test_onit_tasks.py scripts/check_onit_worker.py scripts/check_onit_session.py
 var/cache/venv/bin/ruff format --check src/me3_voice/onit_tasks.py src/me3_voice/onit_worker.py src/me3_voice/providers.py src/me3_voice/remote.py src/me3_voice/session.py src/me3_voice/voice_bridge.py tests/test_onit_tasks.py scripts/check_onit_worker.py scripts/check_onit_session.py
@@ -1118,7 +1249,7 @@ Final focused regression: **43 passed in 22.71 s**; Ruff check and format-check 
 
 A final read-only local-process resource check prewarmed the same installed worker with a dummy key, then read its `/proc/<pid>/status`: **9,931.3 ms** to ready and **94,248 kB VmRSS** while idle on HPC x86_64. This is one process snapshot, excludes Swift/Pipecat/wake/VAD/audio/other services and any active model call, and cannot establish fit or startup on Pi 5/4 GB. No network call or hardware action occurred.
 
-Onit MCP compatibility exploration used the existing mock ASR MCP server through Onit's own stdio discovery API. The first attempt found no tools because the installed Onit source imports `type.tools` internally while the probe registered a separate `src.type.tools` module instance. After using the same `type.tools` module alias, **all four ASR tools** (`asr_open`, `asr_append`, `asr_finish`, `cancel`) were discovered and the local process closed. Exact final command: `env PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=src /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B var/experiments/009-onit-mcp-compatibility/check.py`. The question, corrected probe and limitation are in that ignored experiment folder; report: `var/results/onit-mcp-compatibility.json`. This is real MCP **discovery** with mock backend, not Onit task tool invocation, ASR inference, or Pi deployment. The current artifact tool remains in-process and the application speech path still uses Swift's own MCP client.
+Onit MCP compatibility exploration used the existing mock ASR MCP server through Onit's own stdio discovery API. The first attempt found no tools because the installed Onit source imports `type.tools` internally while the probe registered a separate `src.type.tools` module instance. After using the same `type.tools` module alias, **all four ASR tools** (`asr_open`, `asr_append`, `asr_finish`, `cancel`) were discovered and the local process closed. Exact final command: `env PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 PYTHONPATH=src the Onit environment Python interpreter -B var/experiments/009-onit-mcp-compatibility/check.py`. The question, corrected probe and limitation are in that ignored experiment folder; report: `var/results/onit-mcp-compatibility.json`. This is real MCP **discovery** with mock backend, not Onit task tool invocation, ASR inference, or Pi deployment. The current artifact tool remains in-process and the application speech path still uses Swift's own MCP client.
 
 ## Archived laptop voice run review and reference-informed task UI, 2026-10-31
 
@@ -1177,7 +1308,7 @@ Exact checks from the ME3 root:
 ```bash
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 180 var/cache/venv/bin/python -B -m pytest tests/test_onit_tasks.py tests/test_session.py tests/test_voice_bridge.py -q --basetemp=var/scratch/pytest-onit-project-output
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 180 var/cache/venv/bin/python -B -m pytest tests/test_onit_tasks.py tests/test_remote.py tests/test_session.py tests/test_voice_bridge.py -q --basetemp=var/scratch/pytest-onit-project-output-final
-env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -u -B scripts/check_onit_worker.py --output var/results/onit-project-dir-offline.json
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 the Onit environment Python interpreter -u -B scripts/check_onit_worker.py --output var/results/onit-project-dir-offline.json
 var/cache/venv/bin/ruff check src/me3_voice/onit_worker.py src/me3_voice/onit_tasks.py src/me3_voice/voice_bridge.py src/me3_voice/remote.py src/me3_voice/session.py tests/test_onit_tasks.py scripts/check_onit_worker.py
 var/cache/venv/bin/ruff format --check src/me3_voice/onit_worker.py src/me3_voice/onit_tasks.py src/me3_voice/voice_bridge.py src/me3_voice/remote.py src/me3_voice/session.py tests/test_onit_tasks.py scripts/check_onit_worker.py
 ```
@@ -1197,7 +1328,7 @@ Exact verification from the ME3 root:
 ```bash
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 180 var/cache/venv/bin/python -B -m pytest tests/test_onit_tasks.py tests/test_session.py tests/test_voice_bridge.py tests/test_remote.py -q --basetemp=var/scratch/pytest-project-name-gate
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 180 var/cache/venv/bin/python -B -m pytest tests/test_onit_tasks.py tests/test_session.py tests/test_voice_bridge.py tests/test_remote.py -q --basetemp=var/scratch/pytest-project-name-gate-final
-env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -u -B scripts/check_onit_worker.py --output var/results/onit-project-name-gate-offline.json
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 the Onit environment Python interpreter -u -B scripts/check_onit_worker.py --output var/results/onit-project-name-gate-offline.json
 var/cache/venv/bin/ruff check src/me3_voice/onit_worker.py src/me3_voice/onit_tasks.py src/me3_voice/voice_bridge.py src/me3_voice/session.py tests/test_onit_tasks.py scripts/check_onit_worker.py
 ```
 
@@ -1209,7 +1340,7 @@ Exact post-correction verification from the ME3 root:
 
 ```bash
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 180 var/cache/venv/bin/python -B -m pytest tests/test_onit_tasks.py tests/test_session.py tests/test_voice_bridge.py tests/test_remote.py -q --basetemp=var/scratch/pytest-general-project-output
-env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -u -B scripts/check_onit_worker.py --output var/results/onit-general-project-output-offline.json
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 the Onit environment Python interpreter -u -B scripts/check_onit_worker.py --output var/results/onit-general-project-output-offline.json
 var/cache/venv/bin/ruff check src/me3_voice/onit_worker.py src/me3_voice/onit_tasks.py src/me3_voice/voice_bridge.py src/me3_voice/session.py tests/test_onit_tasks.py scripts/check_onit_worker.py
 ```
 
@@ -1412,7 +1543,7 @@ Exact verification commands from the ME3 root:
 var/cache/venv/bin/ruff check src/me3_voice/credentials.py src/me3_voice/onit_setup.py src/me3_voice/onit_worker.py src/me3_voice/onit_tasks.py src/me3_voice/voice_bridge.py src/me3_voice/remote.py tests/test_onit_tasks.py tests/test_remote.py scripts/check_onit_worker.py
 var/cache/venv/bin/ruff format --check src/me3_voice/credentials.py src/me3_voice/onit_setup.py src/me3_voice/onit_worker.py src/me3_voice/onit_tasks.py src/me3_voice/voice_bridge.py src/me3_voice/remote.py tests/test_onit_tasks.py tests/test_remote.py scripts/check_onit_worker.py
 env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 var/cache/venv/bin/python -B -m pytest -q tests/test_onit_tasks.py tests/test_remote.py tests/test_voice_bridge.py --basetemp=var/scratch/pytest-onit-integration-final
-env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -u -B scripts/check_onit_worker.py --output var/results/onit-integrations-offline.json
+env PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 150 the Onit environment Python interpreter -u -B scripts/check_onit_worker.py --output var/results/onit-integrations-offline.json
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 var/cache/venv/bin/python -B -m me3_voice.onit_setup status
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 var/cache/venv/bin/python -B -m me3_voice.voice_bridge --help
 node --check src/me3_voice/ui/dashboard.js
@@ -2162,7 +2293,7 @@ Verification: `ruff check`/`ruff format --check` passed for the modified source,
 
 ### Direct Onit + DGX Qwen setup check, 2026-11-01
 
-Inspected the current ME3 runtime, installed Onit checkout (read-only), and the Onit task gate. Onit runs in `/mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit` and can call the provided DGX Qwen service through its bundled `src.model.serving.chat` loop. The active ME3 reasoning profile is `Qwen/Qwen3.8-27B` at the documented private chat-completions endpoint; its credential belongs in the separate owner-only `var/cache/dgx3-llm.env`. `var/cache/voice-backends.env` is not the DGX reasoning secret source. An initial pair of probes accidentally used that speech-provider file and received HTTP 401; both were stopped as rejected requests. Re-running with the dedicated DGX LLM secret confirmed the key is present, owner-only (`0600`), and accepted.
+Inspected the current ME3 runtime, installed Onit checkout (read-only), and the Onit task gate. Onit runs in `$HPC_RUNTIME_PATH` and can call the provided DGX Qwen service through its bundled `src.model.serving.chat` loop. The active ME3 reasoning profile is `Qwen/Qwen3.8-27B` at the documented private chat-completions endpoint; its credential belongs in the separate owner-only `var/cache/dgx3-llm.env`. `var/cache/voice-backends.env` is not the DGX reasoning secret source. An initial pair of probes accidentally used that speech-provider file and received HTTP 401; both were stopped as rejected requests. Re-running with the dedicated DGX LLM secret confirmed the key is present, owner-only (`0600`), and accepted.
 
 `scripts/onit_trial.py` now has a `run-dgx` smoke path that imports the installed Onit chat loop without invoking the Onit CLI, reading global Onit settings, enabling default tools, or changing the active voice runtime. It is locked to the exact configured DGX endpoint and Qwen model, strips unsupported Onit sampling extras, disables OpenRouter routing and harness/code-execution tools, and permits one request for its fixed no-tools prompt. The successful sanitized HPC-live result is `var/results/onit-dgx-qwen-smoke-20261101-correct-secret.json`: **one request, HTTP 200, concise correct answer, 2,127.787 ms elapsed**. This proves only direct Onit → DGX Qwen plain reasoning for one prompt; it is not a quality, conversation, voice or task-capability benchmark.
 
@@ -2175,8 +2306,8 @@ Exact checks run from ME3 root:
 ```bash
 var/cache/venv/bin/ruff check scripts/onit_trial.py
 var/cache/venv/bin/ruff format --check scripts/onit_trial.py
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 90 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B scripts/onit_trial.py run-dgx --output var/results/onit-dgx-qwen-smoke-20261101-correct-secret.json --secrets-file var/cache/dgx3-llm.env
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 100 /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python -B scripts/onit_trial.py run-dgx-tools --output var/results/onit-dgx-qwen-tool-smoke-forced-20261101.json --secrets-file var/cache/dgx3-llm.env
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 90 the Onit environment Python interpreter -B scripts/onit_trial.py run-dgx --output var/results/onit-dgx-qwen-smoke-20261101-correct-secret.json --secrets-file var/cache/dgx3-llm.env
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 100 the Onit environment Python interpreter -B scripts/onit_trial.py run-dgx-tools --output var/results/onit-dgx-qwen-tool-smoke-forced-20261101.json --secrets-file var/cache/dgx3-llm.env
 var/cache/venv/bin/ruff check scripts/onit_trial.py
 var/cache/venv/bin/ruff format --check scripts/onit_trial.py
 PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 timeout 180 var/cache/venv/bin/python -B -m pytest -q tests/test_onit_tasks.py tests/test_remote.py tests/test_voice_bridge.py --basetemp=var/scratch/pytest-onit-dgx-setup-escalated
@@ -2201,7 +2332,7 @@ Warm-run single-sample software timings: endpoint→ASR final 348.7 ms; ASR requ
 Exact verification commands from the project root:
 
 ```bash
-PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.cli replay var/recordings/onit-primary-e2e-20261101.wav --conversation --wake-frame 0 --backend-config var/cache/voice-backends.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --onit-python /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python --output var/results/onit-primary-me3-e2e-warm-20261101.json --trace var/results/onit-primary-me3-e2e-warm-20261101.jsonl --playback-wav var/results/onit-primary-me3-e2e-warm-playback-20261101.wav --transcript
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.cli replay var/recordings/onit-primary-e2e-20261101.wav --conversation --wake-frame 0 --backend-config var/cache/voice-backends.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --onit-python the Onit environment Python interpreter --output var/results/onit-primary-me3-e2e-warm-20261101.json --trace var/results/onit-primary-me3-e2e-warm-20261101.jsonl --playback-wav var/results/onit-primary-me3-e2e-warm-playback-20261101.wav --transcript
 PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B var/experiments/014-onit-dgx-tool-retest/run.py
 var/cache/venv/bin/ruff check src/me3_voice/onit_tasks.py src/me3_voice/onit_worker.py src/me3_voice/runtime.py src/me3_voice/cli.py src/me3_voice/session.py src/me3_voice/voice_bridge.py src/me3_voice/telemetry.py tests/test_onit_tasks.py var/experiments/014-onit-dgx-tool-retest/run.py
 var/cache/venv/bin/ruff format --check src/me3_voice/onit_tasks.py src/me3_voice/onit_worker.py src/me3_voice/runtime.py src/me3_voice/cli.py src/me3_voice/session.py src/me3_voice/voice_bridge.py src/me3_voice/telemetry.py tests/test_onit_tasks.py var/experiments/014-onit-dgx-tool-retest/run.py
@@ -2210,7 +2341,7 @@ PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1
 
 The live replay completed one turn and produced all four requested artifacts. The action retest's file readback succeeded with the text deviation above. Ruff passed; the final focused Onit/session/bridge/telemetry run passed **61 tests in 8.43 s** with local loopback sockets permitted. A sandbox-only rerun could not complete because bridge tests require loopback. No Pi, physical mic/speaker, acoustic interruption/AEC, browser UI session, Spotify playback, or real-world task beyond the confined draft write was verified. Tavily/GitHub tool use inside Onit, multi-action project tasks and general shell remain unverified/disabled.
 
-For the next laptop voice run, restart the existing bridge with the active backend/secrets/KWS arguments plus `--onit-python /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python --onit-primary`; leave `--onit-max-requests` unset. GitHub read-only remains opt-in via `--onit-secrets-file var/cache/onit-secrets.env --onit-github-readonly`. Tavily remains disabled; one search credit was used for key validation, so do not enable `--onit-tavily-credits` until its remaining allowance is confirmed. The next application-level checks are ordinary multi-turn Q&A, an Onit-created draft file with its receipt shown/speaking, interruption while a tool is running, and ensuring Spotify still uses its existing ME3 control path. Then Pi/aarch64 and acoustic/AEC verification remain separate.
+For the next laptop voice run, restart the existing bridge with the active backend/secrets/KWS arguments plus `--onit-python the Onit environment Python interpreter --onit-primary`; leave `--onit-max-requests` unset. GitHub read-only remains opt-in via `--onit-secrets-file var/cache/onit-secrets.env --onit-github-readonly`. Tavily remains disabled; one search credit was used for key validation, so do not enable `--onit-tavily-credits` until its remaining allowance is confirmed. The next application-level checks are ordinary multi-turn Q&A, an Onit-created draft file with its receipt shown/speaking, interruption while a tool is running, and ensuring Spotify still uses its existing ME3 control path. Then Pi/aarch64 and acoustic/AEC verification remain separate.
 
 ### Automated reliability and software-latency cycle, 2026-11-01
 
@@ -2342,8 +2473,8 @@ var/cache/venv/bin/ruff format --check src/me3_voice/session.py src/me3_voice/te
 Prepared but **not executed**: `var/cache/voice-latency-capped.json` is owner-only metadata with a two-attempt cap per role per replay; `var/recordings/clock-route-synthetic-20261102.wav` is a fixed espeak input. Once a small live trial allowance is documented, compare the two commands below in alternating order on a later second pair. Each independent replay can make at most two ASR, two LLM and two TTS attempts; the two commands together can make at most four per role. The direct route should make zero LLM requests when the final ASR text matches exactly. Keep the raw transcript and timezone in the correctness score before comparing time.
 
 ```bash
-PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.cli replay var/recordings/clock-route-synthetic-20261102.wav --conversation --wake-frame 0 --pace 1 --endpoint-ms 1024 --backend-config var/cache/voice-latency-capped.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --onit-python /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python --onit-max-requests 2 --transcript --output var/results/clock-live-baseline.json --trace var/results/clock-live-baseline.jsonl
-PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.cli replay var/recordings/clock-route-synthetic-20261102.wav --conversation --wake-frame 0 --pace 1 --endpoint-ms 1024 --backend-config var/cache/voice-latency-capped.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --onit-python /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python --onit-max-requests 2 --direct-clock --transcript --output var/results/clock-live-direct.json --trace var/results/clock-live-direct.jsonl
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.cli replay var/recordings/clock-route-synthetic-20261102.wav --conversation --wake-frame 0 --pace 1 --endpoint-ms 1024 --backend-config var/cache/voice-latency-capped.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --onit-python the Onit environment Python interpreter --onit-max-requests 2 --transcript --output var/results/clock-live-baseline.json --trace var/results/clock-live-baseline.jsonl
+PYTHONPATH=src PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.cli replay var/recordings/clock-route-synthetic-20261102.wav --conversation --wake-frame 0 --pace 1 --endpoint-ms 1024 --backend-config var/cache/voice-latency-capped.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --onit-python the Onit environment Python interpreter --onit-max-requests 2 --direct-clock --transcript --output var/results/clock-live-direct.json --trace var/results/clock-live-direct.jsonl
 ```
 
 These output names must be fresh at the time of a live run. The cap is an attempt bound, not a monetary guarantee; no published per-request cost for the class service is recorded. The smallest laptop listening test is one ordinary question followed by a corrected clock/time request while the assistant is speaking, recording last speech, first audible response, false turns and speaker stop with a synchronized reference. The Pi 5/4 GB follow-up repeats the same cases after aarch64 dependency and audio inventory gates. No ME2, shared service, Pi hardware, Git stage/commit/push or public endpoint change occurred.
@@ -2909,7 +3040,7 @@ PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1
 Next laptop check (one fresh session, no music playing, so ASR and reasoning errors are not confounded by speaker leakage or task execution): use the existing Groq Whisper profile and current private key files; do not change providers or start another session during this check.
 
 ```bash
-cd /mnt/jfs_hpc/home/edgardo.callagon.jr/sandbox/ME3-VoiceAgent
+cd $ME3_ROOT
 ME3_MUSIC_CONFIG=var/cache/music.json \
 PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba \
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
@@ -3115,7 +3246,7 @@ This is the next useful manual run once the user is ready. Keep the explicit lap
 HPC terminal:
 
 ```bash
-cd /mnt/jfs_hpc/home/edgardo.callagon.jr/sandbox/ME3-VoiceAgent
+cd $ME3_ROOT
 ME3_MUSIC_CONFIG=var/cache/music.json \
 PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba \
 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
@@ -3243,7 +3374,7 @@ Added a distinct `local-project-site` receipt and linked it through Session hist
 The explicit HPC invocation additionally requires:
 
 ~~~bash
---onit-output-root /mnt/jfs_hpc/home/edgardo.callagon.jr/sandbox
+--onit-output-root $HPC_SANDBOX
 ~~~
 
 This output scope is opt-in and only permits new sibling folders. It does not grant shell access, package installation, builds, tests, server startup, deployment, repository writes, or modification of existing projects. The prior misrecognized `m8_dash_test` directory remains untouched. Spoken readback/approval for folder names remains a safety gap, so inspect the task receipt and path before using generated output.
@@ -3263,7 +3394,7 @@ Results: the Onit/session/transcript suite passed **91 tests in 3.21 s**; the mo
 
 ### Remaining gates
 
-- The latest laptop Groq profile is not an Onit-compatible profile. To use Onit with the currently qualified DGX route, launch the bridge with the standard DGX profile, `--onit-python /mnt/jfs_hpc/home/edgardo.callagon.jr/.conda/envs/onit/bin/python`, and `--onit-primary`; add the output-root flag only when a new sandbox folder is intended.
+- The latest laptop Groq profile is not an Onit-compatible profile. To use Onit with the currently qualified DGX route, launch the bridge with the standard DGX profile, `--onit-python the Onit environment Python interpreter`, and `--onit-primary`; add the output-root flag only when a new sandbox folder is intended.
 - The two-port catalog check showed Qwen listed on port 8000 too, but ME3's current Onit contract is pinned to port 8001. Port 8000 inference and sustained generation were not tested in this pass.
 - The single short generation response does not establish robust reasoning. The user-reported Onit streaming timeout may still be specific to Onit's client/configuration or to service variability; no current Onit CLI run was made here.
 - The static-site tool has not been exercised against the live Onit model after this change. A bounded next live task should request one small one-page site in a new, explicitly named sandbox folder; verify the actual directory and file list from the receipt, then open/download files manually. The application does not run or deploy the site.
@@ -4504,14 +4635,198 @@ Focused final regression command: `PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREAD
 
 Readiness: proceed with official launcher/import, mock loopback and isolated provider/active/inactive Pi smoke stages under the existing authorization. Full class scoring requires a tested per-trial activation/reset/readiness protocol or instructor-approved isolated-case protocol. Preserve all prior laptop failures, Pi software findings and missing acoustic/physical evidence. The managed VPN source remains local/unqualified and is not needed for benchmark smoke; use the verified manual VPN procedure from the published runbook. Publication review and the exact deployed source commit must precede GitHub-only Pi handoff.
 
+## Managed VPN launcher implementation and publication — 2026-11-06
+
+Supersedes the earlier local-only shell scaffold. Added stdlib `me3_voice.vpn` foreground supervision, private masked setup and opt-in installer `--vpn-profile`. Setup stores a two-line VPN auth file in the user's mode0700 OpenVPN directory and mode0600 launcher metadata in ignored var/cache; exclusive writes refuse overwrite. The auth file is plaintext with Unix access control, not encrypted. No values are placed in argv, environment, logs or source. Configured API keys remain separate. Existing installations use `swift.sh vpn-setup`; future sessions use `swift.sh vpn` with backend configuration before `--` and ordinary bridge options after it. Default demo/dashboard/manual bridge do not implicitly start a tunnel.
+
+The supervisor waits for the actual OpenVPN initialization message (deadline120s), runs the existing bounded TCP gate, then starts the owned loopback bridge. Auth-file CLI override is placed after --config so profile prompting does not override saved auth. Failed authentication/initialization/route checks do not start the bridge. VPN loss stops the owned bridge; stop events cancel work and reap owned children. Async subprocess creation is shielded long enough to retain handles during cancellation. Existing OpenVPN processes and concurrent managed launches are rejected, not killed. Privileged group cleanup uses existing sudo authorization and explicitly reports unconfirmed cleanup; no OS root password, sudoers change or boot service is installed. Profiles with daemon/privilege-drop/chroot/management directives require manual review. OS sudo may still prompt at launch; expired authorization may require manual disconnect.
+
+Validation: `PYTHONDONTWRITEBYTECODE=1 timeout 35s var/cache/venv/bin/python -B -m pytest -q tests/test_vpn.py tests/test_packaging.py --basetemp=var/scratch/pytest-vpn-final` passed12 checks in2.94s (`var/logs/vpn-final-tests.log`). The VPN supervisor tests use real harmless unprivileged Python children at substituted external-command boundaries, not OpenVPN, sudo/root, real credentials or real network routes. Covered file ownership/permissions/non-overwrite, no credential echo, valid comment-prefixed profile, startup ordering, initialization timeout, network failure, cancelled process creation/stop, VPN loss, failed privileged cleanup and CLI forwarding. Ruff and shell syntax passed. No live inference, Pi connection, physical action, service restart or real VPN was started here. Actual Pi/OpenVPN startup, reauthentication and cleanup remain pending an attended operator trial. Provider/acoustic/class-benchmark gates remain unchanged.
+
+## Architecture modernization Phase 1 — 2026-11-09
+
+Completed design-only Phase 1 under the user's explicit authorization. Canonical decisions, exact proposed model IDs, official sources, ownership/routing/task contracts, resource and cost budgets, acceptance gates and phased migration are in `docs/architecture_modernization/DECISIONS.md`. Phase 0 was reused. Retain Session/Pipecat/two speech MCP services; propose PipeWire reference AEC, Deepgram Nova-3/Aura-2, shared Groq GPT-OSS120B, Onit plus ME3 durable controller; focused LangGraph remains a gated alternative. No implementation, installations, provider requests, Pi operation or tests. Phase 2 requires separate authorization; all physical/latency/availability claims remain unverified.
+
+## Post-Phase-1 architecture challenge — 2026-11-09
+
+Completed the authorized design-only challenge, reusing Phase 0/1. Current recommendation and replacement gates are in docs/architecture_modernization/PHASE1_SIMPLIFICATION_DECISION.md. Retain simplified Session/narrow Pipecat and provisional Nova-3/Aura-2/Groq; select future ME3 single-step task worker plus SQLite controller, with Onit retirement contingent on Phase 5 parity/recovery evidence. Corrected process arithmetic to seven native application processes and identified Groq strict-schema versus streaming/tool-use incompatibility. Targeted installed source/official documentation review only; no runtime edits, package installs, inference, regression run or Pi operation. Current-tree regression and source provenance must precede behavioral changes; physical AEC remains mandatory. Phase 2 has not begun.
+
+## Final architecture redundancy correction — 2026-11-09
+
+The user corrected priorities to final-system capability/framework reuse ahead of migration effort. Source-level review selected Pipecat-native conversation and one LangGraph checkpoint/interrupt runtime; Session/narrow ingress/custom step executor recommendations are superseded. Canonical inventory, estimates, adapter contracts and revised Phase 2–8 roadmap: docs/architecture_modernization/PHASE1_REDUNDANCY_ELIMINATION.md. Target removes Python Pi audio peer and PCM loopback socket, retaining two genuine speech MCP children and scoped effect policy/verification. No code migration, installs, prototypes, runtime tests, provider or Pi operations. Counts are source/topology evidence; performance and estimated future LOC remain unverified. Revised Phase 2 requires baseline regression plus native framework contract slice and attended physical AEC qualification, not tuning engines slated for retirement.
+
+## Phase 2 local contract checkpoint — 2026-11-09
+
+Approved Pipecat-native target tested in isolated var/experiments/022-native-voice-duplex/; production source and dependencies unchanged. Before prototypes, existing pytest suite passed469 in85.25s outside restricted IPC (sandbox attempt timed out). native_contract.py passed3 real-MCP/mock-provider scenarios; session_comparison.py passed2 equivalents; pytest test_transport.py passed8 checks in3.46s. Reproduction commands, preserved failures, source hashes, metrics and operator instructions: docs/architecture_modernization/PHASE2_REPORT.md. Mock startup lag max196ms and ASR finalization concurrency remain open. Pi inaccessible; no SSH attempted. Physical AEC/reference, full duplex and resource gates are PENDING_OPERATOR_VALIDATION. Retain Session/sidecar. Next action is operator acquisition and analysis, not Phase3 or LangGraph migration.
+
 ## Architecture modernization Phase 2 handoff — 2026-11-09
 
 Approved target: Pipecat-native conversation, one future LangGraph task runtime, and two functional project-owned speech MCP services. Canonical design and superseded decisions are documented in docs/architecture_modernization/. Phase 2 local evidence and exact Pi operator commands are in PHASE2_REPORT.md. Physical AEC, reference routing, acoustic full duplex and Pi resource gates remain PENDING_OPERATOR_VALIDATION. Phase3 has not started.
 
 GitHub handoff publishes only architecture documents and isolated validation tools: scripts/phase2/ and tests/test_phase2_transport.py. Production runtime/model/dependency changes are excluded. Raw experiments, private state, recordings and unqualified local VPN work are excluded. Native contract/comparison scripts use actual local MCP children with mock inference; no live API or acoustic result is claimed. Parent repository and ME2 changes are preserved by publishing from fetched remote main through an isolated index. Pi synchronization must preserve parent HEAD/index, ME2, private config and ignored var/.
 
+Publication verified: GitHub main and codex/me3-phase2-validation both point to 8c757520ceb4724b84f0969fe32cfa4390cf0d34. Fifteen reviewed ME3-only paths; production source/dependencies and other coursework unchanged. Exact disposable publication snapshot:466 passed,3 optional wake-asset skips in63.80s; native scenarios3 passed and Session comparisons2 passed. Initial snapshot invocation put temporary results outside its var/ and caused2 existing path-policy failures; corrected invocation passed, both logs retained. Parent local HEAD/index unchanged. Publication manifest/review/results remain private under var/results/phase2-github-publication/.
+
 ## Phase2 capture-once preparation — 2026-11-09
 
 User expects a prolonged gap between attended Pi visits. Audited existing ME3 audio metadata/hashes:54 guided takes, all present/complete/hash-matching,435.923s, plus18s reading and laptop AEC pair. Raw detailed manifest remains var/results/architecture_modernization/phase2-audio-inventory-complete.json. docs/evidence/audio-corpus-inventory.md owns coverage and missing-data decisions. Do not request a complete replacement human prompt set. Explicit new user authorization permits reuse of existing recordings for relevant later providers; historical manifests remain unchanged and paid/phase limits remain.
 
 Extended isolated operator acquisition with speech/echo/overlap/negative corpus modes, retaining default24s interrupting smoke. Corpus modes disable interruption deliberately; only smoke can test barge-in. Full resource samples stream to private JSONL and WAV wrapping uses bounded chunks. PHASE2_REPORT.md adds exact commands, duration/storage requirements, annotation and return checklist. No devices, providers or remote Pi accessed; qualification remains pending.
+
+## Phase2 operator-reported acoustic failure checkpoint — 2026-11-09
+
+User requested recording the findings and continuing tomorrow. Canonical details: docs/architecture_modernization/PHASE2_REPORT.md, operator-trial section. Preserve Pi var/results/phase2-pi-20261109-1446/aec-smoke-01/. Diagnostic --raw taps initially produced stdout instead of files; a Pi scratch WAV adjustment yielded two24.07s captures. No audible reference or later4s direct playback; interruption events cannot qualify acoustics. IncompleteReadError may be capture or teardown; unresolved. Graph showed left-channel-only output; not established as silence cause. Two later SSH timeouts; last confirmed cleanup removed AEC and streams. Project Pi source unchanged. Next session must establish audible physical playback before repairing acquisition/cues and retesting one smoke. This checkpoint changed documentation/ignored result JSON only; no tests, SSH, hardware, production edits, commit/push or later-phase execution.
+
+## Authorized offline Phase2 and repository-local Phase3 — 2026-11-10
+
+User explicitly authorized hardware-independent continuation while Pi is unavailable. Implemented native_speech.py/native_pipeline.py, additive project MCPv2 capabilities/batching/events and between-append Deepgram hypotheses; kept both required real MCP services. Repaired isolated diagnostic WAV/cues and shutdown EOF handling with independent cleanup. Default Session/sidecar/bridge/Onit and dependencies/lock are preserved. Provisional Nova-3/Aura-2 profile is live-disabled; no paid inference/HPC, SSH, device actions, installs, staging or publishing.
+
+Baseline full suite483 passed in78.04s; final full suite506 passed in119.15s, one installed-framework deprecation warning, no skips. Final native3/Session2 executable parity scenarios pass. Source-frozen50-turn/profile matched replay/mock benchmark retains32ms default: native first-memory-write p95~63.05ms versus legacy15.34ms with an explicit50ms native fixture turn-stop floor; no speedup claim. Larger batches reduce call count only. Startup/steady lag separated; three-process snapshots, IPC/serialization and queue samples recorded. Canonical detailed methods/failures/code ownership/rollback: docs/architecture_modernization/PHASE3_REPORT.md; raw artifacts/selected rollback originals under var/experiments/023-native-speech-integration/; final benchmark under var/results/architecture_modernization/phase3-final-benchmark.json.
+
+PHASE2=PENDING_OPERATOR_VALIDATION: original Pi silence/EOF unresolved; script fixes do not prove acoustic success. PHASE3=PARTIAL overall: reusable native speech composition implemented/tested, but default application/native ingress/engagement/UI/tool cutover and live/provider/physical qualification remain pending. Later conversation integration crosses Phase4 scope; no automatic advancement or LangGraph migration. No Pi access requested at this checkpoint; minimal future operator entrypoint is scripts/phase2/qualify_audio.sh.
+
+
+## Phase3 native application integration — 2026-11-10
+
+Completed the authorized repository-local core entrypoint binding: strict runtime JSON/--engine selects native or legacy, with legacy default. Native CLI/replay/browser use Pipecat-native context/turn/LLM/tool/output and two functional mock-backed speech MCP services; Session is bypassed, not deleted. Browser ACK/stale-packet fencing, reconnect continuity, explicit Stop reset, delayed-ASR cancellation, failure recovery and compatibility are regression-tested. Unsupported advanced legacy integrations fail explicitly. Dependencies/models and32ms ASR unchanged.
+
+Commands: pytest -q --basetemp=var/scratch/pytest-phase3-entrypoint (520 passed, one framework warning; pre-change506); scripts/benchmark_application_entrypoint.py --engine legacy/native --samples50, separate processes, reused PCM, mock inference. Matched EOF first-memory-output p95 legacy10.107ms/native8.885ms; native sampled memory higher; no physical/live-provider efficiency or latency claim. Canonical ownership/removal gates, exact results, rollout/rollback: docs/architecture_modernization/PHASE3_REPORT.md. Local checkpoint uses a separate Git index/new codex branch, preserves parent HEAD/index and unrelated work; no push. PHASE2=PENDING_OPERATOR_VALIDATION; PHASE3=REPOSITORY_LOCAL_COMPLETE for opt-in core speech/application scope. Physical/live/advanced-integration gates remain; Phase4/LangGraph not authorized.
+
+## Phase4 native conversational intelligence — 2026-11-10
+
+Preserved Onit's Phase3 capabilities fix; verified baseline522 tests. Implemented native runtime clock and bounded complete context groups through Pipecat system_instruction, streaming Groq/tool lifecycle guards, read-only Tavily/search/original-source retrieval/quote provenance, strict arguments/permissions and stale callback fences. Fixed intermediate tool completions falsely ending a user turn; model503/malformed JSON/empty/truncated responses fail safely and allow explicit fresh-turn recovery. No duplicate planner/controller/history or extra process/framework. Research default disabled with explicit project key/request budget; legacy default and both speech MCP services retained.
+
+Commands: pytest -q --basetemp=var/scratch/pytest-phase4-release (559 passed in195.49s, one framework warning); benchmark_application_entrypoint.py --engine native --samples 50 with reused PCM/mock inference (first-output p9517.924ms; no performance improvement claim). evaluate_native_conversation.py default prepares40 pending questions with null scores, no API calls. Source/provenance/metrics/rollback and live gates: docs/architecture_modernization/PHASE4_REPORT.md; ignored experiment025/phase4 results. Dependency/lock and unrelated VPN work unchanged; no Git state changes or push. Phase2=PENDING_OPERATOR_VALIDATION; Phase4=REPOSITORY_LOCAL_COMPLETE/LIVE_QUALIFICATION_PENDING; no Phase5/LangGraph advancement.
+
+## Phase5 LangGraph task runtime — 2026-11-10
+
+Implemented one LangGraph runtime inside the opt-in Pipecat-native app. The framework owns graph/tool progression and SQLite checkpoints; the ME3 TaskStore owns only task identity/revisions, human approvals, operation receipts, progress and independent local checks in the same SQLite connection. Conversational start/status/steer remain Pipecat tools. Human pause/resume/cancel/approve are direct controls. Voice interruption remains separate. Tool scope is runtime time, existing read-only research, isolated task artifacts and a mock-only external-action fixture. No shell/browser/GitHub/real external write was connected. Legacy Session/Onit paths and default remain intact.
+
+The task model uses the existing Groq `openai/gpt-oss-120b` configuration/shared budget but was tested only through an offline fake stream. Actual ASR/TTS project MCP child processes plus mock speech inference ran in the native concurrency test. Failures found/fixed: approval resume racing graph shutdown; duplicate GPT-OSS request kwarg; unsafe relative path comparison; artifact/database directory permission checks; native browser projection calling an async snapshot synchronously. Ambiguous in-flight effects become `unknown`, never auto-replayed; checkpointing does not claim exactly-once behavior.
+
+Final verification command and completed suite result: `PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -m pytest -q --basetemp=var/scratch/pytest-phase5-qualification` (575 passed, 1 warning, 219.67s). Mock-only runtime benchmark and SHA256 source provenance: `var/results/architecture_modernization/phase5-runtime.json`. Detailed tests, measured host limits, exact dependency versions, missing keys, four-case 12-Groq/8-Tavily pilot preparation, rollback and remaining gates: `docs/architecture_modernization/PHASE5_REPORT.md`. No live request, Pi access, staging, commit or push. Phase2 remains `PENDING_OPERATOR_VALIDATION`; Phase5 live/physical qualification pending; do not begin Phase6 without explicit authorization.
+
+## Phase5 independent corrective review — 2026-11-10
+
+Reviewed actual LangGraph/TaskStore and native Pipecat integration. Corrected completion/verification and exception races with human steering/pause/cancel, concurrent startup/control handling, approval checkpoint state overwrite, and single database ownership. Actual SIGKILL subprocess tests exercise blocked model and dispatching-effect recovery, SQLite integrity and no unknown-effect replay. Retain conditional acceptance pending semantic task verification and spoken delivery; physical/live qualification remains pending. Exact final commands/results and raw-sample 50-task benchmarks are recorded in docs/architecture_modernization/PHASE5_REPORT.md. No Phase6, paid calls, SSH, Git staging/commit/push.
+
+Final independent-review qualification: **586 passed, 1 existing Pipecat deprecation warning, 242.82s**. Command: `PYTHONDONTWRITEBYTECODE=1 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -m pytest -q --basetemp=var/scratch/pytest-phase5-review-release-final`. Changed-file Ruff passed. Machine record/source hashes: `var/results/architecture_modernization/phase5-independent-review.json`; final-source mock benchmark: `var/results/architecture_modernization/phase5-review-qualified.json`. Assessment remains **CONDITIONAL** for the explicitly documented verification/delivery/deployment gaps. No new dependencies or live calls.
+
+
+## Phase4 live pilot continuation — 2026-11-11
+
+P4-02 independently checked correct. P4-11 was retried within the same cumulative budget but timed out at120s after five successful Groq calls and repeated search/retrieval; no final answer or source was retained. No429 recurred. Captured successful headers showed 8,000 TPM /3,332 tokens remaining and1,000 RPD /995 requests remaining; original429 cause remains unknown because its headers were not saved. Current cumulative use10/12 Groq,4/8 Tavily searches,7/8 aggregate research HTTP operations; P4-12/P4-17 remain unrun and remaining calls are insufficient for reliable source-grounded completion. Stop without resetting limits. Focused rate-limit tests4 passed; broader Phase4/native regression54 passed before final pacing adjustment; Ruff passes. See `docs/architecture_modernization/PHASE4_REPORT.md`.
+
+
+## Phase4 research execution reliability — 2026-11-11
+
+P4-11 trace proves timeout after repeated searches/retrieval and zero source retention but not exact fetch errors; old `tool_completed` instrumentation did not report outcome/context delivery. Pipecat1.13.0 source plus local end-to-end fixtures confirm its result callback and shared LLMContext continuation work. Added sanitized tool/context diagnostics, configurable call/repeat guards, source-citation-gated researched output and explicit failure speech. Corrected over-conservative TPM pacing. Full suite594 passed with one pre-existing warning; the final turn-state reset passed57 Phase4/native tests; no live calls/Pi access. Pilot remains incomplete and not justified for another run under remaining counters. Details and raw machine result in docs/architecture_modernization/PHASE4_REPORT.md and var/results/architecture_modernization/phase4-research-reliability.json.
+
+## 2026-11-11 research reliability milestone
+
+P4-11 canary showed a failed source fetch, distinct repeated searches, no retained evidence and a paced continuation overtaken by the evaluator deadline. The repository-local fix adds safe HTTP error classification, compact discovery leads, primary-source instruction, retrieval-budget reservation and a deadline-aware native response path. Project-venv offline checks: focused unit4 passed, MCP/SDK integration3 passed, full suite598 passed with one existing warning. No live requests or Pi trials were run. Phase4 factual grounding and physical Phase2 remain unqualified; see the canonical modernization PHASE4_REPORT.md and PROGRESS.md.
+
+## 2026-11-11 Phase4 adaptive research retrieval
+
+Updated ResearchClient for concise Basic Search, generic provenance ordering, bounded in-memory caching, query-ranked evidence excerpts, local HTML extraction and budgeted Tavily Basic Extract fallback. Four HTML fixture categories and mocked HTTP tests cover extraction/cache/fallback. Focused9/full605 passed, Ruff passed. No live API or Pi test. Provider credit usage, token savings and latency await a separately authorized canary. See canonical Phase4 report and adaptive-retrieval machine record.
+
+## 2026-11-11 Phase4 autonomous offline checkpoint
+
+Updated general temporal/context instructions and recorded adaptive research guarantees and limitations. Existing-venv suite605 passed with one existing warning; Ruff passed. No live API, Pi or physical validation. Phase4 live source quality, Phase5 conditional gaps and Phase2 physical qualification remain open; no Phase6 work. Canonical details: modernization PHASE4_REPORT.md and phase4-autonomous-reliability-offline.json.
+
+## 2026-11-11 Native application intelligence validation
+
+Added a frozen-clock six-turn contract evaluation through `NativeApplication` and actual project speech MCP subprocesses. Direct, clarification, contextual research, ECB extraction failure, conflicting evidence and historical routes all completed as scripted; the ECB response failed closed. The model transcript chose routes, so this is application integration evidence, not Groq reasoning qualification. Full regression606 passed (baseline605), one existing warning. Mock median/p95 response20.0/28.6ms and startup3.74s; do not treat as audible, live or Pi performance. Phase4 repo-local contract: pass; live model quality/latency remains conditional; Phase2 physical audio remains pending; Phase5 conditional; Phase6 unstarted. See modernization `PHASE4_REPORT.md` and `intelligence-offline.json`.
+
+## 2026-11-11 Four-question live intelligence canary
+
+Authorized limits12 Groq/6 combined research, cumulative ceilings30/19/14 Groq/research/Tavily. Actual native app and both speech MCP services passed offline preflight; ASR/TTS inference mocked. Direct and clarification cases passed. The current Bank Rate case used5 Groq calls,2 searches and2 failed retrievals; no source/answer was retained, and the turn safely ended at the response-reserve deadline. The follow-up case was skipped. Final use7/12 Groq,4/6 combined research,2/6 Tavily; cumulative25/30,17/19,10/14. Evaluator terminal reason mislabel fixed/tested after the run. Phase4 remains conditional. Exact metrics/limitations and raw result are in modernization `PHASE4_REPORT.md` and `phase4-live-intelligence-canary-summary-20261111.json`.
+
+## 2026-11-11 Retrieval/laptop checkpoint
+
+Source audit found app diagnostics discarded HTTP status/host hash already carried by `ResearchError`; transport categories and Tavily extraction fallback outcomes were also collapsed. Fixed the safe diagnostics path and two-failed-source-fetch termination; exact previous live HTTP status remains unknown. Focused Phase4 62 passed; full existing-venv suite616 passed in258.54s; changed Python Ruff check/format passed. No provider API or physical device run. Browser UI already supports the Pipecat-native engine and LangGraph task controls. Added a Windows laptop procedure using the same USB audio devices and existing recordings. Browser AEC and PipeWire SPA WebRTC AEC are distinct configurations; Pi remains `PENDING_OPERATOR_VALIDATION`. See `docs/architecture_modernization/PHASE2_REPORT.md`, `PHASE4_REPORT.md`, and `var/results/architecture_modernization/retrieval-laptop-checkpoint-20261111.json`.
+
+## 2026-11-11 — Phase6 repository-local actions checkpoint
+
+Reused the current device/music adapters and extracted Session's pure exact-command parsers to `src/me3_voice/fast_commands.py` for both rollback and Pipecat-native paths. Native bridge now binds configured device/music/receipt adapters, exposes validated music tools, executes supported exact commands through a one-per-turn local fast path, and handles typed/deduplicated browser lamp actions. Mock is still default; no Pi or external-service action was performed. Full regression was run using the existing venv and pytest temporary storage under ignored `var/scratch/`; exact result and source hashes are in modernization PHASE6_REPORT.md and `var/results/architecture_modernization/phase6-offline-20261111.json`. Phase6 assessment remains conditional: no arbitrary shell/browser, real external write, or physical hardware validation. Phase2 remains `PENDING_OPERATOR_VALIDATION`; stop before Phase7.
+
+Follow-up validation additionally confirms the native path retains prior user/tool-result context for an immediate light brightness correction: “Turn on the lights” followed by “Can you make it 80%?” updates the mock adapter through the actual Pipecat LLM boundary without a provider call. Final full regression remains 617 passed, 0 failed in 274.84s; one existing Pipecat deprecation warning. This does not qualify physical audio or live integrations.
+
+### Phase6 general-purpose workspace tools — 2026-11-11
+
+Extended the existing LangGraph task workspace to nested normalized relative paths, create/update/read/list files and create directories. Files stay under the per-task owner-only root; content is capped at64KiB, writes use atomic replacement, stable operation IDs bound to task revision/path/content digest, durable SQLite intent/receipt and readback verification. Unsafe paths and symlinks fail closed. Disk/fsync calls are offloaded to asyncio's existing executor so background task file work does not synchronously block Pipecat's loop. No new dependency/service. Offline tests create nested static-site files, update and read them, list directories, reject path/symlink attacks, detect stale operation-ID reuse, fence a human steering revision arriving during a blocked write, and recover a write after an actual subprocess SIGKILL between atomic replace and receipt persistence. Full suite631 passed/0 failed in303.88s with one existing warning. A final 30-write HPC mock/filesystem sample measured p50/p95 79.323/96.280ms; it is not an end-to-end, voice, or Pi result. Phase6 remains conditional: no site execution/browser test, general host filesystem or shell, real external writes, or physical actions. See `docs/architecture_modernization/PHASE6_REPORT.md` and `phase6-general-actions-20261111.json`.
+
+### Phase6 independent security review — 2026-11-11
+
+Reproduced a workspace parent-swap race in pathname-based atomic writes and closed it with pinned descriptor-relative directory traversal, replace, readback and listing. Also denied hard-linked file reads; a hard link inside a task workspace no longer exposes an outside private file. Adversarial directory-swap and hard-link tests and actual SIGKILL/restart readback recovery pass. Final full offline suite: 633 passed, 0 failed, one pre-existing Pipecat deprecation warning, 314.51s. Ruff and diff checks pass. Same-account process control and configured root placement remain trusted; real external writes and Pi hardware remain unqualified. No new runtime dependency or process. Phase6 remains CONDITIONAL and Phase7 was not started. See `docs/architecture_modernization/PHASE6_REPORT.md`.
+
+### Phase7 native WAV live-smoke preflight — 2026-11-11
+
+Completed offline ledger reporting, native output WAV validity reporting, and an explicit no-retry switch for one bounded Groq smoke run. Reused the existing labeled human “boiling point of water” recording and made only an ignored PCM WAV derivative. Focused native/MCP/ledger regressions and retry-control tests are recorded in the Phase7 preparation report. Live budget is not approved or enabled; proposed limits are one Nova-3 request, one Groq attempt, one Aura-2 segment, and zero research calls. Laptop/Pi acoustic and browser checks remain pending.
+
+### Authorized native live API smoke — 2026-11-11
+
+Ran exactly one approved native Pipecat WAV replay through the project ASR/TTS MCP subprocesses: Nova-3, Groq `openai/gpt-oss-120b`, Aura-2, one request each; research, Qwen and other providers remained at zero. The durable ledger confirmed all three requests completed and the second TTS segment was denied before dispatch. ASR omitted the first word; Groq chose disabled `web_search` for a stable question; the safe fallback exceeded the one-segment TTS cap. No complete answer WAV/event report was produced. No retries or further live requests. Backend remains CONDITIONAL and Windows browser voice/UI testing is BLOCKED pending offline routing and single-segment qualification, then a separately approved live allocation. Sanitized evidence is in `docs/architecture_modernization/PHASE7_PREPARATION.md` and `var/results/native-live-smoke/live-20261111-01-summary.json`; physical laptop/Pi audio remains untested.
+
+### Native live-smoke corrective checkpoint — 2026-11-11
+
+Fixed the confirmed tool-visibility cause: Pipecat context schemas now expose search/retrieval only when research permission and budget are available, and evidence verification only when a source is retained. Direct stable-answer guidance is explicit; safe fallback speech is one concise sentence. Natural sentence-level streaming remains intact. Offline replay with both MCP services proved complete two-sentence TTS, final PCM/WAV output and `turn_completed` ordering. ASR clipping versus recognition variation remains unresolved; no evidence justified changing audio processing. Affected suites:84 passed; Ruff passed. No live calls. Proposed new live approval:1 Nova-3,1 Groq no-retry, up to3 Aura-2 segments (<=500 chars each), zero research. Previous US$0.04 estimate is not substantiated for the larger TTS cap; specify a fresh cost ceiling. See modernization `PHASE7_PREPARATION.md`.
+
+### Live voice readiness / demo alignment — 2026-11-11
+
+Reused matched Phase3/Phase4 latency evidence, current Pipecat event boundaries, Phase6 device/music/task capability inventory, historical Spotify browser timings and existing course report. Current native offline confirmation: 3 focused integration tests passed when local MCP subprocess IPC was available; the same tests failed in the restricted sandbox at MCP `initialize` timeout and passed unsandboxed. No production code changed. Updated `docs/architecture_modernization/PHASE7_PREPARATION.md` with source-hashed prompt spec, provider-qualified one-ASR/one-Groq/up-to-three-TTS/zero-research approval proposal, conservative $0.066737 usage estimate (rounded $0.07; dollar cost not enforced by ledger), latency interpretation, capability/course matrix, GitHub publication requirements and minimal demo sequence. Backend remains CONDITIONAL; first Windows browser voice/UI qualification follows one successful approved complete replay. Phase2 Pi audio remains `PENDING_OPERATOR_VALIDATION`.
+
+### Authorized native live replay startup failure — 2026-11-11
+
+The user authorized one native WAV replay with limits Nova-3 1, Groq GPT-OSS-120B 1 (no retries), Aura-2 up to3 segments ×500 characters, research/other providers0. A fresh 0600 profile uses the existing Deepgram/Groq secret names and shared SQLite ledger. The replay stopped before audio at ASR MCP `initialize` timeout under restricted local subprocess IPC; TTS did not start. Ledger had zero reservations and no provider requests, so no provider usage was incurred, but the same approval was not retried. Sanitized result: `var/results/native-live-smoke/live-20261111-02-summary.json`; details and next gate in `PHASE7_PREPARATION.md`. Backend remains CONDITIONAL; obtain fresh approval for one replay with MCP subprocess IPC enabled before laptop browser voice/UI testing. Phase2 physical audio/AEC remains `PENDING_OPERATOR_VALIDATION`.
+
+### Phase7 MCP execution-environment preflight — 2026-11-11
+
+Paired the failed default-context startup with offline subprocess diagnostics. Restricted sandbox reproduced ASR/TTS mock MCP initialize timeouts (~17.037s each, exit-15); command-scoped IPC-enabled run passed both real project mock children with tool discovery, protocol2025-11-25, empty stderr, exit0 (1.831s ASR /1.748s TTS), and the actual `SpeechClient` live-disabled Nova-3/Aura-2 descriptors started and closed (3.723s total, contract v2). Existing focused startup tests2 passed. Shared provider ledger unchanged, zero reservations; no inference/network request. This confirms restricted local subprocess IPC as the cause. No persistent sandbox or runtime change. Exact evidence and next launch mode are in `PHASE7_PREPARATION.md` and `var/results/native-live-smoke/phase7-mcp-preflight-20261111.json`. Stop at fresh live-allocation approval; no replay executed.
+
+### 2026-11-11 — Native live replay stopped before provider dispatch
+
+Command-scoped MCP preflight passed for both ASR/TTS children and the active run-scoped SQLite ledger. The one approved WAV replay failed before network I/O: additive migration appends `run_id` to the legacy SQLite column order, but ledger reservation uses a positional insert in fresh-schema order. A scratch reproduction confirms `NOT NULL constraint failed: provider_requests.created`; the shared DB has no reservation for the run and retains its eight prior rows. No provider calls, transcript, TTS output, or conversation timing. Sanitized record: `var/results/native-live-smoke/live-20261111-03-summary.json`. The replay authorization is spent. Next smallest step: explicit-column insert and migration regression, then request new live authorization. Phase2 physical qualification stays pending; no phase advancement.
+## 2026-11-12 — Authorized native Nova-3 ASR-only replay
+
+The exact-environment MCP preflight passed (both project ASR/TTS subprocesses initialized and closed; zero reservations). The single approved 9 s WAV replay delivered63 frames with p50/max gaps33.06/41.22 ms and one VAD start, no forced stop or restart. One native ASR stream was reserved; the first `asr_append` stayed pending until the16-frame queue saturated563.68 ms later. `QueueFull` caused a local pipeline error before ASR final; ledger status is `unknown`, not semantic success. No LLM/TTS or other provider requests were made; no retry. The partial trace and sanitized result are under `var/results/native-live-smoke/live-20261112-asr-01*`. Source shows the first Deepgram append lazily opens its WebSocket. Historical Session success used buffered final-only Qwen2-Audio ASR and is not a matching streaming-handshake test. Phase7 remains conditional. The next bounded step is an offline first-append connection-delay/queue-headroom test, followed by fresh authorization if it passes. No code changes, Pi access, or external actions occurred.
+
+## 2026-11-13 — Swift affected-suite regression follow-up
+
+The earlier broader run exposed two test defects: replay tests supplied generated `--output` reports under pytest `/tmp`, contrary to `src/me3_voice/artifacts.py`'s `var/` output contract; a speech recovery test compared the full error object to an obsolete two-field shape after sanitized diagnostics were added. Test fixtures now use unique ignored `var/scratch/` output paths, and the speech test asserts the stable public error code/role plus exception type. Initial no-IPC execution also reproduced MCP `initialize` timeouts; with command-scoped local stdio IPC, the complete affected suite passed: `tests/test_native_entrypoint.py tests/test_native_speech.py tests/test_speech.py tests/test_remote.py` — 119 passed, one Pipecat deprecation warning, in 204.33s. Ruff check and format passed. The suite includes configured replay timeout parity, timeout clamping, cancellation, stale-ASR fencing, and conservative request-ledger state tests. No production code or provider calls. Raw run log: ignored `var/logs/phase7-regression-final.log`.
+
+### 2026-11-13 — Authorized one-request Nova-3 ASR diagnostic
+
+The live Nova-3 ASR-only native replay used the existing 9-second labeled WAV, with Groq/TTS mocked, retries disabled and a fresh one-request run-scoped ledger. MCP preflight passed; one VAD utterance finalized with 90/90 ordered append operations and one successful Nova-3 ledger row. Native `asr_open` took114.56 ms; first append took912.28 ms including unexposed connection readiness; endpoint-to-ASR-final was357.53 ms. The final transcript again omitted the first word “What” (WER0.10 against the ten-word manifest reference). Mock LLM/TTS emitted completion events and a valid0.16 s WAV; this is not a real spoken answer or audible-latency result. No retries or other provider calls. Full-live ASR→LLM→TTS remains a separate authorization gate; laptop UI and Pi audio remain unqualified. Detailed artifacts and timing caveat are in `docs/architecture_modernization/PHASE7_PREPARATION.md` and ignored `var/results/swift-nova-asr-diag-20261113-01*`.
+
+### 2026-11-13 — Onset capture and live append-capacity follow-up
+
+Native Pipecat VAD forwarded audio before speech-start confirmation while the STT adapter previously dropped those frames. An 8-frame/256 ms bounded ring now supplies ordered onset PCM after VAD confirmation; actual native mock replays on three labeled clips completed and showed the submitted PCM was a contiguous source slice. Interruption and sleeping wake-gate tests confirm old audio is cleared and inactive background is not opened as ASR. A separately authorized one-request capital-question Nova-3 replay still failed before transcript: `asr_open` 112.50 ms; first append pending848.22 ms; bounded32-frame queue full941.31 ms after VAD start; ledger `unknown`. The one attempt was not retried. Queue capacity is now40 frames to restore the pre-existing post-onset margin after reserving eight onset frames. Offline final affected suite: **65 passed**, one existing Pipecat deprecation warning; Ruff passed. A900 ms delayed native mock turn completes and1.2 s remains an explicit bounded failure. Artifacts and exact limits in `docs/architecture_modernization/PHASE7_PREPARATION.md`; raw trace/log/results stay under ignored `var/results/audio-triage/` and `var/logs/audio-triage/`. Remaining Nova budget under the written total is one attempt but is not spent because the prior attempt outcome is uncertain; Groq's documented25 prior attempts exceed this workstream's8 ceiling, so no full live turn is authorized within the aggregate. No live answer, multi-turn, laptop AEC or Pi hardware qualification was established.
+
+### 2026-11-13 — Native ASR readiness and safe campaign reconciliation
+
+Offline fault injection separated provider WebSocket handshake from MCP append-ack latency. ASR open starts one background connection; 0.5–1.5 s fake handshakes buffered/sent 50 ordered PCM frames below the 64 KB cap, with first append acknowledgement <0.24 ms. The native 40-frame queue completes delayed MCP append acknowledgements through 900 ms; 1.2/1.5 s overload reaches the real VAD stop, then aborts explicitly as `queue_saturated` with rejected-byte accounting. Queue capacity did not increase. Replay error traces preserve causal ASR codes and cannot return success after a late pipeline error. The affected offline suite passed 131/131, with one existing Pipecat TTS deprecation warning; Ruff passed. Logs: `var/logs/phase7/native-asr-offline-regression-final.log`, `var/logs/phase7/native-asr-final-replay-check.log`.
+
+Ledger review found eight identifiable Nova reservations across two SQLite files (five success, three unknown); the current onset run itself is one unknown. Phase4's Groq 25/30 is a separate earlier campaign counter, not account usage or proven use of the current 8-call campaign. Because the ledger scopes caps by run ID and no durable cross-run campaign ID was defined, no safe remaining aggregate can be claimed. Treat live remainder as zero until a fresh allocation defines one fixed run ID and total caps. No provider calls in this checkpoint. Phase7 remains conditional; no laptop test until a complete live spoken turn. Phase2 remains `PENDING_OPERATOR_VALIDATION`.
+
+The renamed 9-second native replay matrix was rerun after correcting its fixture parser: 7 passed, one existing deprecation warning,87.46 s. The first renamed-fixture attempt failed only because it parsed `ack` instead of the numeric delay; no production failure was involved. Final log: `var/logs/phase7/native-asr-final-replay-check2.log`.
+
+Three existing Phase5 tests also passed offline: multipage artifact verification, steering-fence correctness, and voice/MCP responsiveness during a durable task (3 passed; `var/logs/phase7/native-task-continuity.log`). No live model reasoning was evaluated.
+
+2026-11-13 Phase7 checkpoint: the authorized campaign `swift-campaign-20261113-e8795697` completed one correct live Nova-3 ASR-only replay, then stopped after a second Nova request ended `unknown` with `asr_buffer_full` before WebSocket readiness. Groq/TTS were not called. Provider-side buffering is now bounded at five seconds (160 KB) to align with the existing connection timeout; fake-handshake/order/overflow checks pass. Affected regression 123 passed; focused post-format 10 passed; Ruff clean. Full live voice, laptop and Pi audio qualification remain pending. See architecture modernization Phase7 report for detailed traces and usage.
+
+2026-11-13 Phase7 follow-up: fresh fixed-ID campaign passed live Nova ASR-only and reached Groq plus four streamed Aura segments on the full replay. The answer was correct, but the replay’s15 s settlement timeout cancelled segment four, leaving an Aura ledger outcome `unknown`; no completed spoken turn/WAV was produced. The campaign used Nova2/3, Groq1/2 and Aura4/4, so no further call fits safely. Added sanitized aiohttp connection-stage tracing, safe stage relay,30 s finite settle wait and a4,096-event replay ring. Affected regression125 passed, focused11 passed, Ruff clean. Full live and multi-turn remain conditional; see the Phase7 report.
+
+
+2026-11-13 Phase7 settlement follow-up: the prior fourth Aura cancellation aligns with the replay's 15 s `application.settled` timeout; the trace gives no independent stall signal but cannot prove uncancelled completion. Offline native replay now asserts the configured 30 s diagnostic wait. Six focused replay/TTS/error/cancellation/trace tests and two connection-stage/relay tests passed; Ruff passed. No live calls. Candidate run `swift-followup-20261113-4059fd4c00` has zero rows in the shared ledger and conservative caps Nova-3 2, Groq 2 ×2,000 completion tokens, Aura-2 4 ×500 characters (2,000 total maximum), research/other providers disabled. It is not dispatched; explicit authorization is required. See `docs/architecture_modernization/PHASE7_PREPARATION.md` for detailed evidence and latency caveats.
+
+
+2026-11-13: the authorized campaign `swift-followup-20261113-4059fd4c00` completed ASR and Groq successfully but replay timed out during its third streamed Aura segment. It left an `unknown` TTS ledger row and no final WAV/`turn_completed`; no retries or further provider calls. Speech-end→first memory packet was 2.632 s (single sample). After preserving that baseline, replay-only settlement changed to 60 s and prompt policy was versioned ME3-VOICE-2 for concise direct answers; live effect is unverified. Post-change offline checks: 11 passed, Ruff clean. Phase7 full-turn acceptance and laptop live voice remain CONDITIONAL; Phase2 remains `PENDING_OPERATOR_VALIDATION`. See `docs/architecture_modernization/PHASE7_PREPARATION.md` and the mode-0600 run summary `var/results/swift-followup-20261113-4059fd4c00-summary.json`.
+
+
+2026-11-13 TTS sprint: sentence-level synthesis now emits one speaking stop at response completion. One/two/three-sentence and 3.1 s inter-sentence gap replay fixtures verify one speaking interval, last PCM before turn_completed, valid WAV and cancellation fencing. The affected four-file suite passed 138/138 with local IPC; focused TTS/cancel/barge-in checks passed 8/8; Ruff passed. Offline mock pull delivery was 0.128 s PCM in 0.0531 s wall time. Historical live PCM showed 3.36/8.44 s audio in 5.274/15.898 s, while the last segment was cancelled after 11.794 s with 5.68 s delivered. Old traces cannot attribute the slower-than-real-time delivery to provider or MCP; the new instrumentation separates those stages. No live request was made because no unused Terra campaign profile was present and existing Swift profiles contain unknown outcomes. Backend and laptop live voice remain conditional; Phase 2 stays PENDING_OPERATOR_VALIDATION. See docs/architecture_modernization/PHASE7_PREPARATION.md.
+
+2026-11-14 laptop long-session follow-up: exposed ephemeral ASR interim text in the UI without adding it to model context/journal; corrected `control_music` volume argument contract; reduced NativeLLM context logging to message counts; strengthened uncertainty guidance when fresh research tools are unavailable; added a bounded 120 ms browser startup jitter buffer with interruption clearing and short-burst fallback; clarified that a closed browser session needs a fresh start and will not resume. Session review found 12 finals/29 partials, 7 completed turns, 3 recoverable turn errors and no `bridge_error`; volume action failed on the prior argument mismatch; a current-election answer lacked fresh research verification. TTS packet gaps and a `tts_next` timeout after the last PCM remain unresolved. Focused tests 4 passed, logging/partial checks 2 passed, dashboard 16 passed, Node prebuffer suite passed, Ruff clean; selected broad suite was 108 passed/31 failed and is not green (MCP startup/task DB failures not fully classified). No live providers or physical audio tests. See `docs/architecture_modernization/PHASE7_PREPARATION.md`.
+2026-11-14 native ME2 command parity: reused legacy direct clarification for underspecified music-on/play requests; confirmed standalone light, pause, and volume commands execute through the shared mock action path without Groq. Recorded completed fast-action tool/result in Pipecat context before TTS so interruption cannot make it appear pending in the next turn. Regression set: 13 passed, Ruff clean. Compound track-plus-volume still goes through model tools; live Spotify and post-fix laptop qualification remain pending. Details: `docs/architecture_modernization/PHASE7_PREPARATION.md`.
+
+2026-11-14 native end-to-end visibility follow-up: the last long browser session was audited turn-by-turn from its bridge log. It showed a correct arithmetic answer, mock light action, an accidental repeated light action after interrupted confirmation (fixed by adding the committed action receipt to Pipecat context), a rain follow-up with extra unrelated light context, incomplete music clarification/tool friction, failed volume-slot extraction with simulated-only music, and an ungrounded temporally inconsistent Senate answer after research was not invoked. Native bridge now archives authorized session transcripts via the existing `TranscriptPublisher`, includes fast device/music receipts in the live task projection, and republishes on action updates. Transcript revision counts task and action changes to avoid the browser discarding unchanged-chat updates. LangGraph task cards expose recorded phases/steps/timestamps rather than synthetic percent progress. ME3-VOICE-4 now more explicitly resolves topical follow-ups without unrelated action receipts; live effect is unverified. Focused route/UI/task regression: 45 passed, 1 unrelated loopback contract test deselected; an additional 3 context/action/music-focus tests passed; Ruff clean. Remaining: verify research-enabled/disabled temporal follow-up, topical versus historical context recall, actual Spotify, one live guided LangGraph task, complete TTS and classify the prior 31 broad-suite failures. Full details and evidence boundaries: `docs/architecture_modernization/PHASE7_PREPARATION.md`.

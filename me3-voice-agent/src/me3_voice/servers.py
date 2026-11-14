@@ -5,6 +5,7 @@ import asyncio
 import secrets
 import time
 import json
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 from functools import wraps
@@ -32,6 +33,16 @@ class Operation:
     revision: int = 0
     closed: bool = False
     output_bytes: int = 0
+    tts_opened_at: float | None = None
+    tts_first_next_at: float | None = None
+    tts_last_next_at: float | None = None
+    tts_next_count: int = 0
+    tts_next_seconds: deque = field(default_factory=lambda: deque(maxlen=1024))
+    tts_first_pcm_at: float | None = None
+    tts_last_pcm_at: float | None = None
+    tts_pcm_chunks: int = 0
+    tts_pcm_bytes: int = 0
+    tts_status: str = "running"
 
 
 class SpeechService:
@@ -61,7 +72,15 @@ class SpeechService:
         op = self.operations.pop(operation_id, None)
         if op:
             await self.dispose(op)
-        return {"cancelled": op is not None}
+        result = {"cancelled": op is not None}
+        if op:
+            diagnostics = self.provider_diagnostics(op)
+            if diagnostics is not None:
+                result["provider_diagnostics"] = diagnostics
+            if op.iterator is not None:
+                op.tts_status = "cancelled"
+                result["tts_diagnostics"] = self.tts_diagnostics(op)
+        return result
 
     async def close(self):
         for identifier in list(self.operations):
@@ -103,6 +122,51 @@ class SpeechService:
             row["provider_text"] = result.provider_text
         return row
 
+    @staticmethod
+    def provider_diagnostics(op):
+        snapshot = getattr(op.asr_stream, "diagnostics", None)
+        return snapshot() if callable(snapshot) else None
+
+    @staticmethod
+    def duration_summary(values):
+        samples = sorted(values)
+        if not samples:
+            return {"sample_count": 0, "retained_sample_count": 0}
+
+        def percentile(fraction):
+            # Nearest-rank; the bounded deque retains at most 1024 MCP calls.
+            index = int((len(samples) * fraction) + 0.999999) - 1
+            return samples[max(0, min(len(samples) - 1, index))]
+
+        return {
+            "sample_count": len(samples),
+            "retained_sample_count": len(samples),
+            "p50_seconds": percentile(0.50),
+            "p95_seconds": percentile(0.95),
+            "max_seconds": samples[-1],
+            "total_seconds": sum(samples),
+        }
+
+    def tts_diagnostics(self, op):
+        provider_snapshot = getattr(self.tts, "diagnostics", None)
+        provider = provider_snapshot() if callable(provider_snapshot) else None
+        return {
+            "status": op.tts_status,
+            "mcp": {
+                "open_monotonic": op.tts_opened_at,
+                "first_tts_next_monotonic": op.tts_first_next_at,
+                "last_tts_next_monotonic": op.tts_last_next_at,
+                "tts_next_count": op.tts_next_count,
+                "tts_next_seconds": self.duration_summary(op.tts_next_seconds),
+                "first_pcm_monotonic": op.tts_first_pcm_at,
+                "last_pcm_monotonic": op.tts_last_pcm_at,
+                "pcm_chunks": op.tts_pcm_chunks,
+                "pcm_bytes": op.tts_pcm_bytes,
+                "audio_seconds": op.tts_pcm_bytes / 32000,
+            },
+            "provider": provider if isinstance(provider, dict) else None,
+        }
+
     async def open(self, session_id: str, turn_id: int, text: str | None = None) -> dict[str, Any]:
         key = TurnKey(session_id=session_id, turn_id=turn_id)
         for identifier, op in list(self.operations.items()):
@@ -117,6 +181,7 @@ class SpeechService:
             key,
             self.clock(),
             iterator=self.tts.synthesize(text) if text is not None else None,
+            tts_opened_at=self.clock() if text is not None else None,
             asr_stream=(
                 self.asr.open_stream()
                 if hasattr(self.asr, "open_stream")
@@ -125,7 +190,17 @@ class SpeechService:
             if text is None
             else None,
         )
-        return {"operation_id": identifier, **key.model_dump()}
+        stream = self.operations[identifier].asr_stream
+        # Deepgram's websocket is lazy at the SDK boundary. Start its single
+        # authorized connection attempt as soon as the MCP ASR operation opens;
+        # run_stt does not wait for this network handshake before admitting audio.
+        if stream is not None and hasattr(stream, "start_background"):
+            stream.start_background()
+        result = {"operation_id": identifier, **key.model_dump()}
+        diagnostics = self.provider_diagnostics(self.operations[identifier])
+        if diagnostics is not None:
+            result["provider_diagnostics"] = diagnostics
+        return result
 
     def get(self, identifier: str) -> Operation:
         op = self.operations.get(identifier)
@@ -136,13 +211,62 @@ class SpeechService:
         op.touched = self.clock()
         return op
 
+    async def capabilities(self) -> dict[str, Any]:
+        return {
+            "contract_version": 2,
+            "max_asr_batch_bytes": 3 * 1024,
+            "asr_events": True,
+            "endpoint_owner": "client",
+        }
+
     async def append(self, operation_id: str, sequence: int, pcm_b64: str) -> dict[str, Any]:
+        return await self._append(operation_id, sequence, decode_pcm(pcm_b64))
+
+    async def append_batch(
+        self, operation_id: str, sequence: int, pcm_b64: str, contract_version: int = 2
+    ) -> dict[str, Any]:
+        if contract_version != 2:
+            raise ValueError("unsupported speech contract version")
+        # Additive bounded API; legacy per-32ms and TTS limits are unchanged.
+        import base64
+        import binascii
+
+        if len(pcm_b64) > 4096:
+            raise ValueError("batch exceeds 96ms")
+        try:
+            pcm = base64.b64decode(pcm_b64, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("invalid base64 PCM") from None
+        if not pcm or len(pcm) > 3072 or len(pcm) % 2:
+            raise ValueError("expected 1..1536 mono PCM16 samples")
+        return {**await self._append(operation_id, sequence, pcm), "contract_version": 2}
+
+    async def events(self, operation_id: str) -> dict[str, Any]:
+        op = self.operations.get(operation_id)
+        if op is None:
+            raise ValueError("unknown operation")
+        if self.clock() - op.touched >= 60:
+            raise ValueError("expired operation")
+        # Never serialize event observation behind provider append/finalization.
+        # Partial hypotheses are latest-value/coalesced, not an unbounded queue.
+        result = None
+        if not op.busy and hasattr(op.asr_stream, "poll"):
+            result = await op.asr_stream.poll()
+        if self.operations.get(operation_id) is not op:
+            raise ValueError("operation cancelled")
+        op.touched = self.clock()
+        response = {**op.key.model_dump(), "partial": self.recognition(op, result)}
+        diagnostics = self.provider_diagnostics(op)
+        if diagnostics is not None:
+            response["provider_diagnostics"] = diagnostics
+        return response
+
+    async def _append(self, operation_id, sequence, pcm):
         op = self.get(operation_id)
         if op.iterator is not None:
             raise ValueError("not an ASR operation")
         if sequence != op.sequence:
             raise ValueError("out-of-order or duplicate audio chunk")
-        pcm = decode_pcm(pcm_b64)
         if len(op.audio) + len(pcm) > MAX_AUDIO_BYTES:
             raise ValueError("utterance exceeds 30 seconds")
         try:
@@ -150,7 +274,11 @@ class SpeechService:
             partial = self.recognition(op, partial)
             op.audio.extend(pcm)
             op.sequence += 1
-            return {"next_sequence": op.sequence, **op.key.model_dump(), "partial": partial}
+            response = {"next_sequence": op.sequence, **op.key.model_dump(), "partial": partial}
+            diagnostics = self.provider_diagnostics(op)
+            if diagnostics is not None:
+                response["provider_diagnostics"] = diagnostics
+            return response
         except BaseException:
             self.operations.pop(operation_id, None)
             await self.dispose(op)
@@ -163,22 +291,41 @@ class SpeechService:
         try:
             result = await self.work(operation_id, op, op.asr_stream.finish())
             final = self.recognition(op, result, final=True)
-            return {**op.key.model_dump(), **final}
-        finally:
+        except BaseException:
             self.operations.pop(operation_id, None)
             await self.dispose(op)
+            raise
+        self.operations.pop(operation_id, None)
+        await self.dispose(op)
+        response = {**op.key.model_dump(), **final}
+        diagnostics = self.provider_diagnostics(op)
+        if diagnostics is not None:
+            response["provider_diagnostics"] = diagnostics
+        return response
 
     async def next(self, operation_id: str) -> dict[str, Any]:
         op = self.get(operation_id)
         if op.iterator is None:
             raise ValueError("not a TTS operation")
+        request_started = self.clock()
+        op.tts_next_count += 1
+        if op.tts_first_next_at is None:
+            op.tts_first_next_at = request_started
         try:
             pcm = await self.work(operation_id, op, anext(op.iterator, None))
+            op.tts_next_seconds.append(self.clock() - request_started)
+            op.tts_last_next_at = self.clock()
             if self.operations.get(operation_id) is not op:
                 raise ValueError("operation cancelled")
             if pcm is None:
+                op.tts_status = "completed"
+                diagnostics = self.tts_diagnostics(op)
                 await self.cancel(operation_id)
-                return {**op.key.model_dump(), "done": True}
+                return {
+                    **op.key.model_dump(),
+                    "done": True,
+                    "tts_diagnostics": diagnostics,
+                }
             # Apply the same bound to provider output as to MCP input.
             encoded = encode_pcm(pcm)
             decode_pcm(encoded)
@@ -186,13 +333,25 @@ class SpeechService:
             op.output_bytes += len(pcm)
             if op.output_bytes > MAX_AUDIO_BYTES:
                 raise ValueError("TTS exceeds 30 seconds")
+            now = self.clock()
+            if op.tts_first_pcm_at is None:
+                op.tts_first_pcm_at = now
+            op.tts_last_pcm_at = now
+            op.tts_pcm_chunks += 1
+            op.tts_pcm_bytes += len(pcm)
             return {
                 **op.key.model_dump(),
                 "done": False,
                 "pcm_b64": encoded,
                 "sequence": op.sequence - 1,
             }
-        except BaseException:
+        except BaseException as exc:
+            op.tts_status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+            if isinstance(exc, Exception):
+                try:
+                    exc.tts_diagnostics = self.tts_diagnostics(op)
+                except Exception:
+                    pass
             self.operations.pop(operation_id, None)
             await op.iterator.aclose()
             raise
@@ -205,13 +364,50 @@ class SpeechService:
 def speech_tool(handler, kind):
     """Preserve allowlisted failure codes without returning provider payloads."""
 
+    def safe_type(value):
+        return value if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.]{0,80}", value) else "Exception"
+
     @wraps(handler)
     async def wrapped(*args, **kwargs):
         try:
             return await handler(*args, **kwargs)
         except (ProviderError, EnglishTextRejected) as exc:
             code = exc.code if re.fullmatch(r"[a-z0-9_]{1,48}", exc.code) else "provider_error"
-            return {"speech_error": {"code": code, "role": kind}}
+            cause = exc.__cause__ or exc.__context__
+            cause_type = getattr(exc, "cause_type", None) or (
+                type(cause).__name__ if cause else None
+            )
+            error = {
+                "code": code,
+                "role": kind,
+                "stage": getattr(exc, "error_stage", None),
+                "boundary": getattr(exc, "error_boundary", None),
+                "exception_type": safe_type(
+                    getattr(exc, "error_detail", None) or type(exc).__name__
+                ),
+                "cause_type": safe_type(cause_type) if cause_type else None,
+            }
+            diagnostics = getattr(exc, "tts_diagnostics", None)
+            if kind == "tts" and isinstance(diagnostics, dict):
+                error["tts_diagnostics"] = diagnostics
+            return {"speech_error": error}
+        except Exception as exc:
+            # Avoid MCP's generic is_error text path, which loses both the
+            # failure stage and exception class while potentially exposing an
+            # implementation message. Never include str(exc) or provider data.
+            cause = exc.__cause__ or exc.__context__
+            error = {
+                "code": "mcp_tool_error",
+                "role": kind,
+                "stage": "mcp_tool",
+                "boundary": "speech_mcp",
+                "exception_type": safe_type(type(exc).__name__),
+                "cause_type": safe_type(type(cause).__name__) if cause else None,
+            }
+            diagnostics = getattr(exc, "tts_diagnostics", None)
+            if kind == "tts" and isinstance(diagnostics, dict):
+                error["tts_diagnostics"] = diagnostics
+            return {"speech_error": error}
 
     return wrapped
 
@@ -219,6 +415,7 @@ def speech_tool(handler, kind):
 def make_server(kind: str, service: SpeechService) -> MCPServer:
     server = MCPServer(f"me3-{kind}")
     server.tool(name="cancel")(service.cancel)
+    server.tool(name="speech_capabilities")(service.capabilities)
     if kind == "asr":
 
         @server.tool()
@@ -228,6 +425,8 @@ def make_server(kind: str, service: SpeechService) -> MCPServer:
 
         server.tool(name="asr_append")(speech_tool(service.append, kind))
         server.tool(name="asr_finish")(speech_tool(service.finish, kind))
+        server.tool(name="asr_append_batch")(speech_tool(service.append_batch, kind))
+        server.tool(name="asr_events")(speech_tool(service.events, kind))
     elif kind == "tts":
 
         @server.tool()

@@ -8,7 +8,7 @@ python_bin="$PWD/var/cache/venv/bin/python"
 command="${1:-help}"
 if [[ $# -gt 0 ]]; then shift; fi
 if [[ "$command" == help || "$command" == --help ]]; then
-  echo 'Usage: bash scripts/swift.sh {check|demo|dashboard|bridge|preflight|network|assets|audio|health} [arguments]'
+  echo 'Usage: bash scripts/swift.sh {check|demo|dashboard|bridge|vpn-setup|vpn|preflight|network|assets|audio|health} [arguments]'
   echo 'bridge requires explicit backend, secrets and wake configuration; audio requires explicit devices.'
   exit 0
 fi
@@ -23,6 +23,8 @@ case "$command" in
   demo) exec "$python_bin" -B -m me3_voice.cli demo "$@" ;;
   dashboard) exec "$python_bin" -B -m me3_voice.dashboard serve "$@" ;;
   bridge) exec "$python_bin" -B -m me3_voice.voice_bridge "$@" ;;
+  vpn-setup) exec "$python_bin" -B scripts/configure_vpn.py "$@" ;;
+  vpn) exec bash scripts/swift_vpn.sh "$@" ;;
   preflight) exec "$python_bin" -B -m me3_voice.preflight "$@" ;;
   network) exec "$python_bin" -B scripts/check_network.py "$@" ;;
   assets) exec "$python_bin" -B scripts/fetch_kws_assets.py "$@" ;;

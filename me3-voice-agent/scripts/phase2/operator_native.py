@@ -71,7 +71,70 @@ def sample_process(pid):
     return data
 
 
+def diagnostic_command(node, destination):
+    """Container capture goes to a file; --raw writes a stream to stdout.
+
+    Never label a headerless stream .wav or wrap a WAV header as PCM.
+    """
+    if destination.suffix != ".wav":
+        raise ValueError("diagnostic destination must be WAV")
+    return [
+        "pw-record",
+        f"--target={node}",
+        "--format=s16",
+        "--rate=48000",
+        "--channels=1",
+        str(destination),
+    ]
+
+
+async def wait_diagnostics(taps, paths, timeout=5):
+    async with asyncio.timeout(timeout):
+        while True:
+            if any(child.returncode is not None for child in taps):
+                raise RuntimeError("diagnostic capture exited before readiness")
+            if all(path.exists() and path.stat().st_size > 44 for path in paths):
+                return
+            await asyncio.sleep(0.05)
+
+
+async def countdown(events, sleep=asyncio.sleep):
+    print("[READY] Capture streams active. Remain silent. Trial begins after 3, 2, 1.", flush=True)
+    for number in (3, 2, 1):
+        print(f"[COUNTDOWN] {number}", flush=True)
+        events.append({"event": "countdown", "number": number, "at": time.monotonic()})
+        await sleep(1)
+    print("[BEGIN] Trial clock starts NOW.", flush=True)
+    events.append({"event": "trial_begin", "at": time.monotonic()})
+
+
+async def cleanup_native(runner, job, inp, out, taps, monitor, prompts):
+    """Attempt every owned cleanup even when an earlier shutdown step fails."""
+    errors = []
+
+    async def attempt(awaitable):
+        try:
+            await awaitable
+        except BaseException as exc:
+            errors.append(type(exc).__name__)
+
+    if runner:
+        await attempt(asyncio.wait_for(runner.cancel(), 10))
+    if job:
+        await attempt(asyncio.wait_for(job, 10))
+    await attempt(inp.close_capture())
+    await attempt(out.halt(disable=True))
+    for child in taps:
+        await attempt(reap(child))
+    for task in (monitor, prompts):
+        if task:
+            task.cancel()
+    await asyncio.gather(*[task for task in (monitor, prompts) if task], return_exceptions=True)
+    return errors
+
+
 async def run(args):
+    print("[STARTUP] Initializing capture. Do not speak yet; wait for READY and BEGIN.", flush=True)
     args.output.mkdir(parents=True, exist_ok=False)
     log = (args.output / "pipewire.log").open("ab")
     taps = []
@@ -118,18 +181,14 @@ async def run(args):
 
     monitor = asyncio.create_task(sampling())
     prompts = None
+    trial_error = None
     try:
         # Diagnostic taps are additional processes, not part of baseline topology.
         for name, node in [("raw", args.raw_mic), ("processed", args.source)]:
             taps.append(
                 await spawn(
-                    "pw-record",
-                    f"--target={node}",
-                    "--raw",
-                    "--format=s16",
-                    "--rate=48000",
-                    "--channels=1",
-                    str(args.output / (name + ".pcm")),
+                    *diagnostic_command(node, args.output / (name + ".wav")),
+                    stdout=asyncio.subprocess.DEVNULL,
                 )
             )
         pair = LLMContextAggregatorPair(
@@ -167,6 +226,8 @@ async def run(args):
         await runner.add_workers(worker)
         job = asyncio.create_task(runner.run())
         await asyncio.wait_for(ready.wait(), 15)
+        await wait_diagnostics(taps, [args.output / "raw.wav", args.output / "processed.wav"])
+        await countdown(observer.events)
         epoch = time.monotonic()
         observer.events.append({"event": "profile_start", "profile": args.profile, "at": epoch})
         if args.profile == "smoke":
@@ -214,6 +275,8 @@ async def run(args):
                 if job.done():
                     job.result()
                     raise RuntimeError("native pipeline ended early")
+                if any(child.returncode is not None for child in taps):
+                    raise RuntimeError("diagnostic capture exited during trial")
                 if inp.failure or out.failure:
                     raise RuntimeError(
                         "explicit degraded mode: audio unavailable; stop trial, use text/mock"
@@ -263,25 +326,17 @@ async def run(args):
         finally:
             if wav:
                 wav.close()
+    except BaseException as exc:
+        trial_error = type(exc).__name__
+        raise
     finally:
-        try:
-            if runner:
-                await runner.cancel()
-            if job:
-                await asyncio.wait_for(job, 10)
-        finally:
-            await inp.close_capture()
-            await out.halt(disable=True)
-            for child in taps:
-                await reap(child)
-            monitor.cancel()
-            if prompts:
-                prompts.cancel()
-            await asyncio.gather(monitor, *([prompts] if prompts else []), return_exceptions=True)
-            log.close()
-            resource_log.close()
+        cleanup_errors = await cleanup_native(runner, job, inp, out, taps, monitor, prompts)
+        log.close()
+        resource_log.close()
         data = {
             "status": "PENDING_OPERATOR_VALIDATION",
+            "trial_error": trial_error,
+            "cleanup_errors": cleanup_errors,
             "mode": "physical operator acquisition; requires returned evidence and listening review",
             "events": observer.events,
             "samples": list(samples),
@@ -290,6 +345,8 @@ async def run(args):
             "loop_lag_ms": lag,
             "started_monotonic": started,
             "input_failure": inp.failure,
+            "input_failure_detail": inp.failure_detail,
+            "diagnostic_returncodes": [child.returncode for child in taps],
             "output_failure": out.failure,
             "reference_sha256": hashlib.sha256(args.reference.read_bytes()).hexdigest()
             if args.reference
@@ -304,18 +361,21 @@ async def run(args):
             "limitations": "Loop clock is not a calibrated acoustic clock. VAD onset/stop signals are software events; raw recording requires independent annotation. No inference requests.",
         }
         (args.output / "native-audio.json").write_text(json.dumps(data, indent=2) + "\n")
+        # pw-record owns WAV container headers and finalization. Validate after
+        # child cleanup; preserve malformed/incomplete files as failed evidence.
+        diagnostics = {}
         for name in ("raw", "processed"):
-            pcm = args.output / (name + ".pcm")
-            if pcm.exists():
-                with (
-                    pcm.open("rb") as source,
-                    wave.open(str(args.output / (name + ".wav")), "wb") as wav,
-                ):
-                    wav.setnchannels(1)
-                    wav.setsampwidth(2)
-                    wav.setframerate(48000)
-                    while chunk := source.read(65536):
-                        wav.writeframesraw(chunk[: len(chunk) // 2 * 2])
+            try:
+                with wave.open(str(args.output / (name + ".wav")), "rb") as wav:
+                    diagnostics[name] = {
+                        "rate": wav.getframerate(),
+                        "channels": wav.getnchannels(),
+                        "frames": wav.getnframes(),
+                        "seconds": wav.getnframes() / wav.getframerate(),
+                    }
+            except (OSError, wave.Error, EOFError) as exc:
+                diagnostics[name] = {"error": type(exc).__name__}
+        (args.output / "diagnostics.json").write_text(json.dumps(diagnostics, indent=2) + "\n")
 
 
 def main():

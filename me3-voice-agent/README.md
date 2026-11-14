@@ -17,6 +17,8 @@ bash scripts/swift.sh demo
 
 Linux, Python 3.11–3.13 and `python3-venv` are required. HPC/x86_64 Python 3.13 and one Raspberry Pi OS/Debian 13.7 aarch64 installation with Python 3.13.5 have software smoke evidence; see the dated Pi runbook for its limits. Setup installs the editable application with `uv==0.13.4` and `uv.lock` into `var/cache/venv`. It downloads dependencies but opens no devices and uses no model API. Add `--dev` for tests or `--pi` for optional Bluetooth support. Do not copy an HPC virtual environment to the Pi. Windows users can view the browser UI; native Windows installation is not qualified.
 
+Optional automatic VPN startup: fresh Pi setup accepts `bash scripts/setup.sh --pi --vpn-profile /path/to/private-profile.ovpn`; existing installations use `bash scripts/swift.sh vpn-setup --profile /path/to/private-profile.ovpn`. Enter credentials only at the hidden Pi prompts. Then use the documented `swift.sh vpn` launch command to initialize VPN, check routes and start the bridge. Credentials stay private on the Pi; see the runbook for permissions, OS sudo requirements and current qualification limits.
+
 The `demo` command uses deterministic mock providers, memory playback and mock actions through our real Session/MCP path. It requires no account, university network, wake assets or GPIO. It does not use your microphone. To view the actual dashboard separately:
 
 ```bash
@@ -29,11 +31,14 @@ Open `http://127.0.0.1:8765/`. This dashboard-only command does not start a voic
 
 [Architecture](docs/ARCHITECTURE.md) · [Actual results and open issues](docs/PLAN.md) · [Hardware, acceptance, troubleshooting, update and rollback](deploy/rpi/README.md)
 
+
+Provider credentials use model-qualified names in new profiles: `ME3_DEEPGRAM_API_KEY`, `ME3_GROQ_API_KEY`, `ME3_QWEN_ASR_API_KEY`, `ME3_QWEN_LLM_API_KEY`, and `ME3_QWEN_TTS_API_KEY`. Enter keys locally with the masked helper, for example `PYTHONPATH=src var/cache/venv/bin/python scripts/configure_provider_keys.py deepgram-groq`. This writes a mode-0600, no-overwrite file under ignored `var/cache/` and sends no request. Never paste API keys into chat, source, or command-line arguments. Existing role-generic names remain accepted for older profiles but should not be used for new provider configurations.
+
 The Python package/module remains `me3_voice`; moving the checkout does not rename it. Run commands from the project root. All credentials, models, logs, recordings and outputs stay in ignored `var/`; source code never implicitly reads ME2 or another coursework checkout. Preserve the original recordings on the development machine rather than publishing them.
 
 ## Intended experience
 
-Say a wake phrase once to start a session. Speak naturally, ask follow-ups, execute real tasks, and interrupt spoken answers. Active reasoning and playback remain interruptible without a wall-clock turn cutoff. The browser bridge defaults to Follow-up conversation: after confirmed playback finishes, it accepts follow-ups for 7 seconds, or 18 seconds for an explicit supported clarification. Select Single request to return to wake standby after one response, or Extended conversation for a 20-second idle window. End explicitly with “That’s all,” “Goodbye,” or “End conversation,” or use End in the UI. The microphone transport remains active for wake detection in standby; ordinary speech is no longer submitted to ASR. These initial windows need laptop/Pi validation. CLI replay retains its existing inactivity policy unless adaptive mode is explicitly selected in Session.
+Say a wake phrase once to start a session. Speak naturally, ask follow-ups, execute real tasks, and interrupt spoken answers. Active reasoning and playback remain interruptible without a wall-clock turn cutoff. The browser bridge's Follow-up conversation mode keeps the session open for a configurable 20 seconds after a completed response; a valid follow-up resets the window, and processing or playback does not consume it. Select Single request to return to wake standby after one response, or Extended conversation to use its separately configurable idle window (20 seconds by default). End explicitly with “That’s all,” “Goodbye,” or “End conversation,” or use End in the UI. The microphone transport remains active for wake detection in standby; ordinary speech is no longer submitted to ASR. These timings and acoustic wake behavior still require laptop/Pi validation. CLI replay retains its existing inactivity policy unless adaptive mode is explicitly selected in Session.
 
 ## Requirements
 
@@ -253,7 +258,7 @@ It binds only 127.0.0.1:8765. Open that address on the same machine or use an ex
 
 ### Live browser voice bridge (HPC prototype)
 
-The same Swift Assistant page can connect to the existing Session/MCP path when served by the loopback voice bridge. It requests browser microphone capture and echo cancellation, sends bounded PCM over a same-origin WebSocket, and plays server PCM with per-packet browser completion acknowledgments. **Start conversation** arms the real Hey Swift detector; **Mute microphone** toggles that capture track; **End conversation** closes the browser session. **Stop speaking** stops browser audio immediately and requests cancellation of the current response; the UI follows the confirmed server event. After the runtime confirms a completed reply, the UI says **Reply complete** and returns to **Listening** for a follow-up. The static export and read-only report server above still have no voice controls.
+The same Swift Assistant page supports both the rollback Session engine and the opt-in Pipecat-native engine. The native route uses the existing ASR/TTS MCP services, Pipecat conversation/context/tool lifecycle, and LangGraph task controls; it does not instantiate Session. Legacy remains the default until the migration acceptance gates pass. Both routes request browser microphone capture, send bounded PCM over a same-origin WebSocket, and play server PCM with browser acknowledgments. On the native route, task status/progress appears in the existing task cards; pause, resume, cancel, and scoped approve/reject controls are distinct from **Stop speaking**, which only interrupts the active voice turn. The page displays only whether the browser reports AEC enabled; that does not measure echo reduction or establish PipeWire/Pi parity.
 
 For a controlled trial, `--direct-clock` opts exact final-transcript local-time questions into the existing typed task path without a model request. It is off by default; location-specific or multi-part time requests remain with the agent. Its mock speed improvement and synthetic replay are documented in `docs/PLAN.md`; real ASR accuracy and audible speed remain unverified.
 
@@ -265,13 +270,13 @@ For an HPC browser test, keep the bridge terminal running, use VS Code Remote-SS
 
 If the WebSocket drops, the browser releases its local capture/playback resources and performs bounded health-only retries (0.5, 1, 2, 4 and 8 seconds). It never reconnects the session or replays commands automatically: the current runtime has no session-resume contract. When health returns, click **Start conversation** for a fresh session. If the bridge reports an occupied port, it prints a safe diagnostic; inspect the listener and stop only a Swift process you own, or choose another unprivileged port. Swift never kills an arbitrary listener. These recovery paths have been checked with local browser/socket mocks, not by injecting an HPC network failure or testing a real microphone.
 
-From the ME3 root, with the already configured owner-only `var/cache/voice-backends.json` and `.env` files:
+From the ME3 root, with the already configured owner-only `var/cache/voice-backends.json` and `.env` files, add `--engine native` to select the current Pipecat-native application for the laptop trial:
 
 ```bash
-ME3_MUSIC_CONFIG=var/cache/music.json env PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.voice_bridge --backend-config var/cache/voice-backends.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --kws-assets var/cache/wake/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 --keywords-file var/cache/wake/hey-swift-keywords.txt
+PYTHONDONTWRITEBYTECODE=1 NUMBA_CACHE_DIR=var/cache/numba OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 var/cache/venv/bin/python -B -m me3_voice.voice_bridge --engine native --backend-config var/cache/voice-backends.json --secrets-file var/cache/voice-backends.env --llm-secrets-file var/cache/dgx3-llm.env --kws-assets var/cache/wake/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 --keywords-file var/cache/wake/hey-swift-keywords.txt
 ```
 
-Omit `--backend-config` and `--secrets-file` for an explicitly labelled mock-provider check. The bridge binds only `127.0.0.1:8765`, accepts one browser session, and keeps credentials in server-side processes. For laptop testing, connect VS Code Remote-SSH to `YOUR_SSH_ALIAS`, open its Ports view, forward remote port `8765`, and open the **local HTTP** address shown there in Chrome or Edge. VS Code may choose a different local port. The private VS Code forwarding path worked in the 2026-10-29 laptop trial; if forwarding fails later, the report watcher above remains the read-only UI path. Do not treat that watcher or a downloaded HTML file as microphone connectivity. The browser must use a trusted localhost origin for microphone permission. Stop the bridge with Ctrl+C.
+Omit `--backend-config`, `--secrets-file`, and `--llm-secrets-file` for an explicitly labelled mock-provider check. The bridge binds only `127.0.0.1:8765`, accepts one browser session, and keeps credentials in server-side processes. For laptop testing, connect VS Code Remote-SSH to `YOUR_SSH_ALIAS`, open its Ports view, forward remote port `8765`, and open the **local HTTP** address shown there in Chrome or Edge. VS Code may choose a different local port. Set Windows Sound input/output to the same USB microphone and speaker intended for the Pi before starting. The page requests mono capture with browser echo cancellation preferred, noise suppression and automatic gain control not requested; read the Session status panel for the browser-reported AEC setting and last source-retrieval diagnostic. The private VS Code forwarding path worked in the 2026-10-29 laptop trial; if forwarding fails later, the report watcher above remains the read-only UI path. Do not treat that watcher or a downloaded HTML file as microphone connectivity. The browser must use a trusted localhost origin for microphone permission. Stop the bridge with Ctrl+C.
 
 Opt-in `--diagnostic-audio --diagnostic-max-seconds 60` retains bounded original/submitted PCM evidence under `var/recordings/diagnostics/` (duration configurable from 1–180 seconds; default 60). It never starts capture by itself: the user must explicitly start the browser voice session. The cap limits retained evidence, not provider input or conversation duration. Existing evidence is never automatically deleted. Use only for the targeted diagnostic trial; omit the flag for normal operation.
 
@@ -485,3 +490,55 @@ The second check needs local subprocess IPC and preserves its first result at `v
 ### Adaptive conversation settings
 
 Choose the conversation mode before Start; the preference is saved in this browser and sent to the runtime when connecting. The runtime owns expiry. Configure windows with `--followup-seconds 7 --answer-seconds 18 --extended-seconds 20` on the existing bridge command. End-of-utterance silence remains unchanged. A pending-answer window is used only for the runtime's explicit clarification path; punctuation in model text does not extend it. Wake standby still captures/processes audio locally for wake detection and retains bounded transient pre-roll, but does not stream ordinary standby speech to ASR or store microphone recordings. Existing intentionally published transcripts/traces remain retained. This does not identify the speaker or distinguish addressed speech from side conversation within an open window.
+
+## Opt-in Pipecat-native speech engine
+
+The default remains `legacy` (Session). The repository-local native engine binds
+Pipecat context, turn detection, LLM/tool streaming and playback directly to the
+actual CLI/browser entrypoints and the two project-owned speech MCP services.
+It is mock-tested; Pi acoustics and live providers remain unqualified.
+
+```bash
+PYTHONPATH=src var/cache/venv/bin/python -m me3_voice.cli demo --engine native --output var/results/native-demo.json
+PYTHONPATH=src var/cache/venv/bin/python -m me3_voice.voice_bridge --engine native --help
+```
+
+For the browser bridge, add `--engine native` to the existing configured bridge
+command, retaining its real wake assets and backend settings. Alternatively pass
+`--runtime-config PATH.json` with `{"engine":"native","silence_seconds":0.5}`;
+`--engine` overrides the file. `configs/runtime.example.json` explicitly selects
+legacy. Native file replay requires `--conversation`; runtime configuration owns
+its native silence interval. Native does not bind Onit, physical-device UI,
+Spotify, task artifacts, direct-clock mode or recording-lab routes. Those remain
+legacy integrations; unsupported options fail explicitly. Native reconnect
+continuity is in-memory only; explicit Stop clears conversation context. To
+roll back, restart with `--engine legacy`. See
+[Phase 3 report](docs/architecture_modernization/PHASE3_REPORT.md) for evidence and gates.
+
+## Native conversational research (Phase 4)
+
+The opt-in native engine now uses Pipecat's tool loop with current runtime UTC,
+IANA timezone lookup, bounded conversational context, `web_search`,
+`retrieve_source` and `verify_evidence`. The latter verifies quote presence,
+not whether a claim is true. Mock demos test wiring; they do not demonstrate
+real model reasoning or current web answers.
+
+Research defaults to disabled. Its runtime configuration is
+`"research":{"allow_live":false,"request_limit":0}`; enabled research needs an
+explicit request budget and `ME3_RESEARCH_TAVILY_API_KEY` in the environment or
+an explicitly supplied project secret file. No automatic key discovery or
+provider calls. The provisional backend profile includes the selected Groq
+`openai/gpt-oss-120b` alongside Nova-3/Aura-2, all live-disabled. Live use requires
+reviewed private configuration and an approved budget; no cloud qualification
+is implied by the offline tests.
+
+Prepare the evaluation inputs without inference:
+
+```bash
+PYTHONPATH=src var/cache/venv/bin/python -B scripts/evaluate_native_conversation.py --output var/results/phase4-review-NEW.jsonl
+```
+
+This writes40 pending questions and null scores. The runner's explicit live mode
+also requires configured live budgets, mock ASR/TTS and independent result review.
+Legacy remains default. Physical Pi/AEC and live quality are pending; see the
+[Phase 4 report](docs/architecture_modernization/PHASE4_REPORT.md).

@@ -171,9 +171,10 @@ def test_trace_rejects_payloads_bad_clocks_and_overwriting_evidence(tmp_path, mo
     assert json.loads(trace.read_text()) == rows[0]
 
 
-def test_music_button_diagnostics_and_provider_roles_remain_bounded(tmp_path):
+def test_music_button_diagnostics_and_provider_roles_remain_bounded(tmp_path, monkeypatch):
     from me3_voice.telemetry import validate
 
+    monkeypatch.chdir(tmp_path)
     accepted = event(
         "music_ui_control", 1, action="next", outcome="accepted", audibility_verified=False
     )
@@ -202,9 +203,10 @@ def test_music_button_diagnostics_and_provider_roles_remain_bounded(tmp_path):
             validate(bad)
 
 
-def test_music_playback_observations_are_payload_free_and_traceable(tmp_path):
+def test_music_playback_observations_are_payload_free_and_traceable(tmp_path, monkeypatch):
     from me3_voice.telemetry import validate
 
+    monkeypatch.chdir(tmp_path)
     observations = [
         event(
             "music_playback_observed",

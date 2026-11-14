@@ -25,7 +25,9 @@ async def open_owned(factory, *args, **kwargs):
 
 
 class PipeWireInput(BaseInputTransport):
-    def __init__(self, node, *, allow_capture=False, spawn=asyncio.create_subprocess_exec):
+    def __init__(
+        self, node, *, allow_capture=False, spawn=asyncio.create_subprocess_exec, capture_timeout=3
+    ):
         if not node or node.startswith("-"):
             raise ValueError("explicit capture node required")
         super().__init__(TransportParams(audio_in_enabled=True, audio_in_sample_rate=16000))
@@ -33,12 +35,16 @@ class PipeWireInput(BaseInputTransport):
         self.child = self.reader = None
         self.resampler = create_stream_resampler(clear_after_secs=None)
         self.failure = None
+        self.failure_detail = None
+        self.closing = False
+        self.capture_timeout = capture_timeout
 
     async def start(self, frame):
         if not self.allow_capture:
             raise RuntimeError(
                 "Capture disabled; use text/mock mode until explicit device approval"
             )
+        self.closing = False
         await super().start(frame)
         self.child = await open_owned(
             self.spawn,
@@ -57,8 +63,10 @@ class PipeWireInput(BaseInputTransport):
 
     async def capture(self):
         try:
-            while True:
-                pcm = await asyncio.wait_for(self.child.stdout.readexactly(1920), 3)
+            while not self.closing:
+                pcm = await asyncio.wait_for(
+                    self.child.stdout.readexactly(1920), self.capture_timeout
+                )
                 # One persistent conversion; BaseInputTransport does not resample.
                 normalized = await self.resampler.resample(pcm, 48000, 16000)
                 if normalized:
@@ -70,17 +78,31 @@ class PipeWireInput(BaseInputTransport):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.failure = type(exc).__name__
-            await self.push_error(error_msg="PipeWire capture unavailable; degraded mode required")
+            if not self.closing:
+                self.failure = type(exc).__name__
+                self.failure_detail = {
+                    "exception": self.failure,
+                    "during_requested_stop": False,
+                    "partial_bytes": len(exc.partial)
+                    if isinstance(exc, asyncio.IncompleteReadError)
+                    else None,
+                    "child_returncode": self.child.returncode if self.child else None,
+                }
+                await self.push_error(
+                    error_msg="PipeWire capture unavailable; degraded mode required"
+                )
         finally:
             await reap(self.child)
 
     async def close_capture(self):
-        await reap(self.child)
+        # Mark intentional shutdown before touching the child/pipe. EOF caused by
+        # our own reap is not evidence of a device failure.
+        self.closing = True
         if self.reader:
             self.reader.cancel()
             await asyncio.gather(self.reader, return_exceptions=True)
             self.reader = None
+        await reap(self.child)
         self.child = None
 
     async def stop(self, frame):

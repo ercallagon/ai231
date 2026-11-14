@@ -3,9 +3,10 @@
 import json
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
+from .research import ResearchOptions
 
 
 class ConfigurationError(ValueError):
@@ -28,6 +29,10 @@ class BackendSpec:
     max_audio_seconds: int = 30
     allow_live: bool = False
     request_limit: int | None = 0
+    # Required for live chat-completions. The first bounds one full serialized
+    # request; the second is frozen as the run-scoped aggregate campaign cap.
+    max_input_tokens: int = 0
+    max_input_tokens_total: int = 0
     allow_private_http: bool = False
     voice: str = ""
     language: str = ""
@@ -58,6 +63,10 @@ class BackendSpec:
             type(self.allow_live) is not bool
             or (self.request_limit is not None and type(self.request_limit) is not int)
             or (self.request_limit is not None and not 0 <= self.request_limit <= 10000)
+            or type(self.max_input_tokens) is not int
+            or not 0 <= self.max_input_tokens <= 1_000_000
+            or type(self.max_input_tokens_total) is not int
+            or not 0 <= self.max_input_tokens_total <= 1_000_000
             or (
                 self.seed is not None
                 and (type(self.seed) is not int or not 0 <= self.seed <= 2147483647)
@@ -166,6 +175,18 @@ class BackendSpec:
                     raise ConfigurationError(
                         f"{role}: external adapter is not implemented for this documented protocol; no request was made"
                     )
+                if (
+                    role == "llm"
+                    and self.allow_live
+                    and (not 1 <= self.max_input_tokens <= self.max_input_tokens_total <= 1_000_000)
+                ):
+                    raise ConfigurationError(
+                        "llm: live chat requires positive per-request and aggregate input-token ceilings"
+                    )
+                if role != "llm" and (self.max_input_tokens or self.max_input_tokens_total):
+                    raise ConfigurationError(
+                        f"{role}: input-token ceilings are only supported for chat-completions"
+                    )
                 dgx_paths = {
                     "asr": {
                         (8000, "/v1/chat/completions", "vllm-qwen-audio-v1"),
@@ -219,10 +240,13 @@ class BackendSpec:
                             "vllm-qwen3-asr-v1",
                         }
                     )
-                    or self.max_audio_seconds != 30
+                    or (
+                        self.max_audio_seconds != 30
+                        and not (role == "asr" and self.protocol == "deepgram-listen-v1")
+                    )
                 ):
                     raise ConfigurationError(
-                        f"{role}: require mono PCM16 16000 Hz, concurrency 1, 30 second limit; file/Qwen-audio ASR is final-only (streaming=false)"
+                        f"{role}: require mono PCM16 16000 Hz, concurrency 1 and supported audio limit; file/Qwen-audio ASR is final-only (streaming=false)"
                     )
                 if self.protocol == "vllm-qwen-tts-v1":
                     if not self.voice.strip() or not self.language.strip():
@@ -262,3 +286,62 @@ def load_backends(path: Path | None = None, *, runnable=True):
             "configuration requires asr/llm/tts objects with documented fields; credentials are environment-only"
         ) from None
     return result
+
+
+@dataclass(frozen=True)
+class RuntimeOptions:
+    """Application controller selection; independent of inference provider config."""
+
+    engine: str = "legacy"
+    silence_seconds: float = 0.5
+    research: ResearchOptions = field(default_factory=lambda: ResearchOptions())
+    max_model_calls_per_turn: int = 6
+    max_tool_calls_per_turn: int = 8
+    max_repeated_tool_calls: int = 2
+
+
+def load_runtime(path=None, *, engine=None):
+    values = {}
+    if path is not None:
+        path = Path(path)
+        try:
+            if path.stat().st_size > 4096:
+                raise ConfigurationError("runtime configuration exceeds4KiB")
+            values = json.loads(path.read_text())
+        except (OSError, ValueError):
+            raise ConfigurationError("invalid runtime configuration") from None
+        if not isinstance(values, dict) or set(values) - {
+            "engine",
+            "silence_seconds",
+            "research",
+            "max_model_calls_per_turn",
+            "max_tool_calls_per_turn",
+            "max_repeated_tool_calls",
+        }:
+            raise ConfigurationError(
+                "runtime accepts engine, silence_seconds, research and bounded turn safeguards"
+            )
+    if engine is not None:
+        values["engine"] = engine
+    try:
+        if "research" in values:
+            values["research"] = ResearchOptions(**values["research"])
+        result = RuntimeOptions(**values)
+        if (
+            result.engine not in {"legacy", "native"}
+            or type(result.silence_seconds) not in (int, float)
+            or not math.isfinite(result.silence_seconds)
+            or not 0 <= result.silence_seconds <= 3
+            or type(result.max_model_calls_per_turn) is not int
+            or not 1 <= result.max_model_calls_per_turn <= 12
+            or type(result.max_tool_calls_per_turn) is not int
+            or not 1 <= result.max_tool_calls_per_turn <= 8
+            or type(result.max_repeated_tool_calls) is not int
+            or not 1 <= result.max_repeated_tool_calls <= 4
+        ):
+            raise ValueError
+        return result
+    except (TypeError, ValueError):
+        raise ConfigurationError(
+            "invalid engine, silence_seconds0..3, research permissions/budget or turn safeguards"
+        ) from None

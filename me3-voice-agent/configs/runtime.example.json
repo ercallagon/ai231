@@ -1,0 +1,11 @@
+{
+  "engine": "legacy",
+  "silence_seconds": 0.5,
+  "research": {
+    "allow_live": false,
+    "request_limit": 0
+  },
+  "max_model_calls_per_turn": 6,
+  "max_tool_calls_per_turn": 8,
+  "max_repeated_tool_calls": 2
+}

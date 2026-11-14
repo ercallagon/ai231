@@ -1,6 +1,6 @@
 # Phase 2 — native contract proof and physical-audio checkpoint
 
-Date: 2026-11-09. **Repository-local work is validated; physical Pi qualification is PENDING_OPERATOR_VALIDATION. Phase 2 is not fully accepted and Phase 3 has not started.** The user confirmed Pi is inaccessible from this environment and requested operator commands. No SSH connection, model API, model download, framework installation, GPIO action, service restart or Pi deployment was attempted. Production runtime and tests remain unchanged.
+Physical checkpoint: 2026-11-09; offline follow-up: 2026-11-10. **PHASE2: PENDING_OPERATOR_VALIDATION. The reported acoustic trial failed qualification. PHASE3: PARTIAL; see PHASE3_REPORT.md.** Historical Phase2 audit/proof details below retain their original scope; the appended offline follow-up and Phase3 report supersede earlier no-runtime-change/no-Phase3 statements. Original Pi speaker silence and EOF cause remain unresolved; no new physical or provider trial was run.
 
 ## Baseline and provenance
 
@@ -207,7 +207,7 @@ Use `--profile speech --seconds 300` with a fresh directory for >=100 wake examp
 
 For continuous capture/render, an `echo` profile with `--seconds 1800` can collect a30min stress session after successful smoke. Reference keeps playing, automatic interruption is disabled, so it proves neither normal interruption policy nor wake reliability. Check returned logs for gaps/errors, graphs and actual audibility. This prototype is not yet Pi-qualified. Do not leave a failing or excessively loud trial running.
 
-Two48k mono16-bit taps consume about11.52MB/min of raw PCM, or23.04MB/min while retaining both PCM and WAV copies, plus reference/logs. A2h recording can therefore need about2.8GB, more if additional evidence is saved; check free disk space first. WAV conversion streams chunks and resource snapshots stream to `resources.jsonl` with only100 recent samples retained in JSON. These are implementation bounds, not measured Pi RAM or disk performance. Stop on disk/device failure; preserve incomplete evidence.
+Two48k mono16-bit WAV taps now consume about11.52MB/min, plus reference/logs; the corrected harness no longer creates duplicate PCM wrappers. A2h recording needs about1.4GB before logs/other evidence; check free disk space first. Corrected diagnostic capture writes WAV containers directly; resource snapshots stream to `resources.jsonl` with only100 recent samples retained in JSON. These are implementation bounds, not measured Pi RAM or disk performance. Stop on disk/device failure; preserve incomplete evidence.
 
 **Return checklist:** all previous inventory/routing/native audio files plus every trial's `resources.jsonl`, full reference WAV/hash, actual condition notes, and a simple UTF-8 CSV with `trial_id,profile,condition,raw_speech_start_s,raw_speech_end_s,actual_words,raw_audible_stop_s,false_interrupt,first_words_cut_off,notes`. Leave unknown fields blank; software events are not acoustic timestamps. Annotate offsets separately for raw and processed files if clocks differ. Transcripts and precise annotations may be completed offline later; preserve intended phrase IDs/condition notes now. Return an independently checked transcript for quiet/overlap phrases and actual wake counts when available; scripts do not infer these. Failed trials and quiet/negative periods must remain included. Keep raw files private and never commit them.
 
@@ -216,3 +216,53 @@ The user authorized existing project recordings for relevant new service evaluat
 ## Smallest remaining Phase 3 work and stop boundary
 
 After returned physical data closes Phase 2 gates: turn these adapters into reviewed production interfaces, make ASR finalization/event reception nonblocking with stale-result fences, version batching/partial-event contracts, test actual streaming providers and cancel/clear behavior, and measure input backlog/Soxr and output acoustic timing. Integrate real wake/VAD/engagement policy and UI projections only through native ownership, with current Session retained as a rollback release until parity. No LangGraph migration, cloud-model replacement or whole-application rewrite was performed here.
+
+## Operator-reported physical trial — 2026-11-09, stopped for today
+
+Evidence source: user's Pi-agent report, not files independently inspected in this development environment. Preserve the Pi evidence directory `var/results/phase2-pi-20261109-1446/aec-smoke-01/`, including failed attempts, WAVs, JSON and routing graphs. No deletion, replacement, inferred scores or recreation of missing first-run evidence.
+
+- First trial: no clear start cue; no diagnostic WAVs. The diagnostic `pw-record --raw` invocation sent binary audio to stdout instead of the intended files. This is a reported defect in the acquisition harness, not evidence that the speaker/AEC failed.
+- A scratch-only Pi adjustment changed the diagnostic taps to WAV capture. The second run saved `raw.wav` and `processed.wav`, each reported24.07s, and logged an interruption after the speaking cue. The operator heard **no reference playback**. Thus interruption events do not demonstrate acoustic barge-in or successful AEC; recorded human onset alone can trigger them.
+- JSON reports `input_failure: IncompleteReadError`. Capture fault versus shutdown-induced EOF is unresolved. Examine timestamps and child exit/cleanup ordering before classifying it; do not label it harmless teardown or change thresholds to hide it.
+- The saved graph linked the AEC mono playback only to the physical sink's left channel. Record this routing observation without assigning the silence to it; actual speaker/channel wiring and the cause remain unconfirmed.
+- A subsequent4s direct playback probe at reduced volume was also inaudible. Audible physical output therefore remains the first blocker, independently of AEC or Pipecat.
+- After that probe, SSH to the operator-reported Pi address timed out twice. Connectivity cause remains unknown; do not equate it with an audio-induced crash or attempt access from this environment.
+- At the last confirmed status check the temporary AEC module was unloaded and no audio streams were present. This is reported cleanup, not a current connectivity/health check. Project source was not changed on Pi; diagnostic changes exist only in ignored Pi `var/scratch/`.
+
+Status: **acoustic trial FAILED / full-duplex, AEC and audible barge-in NOT QUALIFIED**. A further attended trial is PENDING_OPERATOR_VALIDATION after blockers are fixed. Offline contract results remain limited to their earlier mock/software scope. No acoustic latency, p95, echo attenuation, false-interruption rate or Pi resource success is inferred from these attempts.
+
+Resume order, tomorrow or when the user resumes: (1) obtain the existing logs/graphs/recordings and scratch diff without repeating capture; (2) confirm access through the Pi agent when available, then prove audible playback to the actual physical speaker with explicit target/channel/volume observations; (3) repair the isolated diagnostic file-format/output handling and add unmistakable readiness/countdown cues, with offline regression checks; (4) distinguish capture failure from teardown EOF using the saved ordering and instrumented lifecycle; (5) verify actual render-reference routing, then conduct one attended smoke before any50-trial or long-duration batch. Do not weaken acceptance criteria to make the trial pass. No new live testing, SSH, production edits, installs, publishing or Phase3 work was performed while recording this checkpoint.
+
+## Hardware-independent repair checkpoint — 2026-11-10
+
+Phase2 remains PENDING_OPERATOR_VALIDATION. The user explicitly authorized offline repairs and repository-local Phase3 without waiting for Pi. Canonical implementation/test findings are in PHASE3_REPORT.md. Diagnostic taps now use proper WAV-file capture without --raw and discard stdout; startup is explicit STARTUP→READY→3/2/1→BEGIN after capture data appears. WAVs include preroll, so recorded-file offsets are not the trial clock. Independent cleanup attempts preserve diagnostic/failure metadata even if an earlier cleanup fails. Input shutdown marks intentional stop and cancels the reader before child reap; unexpected EOF/partial EOF/timeout/device loss remain failures. The old ordering reproduces misleading teardown EOF, but original Pi EOF remains unresolved.
+
+**First operator command when access is available**, from ME3 root after reviewing/configuring temporary AEC using the earlier procedure:
+
+```bash
+bash scripts/phase2/qualify_audio.sh PHYSICAL_MIC_NODE PHYSICAL_SPEAKER_NODE \
+  me3.phase2.aec.source me3.phase2.aec.sink /path/to/reference.wav \
+  var/results/phase2-qualification-NEW --capture
+```
+
+The script records actual version/help/graphs, runs direct physical and AEC-reference WAV probes, and requires explicit operator confirmation of both audibilities before the native24s smoke. It checks installed CLI raw-stream capabilities and stops instead of reinstalling/reconfiguring. A successful process exit is not audibility evidence. Preserve source/sink/geometry notes and the full reference. After smoke return diagnostics.json, native-audio.json (including trial_error, cleanup_errors, input_failure_detail), resources.jsonl, WAVs and graphs. Unload only the temporary module you own. Do not repeat50 trials or long soak while playback is inaudible or metadata reports failure. No new physical trial occurred in this checkpoint.
+
+## Laptop-first native voice and AEC checkpoint — 2026-11-11
+
+The existing dashboard is already served by `native_bridge.build_native_app()` when `voice_bridge.py --engine native` is selected. The browser stream feeds Pipecat directly; legacy Session is not needed for the browser. The native WebSocket also projects task status/progress and accepts pause/resume/cancel/approve/reject commands through the existing task cards. A speech interruption remains a different message. The relevant UI and native entrypoint tests pass in this checkpoint; no laptop browser, microphone, speaker, or live provider was started.
+
+**AEC recommendation:** retain PipeWire's `libpipewire-module-echo-cancel` with `aec/libspa-aec-webrtc` for the Pi, using a graph that routes the actual speaker output through the AEC reference sink and its capture source to the voice peer. On Windows laptop, use the existing browser `getUserMedia` AEC request, with the same USB devices and browser UI. This is the lightest practical intermediate route and avoids adding a second audio engine. Browser processing and PipeWire's SPA module are distinct implementations/configurations. The browser's `getSettings()` reflects the selected media-track setting, not measured echo suppression. A standalone WebRTC APM wrapper could increase implementation parity, but would add a shared native-device adapter and package/build support absent from the project; defer unless paired recordings show the browser/Pi path mismatch prevents useful validation. PipeWire docs describe its AEC's playback-reference and capture streams; the upstream WebRTC APM API defines frame-wise reverse/render and capture processing. See the [PipeWire module](https://pipewire.pages.freedesktop.org/pipewire/page_module_echo_cancel.html), [WebRTC APM API](https://webrtc.googlesource.com/src/+/refs/heads/main/api/audio/audio_processing.h), and [browser track settings](https://developer.mozilla.org/en-US/docs/Web/API/MediaStreamTrack/getSettings).
+
+The browser path requests mono capture, echo cancellation preferred, NS/AGC not requested, 48 kHz interactive AudioContext and1024-sample capture callbacks (~21 ms). The Pi PipeWire peer uses48 kHz mono with1920-sample reads (40 ms); both resample to the same16 kHz native pipeline and use the same Pipecat/VAD logic, but callback packet size, buffering, device reference and playback path differ. Do not enable two AEC stages on one capture route.
+
+**Operator steps when ready:** connect the same USB mic/speaker to Windows; select them as Windows defaults and close competing audio apps. In the HPC checkout, start an offline mock bridge with the existing wake assets:
+
+```bash
+bash scripts/swift.sh bridge --engine native \
+  --kws-assets var/cache/wake/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 \
+  --keywords-file var/cache/wake/hey-swift-keywords.txt
+```
+
+This omits backend/secrets flags; verify health shows the mock mode before speaking. Do not start a live provider without separate authorization. Forward remote loopback8765 in the existing VS Code Ports panel, open that local localhost URL in Chrome/Edge, confirm `/api/health` returns the native bridge, then start the conversation. Use the browser AEC probe with the same existing `var/recordings/guided/*.webm` sample for AEC-off/on at fixed placement/volume. Next test speaker-only playback, double-talk, and the Stop speaking control, recording audible-stop observations, false interruptions, preserved words, task controls, and the safe retrieval diagnostic displayed in Session status. Save both AEC probe downloads and the bridge result/trace. The probe's event timestamps do not provide sample-aligned loopback/ERLE.
+
+Do not request new voice recordings: existing guided recordings can serve as local playback references. Mock TTS validates pipeline events and queue cancellation only; intelligible TTS acoustics require a saved speech clip or separately approved live speech provider. Laptop checks are intermediate and cannot close Pi-specific routing, AEC, CPU/RAM/thermals, or acoustic latency gates. Phase2 remains **PENDING_OPERATOR_VALIDATION**.

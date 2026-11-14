@@ -227,3 +227,90 @@ def test_operator_without_capture_never_opens_devices(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "Capture disabled" in result.stdout and not destination.exists()
+
+
+@pytest.mark.parametrize('kind', ['eof', 'partial-eof', 'timeout', 'device-error'])
+async def test_capture_fault_is_not_silently_classified_as_shutdown(kind):
+    inp = PipeWireInput('explicit.source', allow_capture=True, capture_timeout=0.01)
+    errors = []
+
+    class Source(Child):
+        async def readexactly(self, n):
+            if kind == 'timeout':
+                await asyncio.sleep(1)
+            if kind == 'device-error':
+                raise OSError('fixture device lost')
+            raise asyncio.IncompleteReadError(b'\1\0' if kind == 'partial-eof' else b'', n)
+
+    child = Source()
+    child.stdout = child
+    inp.child = child
+
+    async def error(**row):
+        errors.append(row)
+
+    inp.push_error = error
+    await inp.capture()
+    assert len(errors) == 1 and inp.failure is not None
+    assert not inp.failure_detail['during_requested_stop']
+    if kind == 'partial-eof':
+        assert inp.failure_detail['partial_bytes'] == 2
+    assert child.returncode is not None
+
+
+async def test_requested_shutdown_cancels_reader_before_child_eof():
+    inp = PipeWireInput('explicit.source', allow_capture=True)
+    entered = asyncio.Event()
+    errors = []
+
+    class Source(Child):
+        async def readexactly(self, n):
+            entered.set()
+            await asyncio.Event().wait()
+
+    child = Source()
+    child.stdout = child
+    inp.child = child
+
+    async def error(**row):
+        errors.append(row)
+
+    inp.push_error = error
+    inp.reader = asyncio.create_task(inp.capture())
+    await entered.wait()
+    await inp.close_capture()
+    assert not errors and inp.failure is None and inp.closing
+    assert child.returncode is not None and inp.reader is None
+    await inp.close_capture()  # repeated cleanup is harmless
+
+
+async def test_previous_reap_first_order_can_mislabel_intentional_eof():
+    # Reproduce the old order with the SAME reader. The fixed close_capture()
+    # marks closing/cancels the reader first instead of reaping first.
+    inp = PipeWireInput('explicit.source', allow_capture=True)
+    entered, terminated = asyncio.Event(), asyncio.Event()
+
+    class Source(Child):
+        async def readexactly(self, n):
+            entered.set()
+            await terminated.wait()
+            raise asyncio.IncompleteReadError(b'', n)
+
+        def terminate(self):
+            super().terminate()
+            terminated.set()
+
+    child = Source()
+    child.stdout = child
+    inp.child = child
+
+    async def error(**kwargs):
+        pass
+
+    inp.push_error = error
+    reader = asyncio.create_task(inp.capture())
+    await entered.wait()
+    from me3_voice.pi_audio import reap
+    await reap(child)  # old order: induces EOF while closing flag still false
+    await reader
+    assert inp.failure == 'IncompleteReadError'
