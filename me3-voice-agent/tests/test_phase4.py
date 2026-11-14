@@ -648,16 +648,17 @@ async def test_stream_fencing_citations_and_budget():
         await llm._client.close()
 
 
-async def sse(response, deltas, *, finish="stop"):
+async def sse(response, deltas, *, finish="stop", terminal_count=1):
     await response.prepare(sse.request)
     for delta in deltas:
         data = "data: " + chunk(delta).model_dump_json() + "\n\n"
         # SDK must assemble actual HTTP/SSE fragments, including tool JSON.
         await response.write(data[:17].encode())
         await response.write(data[17:].encode())
-    await response.write(
-        ("data: " + chunk({}, finish).model_dump_json() + "\n\ndata: [DONE]\n\n").encode()
-    )
+    terminal = ("data: " + chunk({}, finish).model_dump_json() + "\n\n").encode()
+    for _ in range(terminal_count):
+        await response.write(terminal)
+    await response.write(b"data: [DONE]\n\n")
     await response.write_eof()
     return response
 
@@ -704,6 +705,7 @@ async def test_actual_sdk_tool_research_followup_and_mcp(monkeypatch, tmp_path):
         return await sse(
             response,
             [{"content": text} for text in ("The measured result is 37 units ", "[S", "1", "].")],
+            terminal_count=2,
         )
 
     app = web.Application()
@@ -769,6 +771,11 @@ async def test_actual_sdk_tool_research_followup_and_mcp(monkeypatch, tmp_path):
                     len([e for e in native.events if e["event"] == "tool_result_callback_returned"])
                     == 5
                 )
+                assert len(
+                    [e for e in native.events if e["event"] == "llm_duplicate_finalization_suppressed"]
+                ) == 1
+                assert len([e for e in native.events if e["event"] == "tts_start"]) == 2
+                assert len([e for e in native.events if e["event"] == "turn_completed"]) == 2
             assert len(requests) == 7 and all(r["stream"] for r in requests)
             assert all(
                 r["include_reasoning"] is False and not r["parallel_tool_calls"] for r in requests
@@ -780,6 +787,12 @@ async def test_actual_sdk_tool_research_followup_and_mcp(monkeypatch, tmp_path):
                 for m in requests[-1]["messages"]
             )
             assert len([m for m in state.context.get_messages() if m.get("role") == "user"]) == 2
+            assistant_text = " ".join(
+                message.get("content", "")
+                for message in state.context.get_messages()
+                if message.get("role") == "assistant" and isinstance(message.get("content"), str)
+            )
+            assert assistant_text.count("The measured result is 37 units [S1].") == 2
         finally:
             await state.close()
 

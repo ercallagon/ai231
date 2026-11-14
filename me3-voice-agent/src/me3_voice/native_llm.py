@@ -577,6 +577,7 @@ class NativeLLM(OpenAILLMService):
         research_text = []
         research_citations = set()
         invalid_research_citation = False
+        research_finalized = False
         validate_research_answer = bool(
             self.research_tool_calls and not self.response_failure_reason
         )
@@ -599,6 +600,17 @@ class NativeLLM(OpenAILLMService):
                         raise ProviderError(
                             "response token budget exhausted", code="response_budget_exhausted"
                         )
+                    is_research_final = (
+                        choice.finish_reason == "stop"
+                        and not self.response_tool_indices
+                        and validate_research_answer
+                    )
+                    if research_finalized and is_research_final:
+                        # Drain duplicate terminal choices without rendering or
+                        # speaking the already-validated research answer again.
+                        choice.delta.content = ""
+                        self.on_event("llm_duplicate_finalization_suppressed")
+                        continue
                     total_chars += len(choice.delta.content or "")
                     for call in choice.delta.tool_calls or []:
                         self.response_has_tools = True
@@ -646,6 +658,7 @@ class NativeLLM(OpenAILLMService):
                         and choice.finish_reason == "stop"
                         and not self.response_tool_indices
                     ):
+                        research_finalized = True
                         if invalid_research_citation:
                             self.response_failure_reason = "unsupported_source"
                         elif not research_citations or not self.source_ids():

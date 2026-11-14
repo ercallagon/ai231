@@ -1,5 +1,14 @@
 # Delivery plan and status
 
+2026-11-15 duplicate research finalization: the Japan trace showed one
+validated answer followed by a duplicate terminal stream choice, not an extra
+model request. NativeLLM now drains repeated terminal choices while suppressing
+the already-finalized research text. The SDK/native-MCP regression emits two
+terminal choices and checks one TTS emission and one completed turn per spoken
+answer, with no continuation request after completion. The corresponding
+source-tree focused run passed 2 tests; this checkpoint-only port was not
+rerun. No live calls were made.
+
 2026-11-14 naturalness readiness: one newer live turn completed with two Aura segments and `turn_completed`, but the next ASR connection timed out; earlier traces still show intermittent TTS pacing gaps and incomplete turns. Latest code-only checks passed 8/8. This sandbox's socket/MCP-dependent selection was 8 passed/7 blocked by local IPC permissions. README and test-fixture follow-up defaults were aligned to 20 seconds. Tavily remains unconfigured/disabled in the saved laptop profile; KWS recall, sustained live turn-taking, task UX, and smooth TTS are not qualified. Recommend a staged short diagnostic only, not a 10–15-turn demo. Details: `docs/architecture_modernization/PHASE7_PREPARATION.md`.
 
 2026-11-14 native voice stabilization: follow-up standby now starts after a completed response, defaults to configurable 20 seconds, resets on a valid next turn, and cannot expire during thinking or speaking. Historical `f137` trace had two standby transitions followed by new wake detections; Sherpa provides no probability scores for missed attempts, so wake recall is not yet measured. Wake event diagnostics now retain detector backend/score when available; the existing chime remains, with a bounded manual “Speak without wake phrase” fallback in native UI. Punctuation-only streamed TTS fragments no longer open synthesis requests; malformed model output, provider pacing and the post-PCM timeout remain unresolved. Seven focused wake/idle/barge-in/action/TTS/recovery checks passed; Ruff clean. A broader 156-case run was stopped after 35 passes and one test-fixture compatibility failure, which was fixed and retested. The prior 31 failures lack a complete saved traceback, so exact classification is pending. See Phase7 preparation for evidence and limits.
