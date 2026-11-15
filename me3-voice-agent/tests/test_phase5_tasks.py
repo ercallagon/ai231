@@ -1,6 +1,7 @@
 """Phase 5 durable task graph, control, replay, and concurrent voice checks."""
 
 import asyncio
+import aiosqlite
 import hashlib
 import json
 from pathlib import Path
@@ -12,7 +13,14 @@ import pytest
 
 from me3_voice.configuration import BackendSpec, load_backends
 from me3_voice.remote import LiveTransport
-from me3_voice.task_runtime import TaskError, TaskRuntime
+from me3_voice.task_runtime import (
+    MAX_MODEL_CALLS,
+    MeasuredAsyncSqliteSaver,
+    TaskError,
+    TaskRuntime,
+    TaskStore,
+)
+from me3_voice.research import ResearchClient
 
 
 TERMINAL = {"succeeded", "completed_unverified", "failed", "cancelled"}
@@ -160,6 +168,107 @@ async def test_graph_researches_writes_reads_and_independently_verifies_artifact
         ).stat().st_mode & 0o777 == 0o600
     finally:
         await runtime.close()
+
+
+async def test_task_research_caps_are_durable_and_legacy_schema_migrates(tmp_path):
+    assert MAX_MODEL_CALLS == 30
+    conn = await aiosqlite.connect(":memory:", check_same_thread=False)
+    try:
+        saver = MeasuredAsyncSqliteSaver(conn)
+        await saver.setup()
+        store = TaskStore(saver, tmp_path)
+        await store.setup()
+        runtime = TaskRuntime(load_backends()["llm"], model=ScriptedModel([]))
+        runtime.store = store
+        task, _ = await store.create("Research deeply", "research-cap", 1, "call-cap")
+        await store.update(task["task_id"], status="running")
+        state = {"task_id": task["task_id"], "revision": 1}
+        for _ in range(10):
+            await runtime._tool_guard(state, research_kind="search")
+        with pytest.raises(TaskError, match="task_search_budget_exhausted"):
+            await runtime._tool_guard(state, research_kind="search")
+        for _ in range(25):
+            await runtime._tool_guard(state, research_kind="retrieval")
+        with pytest.raises(TaskError, match="task_retrieval_budget_exhausted"):
+            await runtime._tool_guard(state, research_kind="retrieval")
+        row = await store.get(task["task_id"])
+        assert (row["search_calls"], row["retrieval_calls"], row["tool_calls"]) == (10, 25, 35)
+        await store.update(task["task_id"], model_calls=30)
+        runtime.max_model_calls = 100  # Constructor overrides cannot bypass the hard ceiling.
+        with pytest.raises(TaskError, match="model_budget_exhausted"):
+            await runtime._agent(state)
+        assert runtime.model.calls == 0
+
+        # Reopening TaskStore on the same durable DB retains counters. Simulate
+        # the previous schema and ensure startup migrates without deleting rows.
+        reopened = TaskStore(saver, tmp_path)
+        await reopened.setup()
+        assert (await reopened.get(task["task_id"]))["search_calls"] == 10
+        async with saver.lock:
+            await saver.conn.execute("ALTER TABLE me3_tasks DROP COLUMN search_calls")
+            await saver.conn.execute("ALTER TABLE me3_tasks DROP COLUMN retrieval_calls")
+            await saver.conn.commit()
+        migrated = TaskStore(saver, tmp_path)
+        await migrated.setup()
+        row = await migrated.get(task["task_id"])
+        assert row["goal"] == "Research deeply"
+        assert (row["search_calls"], row["retrieval_calls"]) == (0, 0)
+    finally:
+        await conn.close()
+
+
+async def test_task_research_injects_relevant_sections_and_retains_full_source(tmp_path):
+    research = ResearchClient()
+    full_text = (
+        "The old building opened in 1901. "
+        "The official result named Candidate Blue as the winner of the Senate election. "
+        "The archive moved to a new address in 1980. "
+    ) * 10
+    source = {
+        "source_id": "S1",
+        "url": "https://example.test/results",
+        "title": "Official results",
+        "text": full_text,
+        "text_sha256": "fixture",
+    }
+
+    async def retrieve(_url):
+        research.sources["S1"] = source
+        return source
+
+    research.retrieve = retrieve
+    conn = await aiosqlite.connect(":memory:", check_same_thread=False)
+    try:
+        saver = MeasuredAsyncSqliteSaver(conn)
+        await saver.setup()
+        store = TaskStore(saver, tmp_path)
+        await store.setup()
+        runtime = TaskRuntime(
+            load_backends()["llm"], model=ScriptedModel([]), research=research
+        )
+        runtime.store = store
+        task, _ = await runtime.store.create(
+            "Find who won the Senate election", "research-projection", 1, "call-projection"
+        )
+        await runtime.store.update(task["task_id"], status="running")
+        state = {
+            "task_id": task["task_id"],
+            "revision": 1,
+            "requirements": "Senate election winner",
+        }
+        token = runtime._tool_context.set((state, "retrieve-1"))
+        try:
+            retrieve_tool = next(tool for tool in runtime.registered_tools() if tool.name == "retrieve_source")
+            projected = await retrieve_tool.ainvoke({"url": source["url"]})
+        finally:
+            runtime._tool_context.reset(token)
+        assert "Candidate Blue" in projected["text"]
+        assert "old building opened" not in projected["text"]
+        assert research.verify("S1", "The old building opened in 1901.")["quote_found"]
+        row = await runtime.store.get(task["task_id"])
+        assert row["retrieval_calls"] == 1
+    finally:
+        await conn.close()
 
 
 async def test_general_task_creates_lists_reads_and_updates_nested_project_files(tmp_path):
@@ -892,8 +1001,15 @@ async def test_relative_artifact_root_is_normalized_before_readback(tmp_path, mo
         await runtime.close()
 
 
-async def test_groq_compatible_streamed_tool_fragments_are_reassembled_offline(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "endpoint,expect_groq_parameters",
+    [
+        ("https://api.groq.com/openai/v1/chat/completions", True),
+        ("https://openrouter.ai/api/v1/chat/completions", False),
+    ],
+)
+async def test_openai_compatible_streamed_tool_fragments_are_reassembled_offline(
+    tmp_path, monkeypatch, endpoint, expect_groq_parameters
 ):
     import me3_voice.task_runtime as module
     from langchain_core.messages import HumanMessage
@@ -901,16 +1017,21 @@ async def test_groq_compatible_streamed_tool_fragments_are_reassembled_offline(
     spec = BackendSpec(
         backend="external",
         protocol="chat-completions-v1",
-        endpoint="https://api.groq.com/openai/v1/chat/completions",
-        auth_env="ME3_PHASE5_TEST_ONLY",
+        endpoint=endpoint,
+        auth_env="ME3_GROQ_TEST_KEY" if expect_groq_parameters else "ME3_OPENROUTER_TEST_KEY",
         model="openai/gpt-oss-120b",
         allow_live=True,
         request_limit=1,
         max_input_tokens=32000,
         max_input_tokens_total=64000,
     )
-    credentials = {"ME3_PHASE5_TEST_ONLY": "offline-fixture-not-a-real-key"}
-    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "offline-groq-fragments-01")
+    credentials = {spec.auth_env: "offline-fixture-not-a-real-key"}
+    monkeypatch.setenv(
+        "ME3_REQUEST_RUN_ID",
+        "offline-groq-fragments-01"
+        if expect_groq_parameters
+        else "offline-openrouter-fragments-01",
+    )
     monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "provider-requests.sqlite"))
     calls = []
 
@@ -973,7 +1094,9 @@ async def test_groq_compatible_streamed_tool_fragments_are_reassembled_offline(
         database=tmp_path / "stream.sqlite",
         artifact_root=tmp_path / "artifacts",
     )
-    await runtime.start_runtime()
+    # This contract test exercises the provider/request adapter only; leave
+    # SQLite graph startup to the task-runtime integration tests.
+    runtime._openai_tools = []
     try:
         answer = await runtime._call_model([HumanMessage(content="Research the current result")])
         assert answer.tool_calls == [
@@ -987,6 +1110,12 @@ async def test_groq_compatible_streamed_tool_fragments_are_reassembled_offline(
         assert calls[0]["stream"] is True
         assert calls[0]["parallel_tool_calls"] is False
         assert calls[0]["model"] == "openai/gpt-oss-120b"
+        if expect_groq_parameters:
+            assert calls[0]["reasoning_effort"] == "low"
+            assert calls[0]["extra_body"] == {"include_reasoning": False}
+        else:
+            assert "reasoning_effort" not in calls[0]
+            assert "extra_body" not in calls[0]
         assert runtime.budget.requests == 1
     finally:
         await runtime.close()

@@ -34,6 +34,7 @@ class ResearchError(ValueError):
         local_extraction=None,
         fallback_status=None,
         fallback_error=None,
+        alternate_source_attempt=None,
     ):
         super().__init__(code)
         self.code = code
@@ -45,6 +46,7 @@ class ResearchError(ValueError):
         self.local_extraction = local_extraction
         self.fallback_status = fallback_status
         self.fallback_error = fallback_error
+        self.alternate_source_attempt = alternate_source_attempt
 
     def result(self):
         result = {"ok": False, "error": self.code}
@@ -63,6 +65,8 @@ class ResearchError(ValueError):
                 result[key] = value
         if self.fallback_error:
             result["fallback_error"] = self.fallback_error
+        if self.alternate_source_attempt:
+            result["alternate_source_attempt"] = self.alternate_source_attempt
         return result
 
 
@@ -203,6 +207,64 @@ class ResearchClient:
         self.cache = OrderedDict()
         self.cache_ttl_seconds = 300
         self.cache_limit = 32
+        self.search_leads = OrderedDict()
+        self.search_snippet_source_ids = {}
+        self.failed_retrieval_urls = set()
+        self.projected_passage_ids = set()
+
+    @staticmethod
+    def _ensure_evidence_passages(source):
+        """Attach stable sentence/word-boundary passage IDs to one retained source."""
+        passages = source.get("evidence_passages")
+        if isinstance(passages, dict) and passages:
+            return passages
+        source_id = source.get("source_id")
+        text = source.get("text")
+        if not isinstance(source_id, str) or not re.fullmatch(r"S\d+", source_id):
+            return {}
+        if not isinstance(text, str) or not text.strip():
+            return {}
+
+        passages = OrderedDict()
+        ordinal = 0
+        for sentence in re.split(r"(?<=[.!?])\s+", text):
+            remaining = sentence.strip()
+            while remaining:
+                ordinal += 1
+                if len(remaining) <= 1000:
+                    piece, remaining = remaining, ""
+                else:
+                    boundary = remaining.rfind(" ", 0, 1001)
+                    if boundary < 1:
+                        boundary = 1000
+                    piece, remaining = remaining[:boundary].strip(), remaining[boundary:].strip()
+                if piece:
+                    passages[f"{source_id}-P{ordinal}"] = piece
+        source["evidence_passages"] = passages
+        return passages
+
+    def evidence_passage_ids(self):
+        """Passages actually projected to model context and still source-retained."""
+        available = {
+            passage_id
+            for source in self.sources.values()
+            for passage_id in self._ensure_evidence_passages(source)
+        }
+        return sorted(self.projected_passage_ids & available, key=self._passage_order)
+
+    @staticmethod
+    def _passage_order(passage_id):
+        match = re.fullmatch(r"S(\d+)-P(\d+)", passage_id)
+        return (int(match.group(1)), int(match.group(2))) if match else (0, 0)
+
+    def lookup_evidence_passage(self, passage_id):
+        if passage_id not in self.projected_passage_ids:
+            return None
+        for source_id, source in self.sources.items():
+            text = self._ensure_evidence_passages(source).get(passage_id)
+            if isinstance(text, str):
+                return {"passage_id": passage_id, "source_id": source_id, "text": text}
+        return None
 
     def _cached(self, key):
         row = self.cache.get(key)
@@ -370,6 +432,7 @@ class ResearchClient:
         key_cache = "search:" + hashlib.sha256(normalized_query.encode()).hexdigest()
         cached = self._cached(key_cache)
         if cached is not None:
+            self._remember_search_leads(cached)
             return {**cached, "cache_hit": True}
         if not self.options.allow_live or self.requests >= self.options.request_limit:
             raise ResearchError("research_disabled_or_budget_exhausted")
@@ -434,19 +497,130 @@ class ResearchClient:
                 "retrieved_utc": datetime.now(timezone.utc).isoformat(),
             }
             self._remember(key_cache, result)
+            self._remember_search_leads(result)
             return result
         except (ValueError, KeyError, TypeError):
             raise ResearchError("invalid_search_response") from None
 
-    async def retrieve(self, url):
+    def _remember_search_leads(self, result):
+        for lead in result.get("results", []) if isinstance(result, dict) else ():
+            if isinstance(lead, dict) and isinstance(lead.get("url"), str):
+                self.search_leads[lead["url"]] = lead
+                self.search_leads.move_to_end(lead["url"])
+        while len(self.search_leads) > 20:
+            self.search_leads.popitem(last=False)
+
+    def retain_search_snippet(self, lead):
+        """Give a bounded Tavily snippet explicit, non-fetched provenance."""
+        if not isinstance(lead, dict) or not isinstance(lead.get("url"), str):
+            return None
+        url = public_url(lead["url"])
+        text = " ".join(str(lead.get("snippet", "")).split())[:320]
+        if len(text) < 40:
+            return None
+        for source in self.sources.values():
+            if source.get("url") == url:
+                return source if source.get("extraction_method") == "tavily_search_snippet" else None
+        source_id = self.search_snippet_source_ids.get(url)
+        if source_id and source_id in self.sources:
+            return self.sources[source_id]
+        self.next_id += 1
+        source_id = f"S{self.next_id}"
+        source = {
+            "source_id": source_id,
+            "url": url,
+            "title": str(lead.get("title", ""))[:250],
+            "text": text,
+            "kind": "untrusted_search_result",
+            "truncated": len(str(lead.get("snippet", ""))) > len(text),
+            "retrieved_utc": datetime.now(timezone.utc).isoformat(),
+            "last_modified_reported": "",
+            "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "extraction_method": "tavily_search_snippet",
+            "evidence_status": "search_result_snippet",
+            "fetched": False,
+        }
+        self.sources[source_id] = source
+        self.search_snippet_source_ids[url] = source_id
+        return source
+
+    def discard_search_snippet(self, source_id):
+        source = self.sources.get(source_id)
+        if not isinstance(source, dict) or source.get("extraction_method") != "tavily_search_snippet":
+            return
+        self.sources.pop(source_id, None)
+        self.projected_passage_ids.difference_update(self._ensure_evidence_passages(source))
+        self.search_snippet_source_ids.pop(source.get("url"), None)
+
+    def alternative_leads(self, *, exclude_url=None, limit=3):
+        retrieved_urls = {
+            row.get("url")
+            for row in self.sources.values()
+            if row.get("kind") == "untrusted_retrieved_source"
+        }
+        excluded = {exclude_url} | self.failed_retrieval_urls | retrieved_urls
+        candidates = [
+            dict(lead) for url, lead in self.search_leads.items() if url not in excluded
+        ]
+        # A host-level transport failure makes another URL on the same host a
+        # poor immediate fallback. Prefer another publisher when Tavily already
+        # returned one, while retaining same-host leads as a last resort.
+        failed_hosts = {
+            (urlsplit(url).hostname or "").casefold() for url in self.failed_retrieval_urls
+        }
+        candidates.sort(
+            key=lambda lead: (urlsplit(lead["url"]).hostname or "").casefold() in failed_hosts
+        )
+        return candidates[:limit]
+
+    async def retrieve(self, url, *, allow_extract_fallback=True):
         url = public_url(url)
+        if url in self.failed_retrieval_urls:
+            raise ResearchError(
+                "source_previously_failed",
+                host=urlsplit(url).hostname,
+                stage="session_cache",
+                failure_class="not_retried",
+            )
         key_cache = "retrieve:" + hashlib.sha256(url.encode()).hexdigest()
         cached = self._cached(key_cache)
         if cached is not None:
             return cached
         redirect_count = 0
+        fallback_text = None
+        fallback_status = None
+        fallback_error = None
         for _ in range(4):
-            row = await self.read("GET", url)
+            try:
+                row = await self.read("GET", url)
+            except ResearchError as exc:
+                # Basic Extract is one bounded alternative for an explicitly
+                # unavailable page. Unsafe URLs, malformed requests and local
+                # execution restrictions are never bypassed.
+                fallback_eligible = exc.code in {
+                    "research_http_failure",
+                    "research_timeout",
+                    "research_connect_failure",
+                    "research_connection_refused",
+                    "source_too_large",
+                }
+                if not fallback_eligible or not allow_extract_fallback:
+                    self.failed_retrieval_urls.add(url)
+                    raise
+                fallback_text, fallback_status, fallback_error = await self._tavily_extract(url)
+                if not fallback_text:
+                    self.failed_retrieval_urls.add(url)
+                    raise ResearchError(
+                        exc.code,
+                        status=exc.status,
+                        host=urlsplit(url).hostname,
+                        stage=exc.stage,
+                        failure_class=exc.failure_class,
+                        fallback_status=fallback_status,
+                        fallback_error=fallback_error or {"error": "no_extracted_content"},
+                    ) from None
+                row = {"data": b"", "type": "text/plain", "last_modified": None}
+                break
             if "redirect" not in row:
                 break
             redirect_count += 1
@@ -469,7 +643,10 @@ class ResearchClient:
                 redirect_count=redirect_count,
             )
         decoded = row["data"].decode("utf-8", errors="replace")
-        if row["type"] == "text/html":
+        if fallback_text is not None:
+            text, title, extraction_method = fallback_text, "", "tavily_basic_extract"
+            local_extraction = "unavailable"
+        elif row["type"] == "text/html":
             parser = PageText()
             parser.feed(decoded)
             try:
@@ -490,15 +667,20 @@ class ResearchClient:
             )
         text = " ".join(text.split())
         text = "".join(c for c in text if ord(c) >= 32)
-        local_extraction = "sufficient" if len(text.split()) >= 12 else "insufficient"
-        fallback_status = None
-        fallback_error = None
-        if local_extraction == "insufficient" and row["type"] == "text/html":
+        if fallback_text is None:
+            local_extraction = "sufficient" if len(text.split()) >= 12 else "insufficient"
+        if (
+            allow_extract_fallback
+            and fallback_text is None
+            and local_extraction == "insufficient"
+            and row["type"] == "text/html"
+        ):
             extracted, fallback_status, fallback_error = await self._tavily_extract(url)
             if extracted:
                 text = extracted
                 extraction_method = "tavily_basic_extract"
         if not text or (row["type"] == "text/html" and len(text.split()) < 12):
+            self.failed_retrieval_urls.add(url)
             raise ResearchError(
                 "insufficient_source_content",
                 host=urlsplit(url).hostname,
@@ -525,7 +707,11 @@ class ResearchClient:
             "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
             "extraction_method": extraction_method,
             "evidence_status": "retrieved_unverified",
+            "local_extraction": local_extraction,
+            "fallback_status": fallback_status,
+            "fallback_error": fallback_error,
         }
+        self._ensure_evidence_passages(source)
         self.sources[source_id] = source
         if len(self.sources) > 16:
             self.sources.popitem(last=False)
@@ -572,26 +758,40 @@ class ResearchClient:
             return "", "invalid_response", None
 
     def evidence_for_model(self, source, query, *, max_chars=2400):
-        """Select lexical query-relevant sentences while retaining full source internally."""
+        """Project source-owned passages with stable IDs; full text stays internal."""
         terms = self._query_terms(query)
-        sentences = re.split(r"(?<=[.!?])\s+", source["text"])
+        passages = self._ensure_evidence_passages(source)
         ranked = []
-        for i, sentence in enumerate(sentences):
-            words = set(re.findall(r"[a-z0-9]{3,}", sentence.casefold()))
+        for passage_id, passage_text in passages.items():
+            words = set(re.findall(r"[a-z0-9]{3,}", passage_text.casefold()))
             score = len(terms & words)
             if score:
-                ranked.append((score, -i, sentence.strip()))
+                ranked.append((score, passage_id, passage_text))
         selected = []
         used = 0
-        for _, _, sentence in sorted(ranked, reverse=True):
-            if used + len(sentence) > max_chars:
+        for _, passage_id, passage_text in sorted(ranked, key=lambda row: (-row[0], row[1])):
+            projected_size = len(passage_id) + 2 + len(passage_text)
+            if used + projected_size > max_chars:
                 continue
-            selected.append(sentence)
-            used += len(sentence) + 1
+            selected.append((passage_id, passage_text))
+            used += projected_size
         if not selected:
-            selected = [source["text"][: min(max_chars, 800)]]
-        result = {k: v for k, v in source.items() if k != "text"}
-        result["text"] = " ".join(selected)
+            first = next(iter(passages.items()), None)
+            if first and len(first[1]) <= max_chars:
+                selected = [first]
+        result = {k: v for k, v in source.items() if k not in {"text", "evidence_passages"}}
+        # Make the model-facing citation token explicit instead of requiring
+        # the model to infer bracket syntax from the internal source ID.
+        # This is a projection only; verification still checks the exact ID
+        # against ResearchClient.sources and never trusts this display value.
+        source_id = result.get("source_id")
+        if isinstance(source_id, str) and re.fullmatch(r"S\d+", source_id):
+            result["citation"] = f"[{source_id}]"
+        result["passage_ids"] = [passage_id for passage_id, _ in selected]
+        result["text"] = "\n".join(
+            f"{passage_id}: {passage_text}" for passage_id, passage_text in selected
+        )
+        self.projected_passage_ids.update(result["passage_ids"])
         result["evidence_chunks"] = len(selected)
         return result
 

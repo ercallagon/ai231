@@ -13,6 +13,9 @@ PROFILES = {
         "ME3_DEEPGRAM_API_KEY": "Deepgram API key for Nova-3 ASR and Aura-2 TTS",
         "ME3_GROQ_API_KEY": "Groq API key for openai/gpt-oss-120b",
     },
+    "openrouter-gpt-oss-120b": {
+        "ME3_OPENROUTER_API_KEY": "OpenRouter API key for openai/gpt-oss-120b",
+    },
     "qwen": {
         "ME3_QWEN_ASR_API_KEY": "Qwen ASR service credential (confirm the configured model first)",
         "ME3_QWEN_LLM_API_KEY": "Qwen LLM service credential (confirm the configured model first)",

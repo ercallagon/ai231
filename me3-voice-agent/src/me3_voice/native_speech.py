@@ -22,6 +22,7 @@ from pipecat.frames.frames import (
     InterimTranscriptionFrame,
     TranscriptionFrame,
     TTSAudioRawFrame,
+    TTSSpeakFrame,
     TTSStoppedFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -39,8 +40,17 @@ def spoken_text(text):
     # Code is useful on screen but generally unreadable aloud. Keep a short
     # truthful cue instead of speaking fence and programming punctuation.
     value = re.sub(r"```[^\n]*\n.*?```", " Code is shown on screen. ", value, flags=re.S)
+    # Strip markup emitted as fragmented HTML after Markdown fences have been
+    # split by streaming. Keep visible text while dropping tags and entities.
+    value = re.sub(r"<\s*/?\s*(?:!doctype|/?[a-z][a-z0-9:-]*)\b[^>]*>", " ", value, flags=re.I)
+    value = re.sub(r"&(?:nbsp|amp|lt|gt|quot|#39|#[0-9]{1,6});", " ", value, flags=re.I)
     value = re.sub(r"`([^`\n]+)`", r"\1", value)
     value = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", value)
+    # Research citations and bare URLs are useful in the UI but awkward and
+    # often tokenized poorly by speech providers.
+    value = re.sub(r"(?<!\w)\[S\d+(?:\s*,\s*S\d+)*\]", "", value, flags=re.I)
+    value = re.sub(r"https?://\S+", "", value, flags=re.I)
+    value = re.sub(r"\bwww\.\S+", "", value, flags=re.I)
     value = re.sub(r"^\s{0,3}#{1,6}\s+", "", value, flags=re.M)
     value = re.sub(r"^\s*(?:[-+*]|\d+[.)])\s+", "", value, flags=re.M)
     value = re.sub(r"(\*\*|__|\*|_|~~)(.*?)\1", r"\2", value, flags=re.S)
@@ -48,7 +58,17 @@ def spoken_text(text):
     value = re.sub(r"(?<=\d)\s*%", " percent", value)
     value = re.sub(r"(?m)^\s*[-*_]{3,}\s*$", "", value)
     value = re.sub(r"\s+", " ", value)
+    value = re.sub(r"\s+([,.;:!?])", r"\1", value)
     return value.strip()
+
+
+class ProgressTTSSpeakFrame(TTSSpeakFrame):
+    """A short, standalone progress utterance owned by an accepted operation."""
+
+    def __init__(self, text, *, owner_id, owner_turn_id=None):
+        super().__init__(text=text, append_to_context=False)
+        self.owner_id = owner_id
+        self.owner_turn_id = owner_turn_id
 
 
 @dataclass
@@ -121,7 +141,9 @@ class McpSTTService(STTService):
 
     def event(self, name, **values):
         if self.on_event:
-            values.setdefault("response_id", self.response_context_id)
+            response_id = getattr(self, "response_context_id", None)
+            if response_id is not None:
+                values.setdefault("response_id", response_id)
             self.on_event({"event": name, "at": time.monotonic(), **values})
 
     def valid(self, identifier, generation):
@@ -273,6 +295,8 @@ class McpSTTService(STTService):
             "connection_ready_monotonic",
             "connection_failed_monotonic",
             "socket_closed_monotonic",
+            "connection_closed_monotonic",
+            "outbound_flush_completed_monotonic",
             "first_append_monotonic",
             "first_send_started_monotonic",
             "first_send_completed_monotonic",
@@ -381,7 +405,21 @@ class McpSTTService(STTService):
             key = TurnKey(session_id=self.session_id, turn_id=self.turn)
             open_started = time.monotonic()
             self.event("asr_open_started", utterance_id=self.turn)
-            opened = await self.speech.open_operation("asr", "asr_open", key.model_dump())
+            try:
+                opened = await self.speech.open_operation("asr", "asr_open", key.model_dump())
+            except Exception as exc:
+                # An unanswered open can already own a remote slot. Queued
+                # audio must not turn this into automatic per-frame retries.
+                self.closing = True
+                self.speaking = False
+                self.event(
+                    "asr_open_failed",
+                    utterance_id=self.turn,
+                    seconds=time.monotonic() - open_started,
+                    error_code=getattr(exc, "code", "asr_open_failed"),
+                    exception_type=type(exc).__name__,
+                )
+                raise
             identifier = opened["operation_id"]
             if generation != self.generation or self.closing:
                 await self.release(identifier)
@@ -485,8 +523,11 @@ class McpSTTService(STTService):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self.append_error = getattr(exc, "code", None) or type(exc).__name__
-            self.append_exception = exc
+            if not self.valid(identifier, generation):
+                return
+            if self.append_error is None:
+                self.append_error = getattr(exc, "code", None) or type(exc).__name__
+                self.append_exception = exc
             cause = exc.__cause__ or exc.__context__
             self.event(
                 "asr_append_failed",
@@ -515,10 +556,12 @@ class McpSTTService(STTService):
         try:
             while self.valid(identifier, generation):
                 await asyncio.sleep(self.poll_interval)
+                if self.append_error:
+                    return
                 if self.finalizer or time.monotonic() - self.last_append < self.poll_interval:
                     continue
                 async with self.io:
-                    if self.valid(identifier, generation):
+                    if self.valid(identifier, generation) and not self.append_error:
                         row = await self.speech.call(
                             "asr", "asr_events", {"operation_id": identifier}
                         )
@@ -528,14 +571,15 @@ class McpSTTService(STTService):
             raise
         except Exception as exc:
             if self.valid(identifier, generation):
-                self.append_error = getattr(exc, "code", "asr_event_stream_failed")
-                self.append_exception = exc
+                if self.append_error is None:
+                    self.append_error = getattr(exc, "code", "asr_event_stream_failed")
+                    self.append_exception = exc
                 self.event(
                     "asr_events_failed",
                     stream_id=self.stream_ref(identifier),
                     utterance_id=self.turn,
                     exception_type=type(exc).__name__,
-                    error_code=self.append_error,
+                    error_code=getattr(exc, "code", "asr_event_stream_failed"),
                     error_stage=getattr(exc, "error_stage", None) or "asr_events",
                     error_boundary=getattr(exc, "error_boundary", None) or "speech_client",
                 )
@@ -641,6 +685,7 @@ class McpSTTService(STTService):
             raise
         except Exception as exc:
             if self.valid(identifier, generation):
+                self.emit_provider_diagnostics(getattr(exc, "asr_diagnostics", None), identifier)
                 cause = exc.__cause__ or exc.__context__
                 self.event(
                     "asr_error",
@@ -756,6 +801,35 @@ class McpTTSService(TTSService):
         self.response_context_id = None
         self.response_has_audio = False
         self.response_stop_emitted = False
+        self._progress_owner_id = None
+        self.progress_allowed = None
+
+    async def process_frame(self, frame, direction):
+        if not isinstance(frame, ProgressTTSSpeakFrame):
+            await super().process_frame(frame, direction)
+            return
+        if self.progress_allowed is not None and not self.progress_allowed(frame):
+            self.event("tts_progress_suppressed", owner_id=frame.owner_id)
+            return
+        # TTSSpeakFrame is intentionally a separate Pipecat audio context. Keep
+        # the in-flight assistant answer's adapter bookkeeping intact while the
+        # progress utterance uses the same TTS/output queue.
+        saved = (
+            self.response_context_id,
+            self.response_has_audio,
+            self.response_stop_emitted,
+            self._progress_owner_id,
+        )
+        self._progress_owner_id = frame.owner_id
+        try:
+            await super().process_frame(frame, direction)
+        finally:
+            (
+                self.response_context_id,
+                self.response_has_audio,
+                self.response_stop_emitted,
+                self._progress_owner_id,
+            ) = saved
 
     def event(self, name, **values):
         if self.on_event:
@@ -765,7 +839,12 @@ class McpTTSService(TTSService):
         self.response_context_id = context_id
         self.response_has_audio = False
         self.response_stop_emitted = False
-        self.event("tts_response_started", response_id=context_id)
+        if self._progress_owner_id:
+            self.event(
+                "tts_progress_started", response_id=context_id, owner_id=self._progress_owner_id
+            )
+        else:
+            self.event("tts_response_started", response_id=context_id)
 
     async def on_turn_context_completed(self):
         """Emit exactly one terminal stop at the Pipecat response boundary.
@@ -788,7 +867,12 @@ class McpTTSService(TTSService):
                 # downstream delivery still places the response stop last.
                 await self.push_frame(stop)
             self.response_stop_emitted = True
-            self.event("tts_response_stop_queued")
+            self.event(
+                "tts_progress_stop_queued"
+                if self._progress_owner_id
+                else "tts_response_stop_queued",
+                owner_id=self._progress_owner_id,
+            )
         await super().on_turn_context_completed()
         self.response_context_id = None
         self.response_has_audio = False
@@ -797,19 +881,32 @@ class McpTTSService(TTSService):
     async def on_audio_context_interrupted(self, context_id):
         if context_id == self.response_context_id:
             self.event(
-                "tts_response_interrupted", response_id=context_id, reason="pipecat_interruption"
+                "tts_progress_interrupted"
+                if self._progress_owner_id
+                else "tts_response_interrupted",
+                response_id=context_id,
+                owner_id=self._progress_owner_id,
+                reason="pipecat_interruption",
             )
             self.response_context_id = None
             self.response_has_audio = False
             self.response_stop_emitted = False
 
     async def run_tts(self, text, context_id):
+        progress = self._progress_owner_id is not None
+
+        def emit(name, **values):
+            if progress:
+                name = name.replace("tts_", "tts_progress_", 1)
+                values.setdefault("owner_id", self._progress_owner_id)
+            self.event(name, **values)
+
         text = spoken_text(text)
         if not any(char.isalnum() for char in text):
             # A malformed streamed answer can contain punctuation-only
             # sentences. They have no speakable content and previously opened
             # separate provider requests, delaying or stalling the response.
-            self.event("tts_fragment_skipped", characters=len(text))
+            emit("tts_fragment_skipped", characters=len(text))
             return
         segment_started = time.monotonic()
         # Preserve all text while respecting the project MCP per-operation limit.
@@ -820,7 +917,7 @@ class McpTTSService(TTSService):
             first_pcm_at = last_pcm_at = None
             pcm_bytes = pcm_chunks = 0
             status = "failed"
-            self.event(
+            emit(
                 "tts_start",
                 segment_id=segment_index,
                 characters=len(segment_text),
@@ -838,7 +935,7 @@ class McpTTSService(TTSService):
                     pcm_chunks += 1
                     pcm_bytes += len(pcm)
                     self.response_has_audio = True
-                    self.event("tts_pcm", bytes=len(pcm))
+                    emit("tts_pcm", bytes=len(pcm))
                     yield TTSAudioRawFrame(pcm, 16000, 1, context_id=context_id)
                 status = "completed"
             except (asyncio.CancelledError, GeneratorExit):
@@ -846,7 +943,7 @@ class McpTTSService(TTSService):
                 raise
             except Exception as exc:
                 status = "failed"
-                self.event(
+                emit(
                     "tts_segment_error",
                     segment_id=segment_index,
                     error_code=getattr(exc, "code", "tts_error"),
@@ -855,9 +952,9 @@ class McpTTSService(TTSService):
                 raise
             finally:
                 await stream.aclose()
-                self.event("tts_released")
+                emit("tts_released")
                 diagnostics = getattr(self.speech, "last_tts_diagnostics", None)
-                self.event(
+                emit(
                     "tts_segment_summary",
                     segment_id=segment_index,
                     status=status,

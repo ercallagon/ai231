@@ -11,8 +11,8 @@
   "llm": {
     "backend": "external",
     "protocol": "chat-completions-v1",
-    "endpoint": "https://api.groq.com/openai/v1/chat/completions",
-    "auth_env": "ME3_GROQ_API_KEY",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "auth_env": "ME3_OPENROUTER_API_KEY",
     "model": "openai/gpt-oss-120b",
     "allow_live": false,
     "request_limit": 0

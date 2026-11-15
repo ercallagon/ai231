@@ -12,7 +12,13 @@ from aiohttp.test_utils import TestServer
 from aiohttp import WSMsgType, WSServerHandshakeError
 
 from me3_voice.configuration import load_backends
-from me3_voice.voice_bridge import BrowserSink, VoiceRuntimeServices, build_app, serve
+from me3_voice.voice_bridge import (
+    BrowserSink,
+    VoiceRuntimeServices,
+    bridge_secret_names,
+    build_app,
+    serve,
+)
 
 
 class FakeSocket:
@@ -27,6 +33,22 @@ class FakeSocket:
 
     async def send_json(self, value):
         self.control.append(value)
+
+
+def test_tavily_secret_is_loaded_from_standard_provider_file_when_live_research_is_enabled():
+    from types import SimpleNamespace
+
+    backends = {
+        "asr": SimpleNamespace(backend="external", auth_env="ME3_DEEPGRAM_API_KEY"),
+        "llm": SimpleNamespace(backend="external", auth_env="ME3_GROQ_API_KEY"),
+        "tts": SimpleNamespace(backend="external", auth_env="ME3_DEEPGRAM_API_KEY"),
+    }
+    live_keys = bridge_secret_names(backends, research_enabled=True)
+    offline_keys = bridge_secret_names(backends, research_enabled=False)
+
+    assert "ME3_RESEARCH_TAVILY_API_KEY" in live_keys
+    assert "ME3_RESEARCH_TAVILY_API_KEY" not in offline_keys
+    assert {"ME3_DEEPGRAM_API_KEY", "ME3_GROQ_API_KEY"} <= offline_keys
 
 
 @pytest.mark.asyncio
@@ -351,6 +373,26 @@ async def test_health_identifies_bridge_and_active_slot_and_disconnect_allows_fr
             assert state["voice_session"] == "idle"
             replacement = await client.ws_connect(str(server.make_url("/api/voice/ws")))
             await replacement.close()
+
+
+def test_native_error_event_retains_symbolic_diagnostics_without_exception_text():
+    from me3_voice.native_bridge import _safe_event
+
+    safe = _safe_event(
+        {
+            "event": "turn_error",
+            "exception_type": "AttributeError",
+            "error_stage": "audio_ingress",
+            "exception_message": "object has no attribute response_id",
+        }
+    )
+    assert safe["exception_type"] == "AttributeError"
+    assert safe["error_stage"] == "audio_ingress"
+    assert "exception_message" not in safe
+    unsafe = _safe_event(
+        {"event": "turn_error", "exception_message": "https://example.test/?token=secret"}
+    )
+    assert "exception_message" not in unsafe
 
 
 def test_bind_conflict_reports_safe_recovery_without_touching_existing_process():

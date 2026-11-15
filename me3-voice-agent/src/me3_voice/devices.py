@@ -1093,6 +1093,7 @@ class DeviceActions:
                 return self._base_result(
                     result_status="completed",
                     summary=f"System local time is {stamp} ({tz}); the Pi clock has not been verified on this host.",
+                    spoken_summary=f"It's {stamp} local time.",
                     display=f"{now:%H:%M}",
                     action=action,
                     mode="reported",

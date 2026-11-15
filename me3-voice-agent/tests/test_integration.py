@@ -235,6 +235,30 @@ def test_configuration_requires_real_contract_and_never_echoes_secret(tmp_path):
     assert "private-secret" not in str(result.value)
 
 
+def test_local_ollama_requires_explicit_loopback_profile():
+    spec = BackendSpec(
+        backend="external",
+        protocol="chat-completions-v1",
+        endpoint="http://127.0.0.1:11434/v1/chat/completions",
+        auth_env="ME3_LOCAL_OLLAMA_KEY",
+        model="qwen3:8b",
+        allow_live=True,
+        request_limit=8,
+        max_input_tokens=12000,
+        max_input_tokens_total=100000,
+        allow_private_http=True,
+    )
+    assert spec.validate("llm", runnable=True) is spec
+
+    for endpoint in (
+        "http://192.168.1.10:11434/v1/chat/completions",
+        "http://127.0.0.1:11435/v1/chat/completions",
+        "http://127.0.0.1:11434/v1/completions",
+    ):
+        with pytest.raises(ConfigurationError, match="restricted"):
+            replace(spec, endpoint=endpoint).validate("llm", runnable=True)
+
+
 async def test_task_result_history_idempotency_and_correction():
     class Commands(Speech):
         async def transcribe(self, key, pcm):

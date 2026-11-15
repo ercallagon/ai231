@@ -5,7 +5,7 @@
     "allow_live": false,
     "request_limit": 0
   },
-  "max_model_calls_per_turn": 6,
+  "max_model_calls_per_turn": 7,
   "max_tool_calls_per_turn": 8,
   "max_repeated_tool_calls": 2
 }

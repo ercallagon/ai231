@@ -777,6 +777,51 @@ async def test_deepgram_startup_buffer_is_bounded_and_rejects_without_silent_los
     await service.close()
 
 
+async def test_socket_cancellation_during_reservation_finishes_unknown_without_dispatch(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    path = tmp_path / "cancel-reservation.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "cancel-reservation")
+    transport = LiveTransport(
+        replace(spec("asr"), allow_live=True, request_limit=1),
+        {"ME3_TEST_ONLY_KEY": "offline-key"},
+    )
+    entered, release = threading.Event(), threading.Event()
+    authorize = transport.authorize
+
+    def blocked_authorize():
+        entered.set()
+        assert release.wait(3)
+        return authorize()
+
+    def forbidden_network():
+        pytest.fail("cancelled reservation attempted network dispatch")
+
+    monkeypatch.setattr(transport, "authorize", blocked_authorize)
+    monkeypatch.setattr(transport, "session", forbidden_network)
+
+    async def request():
+        async with transport.socket({}):
+            pytest.fail("cancelled request entered a socket")
+
+    task = asyncio.create_task(request())
+    try:
+        assert await asyncio.to_thread(entered.wait, 1)
+        task.cancel()
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with sqlite3.connect(path) as db:
+        assert db.execute("SELECT status FROM provider_requests").fetchall() == [("unknown",)]
+    with pytest.raises(ProviderError) as exhausted:
+        authorize()
+    assert exhausted.value.code == "request_limit_reached"
+
+
 async def test_deepgram_stream_honors_configured_audio_duration_limit():
     spec_asr = replace(spec("asr"), max_audio_seconds=1)
     spec_asr.validate("asr", runnable=True)
@@ -1287,6 +1332,7 @@ async def test_tts_provider_and_mcp_pull_timing_are_separately_reported():
     try:
         opened = await service.open("tts-timing-session", 1, "Hello.")
         chunk = await service.next(opened["operation_id"])
+        await asyncio.sleep(0.025)  # Consumer deliberately delays its next pull.
         terminal = await service.next(opened["operation_id"])
         assert not chunk["done"] and terminal["done"]
         diagnostics = terminal["tts_diagnostics"]
@@ -1299,9 +1345,25 @@ async def test_tts_provider_and_mcp_pull_timing_are_separately_reported():
         assert diagnostics["provider"]["provider_flushed_monotonic"] is not None
         assert diagnostics["provider"]["provider_pcm_packets"] == 2
         assert diagnostics["provider"]["provider_pcm_bytes"] == 4
+        assert diagnostics["provider"]["consumer_pause_seconds"] >= 0.025
+        assert diagnostics["provider"]["provider_receive_wait_seconds"] >= 0
         assert diagnostics["mcp"]["tts_next_seconds"]["sample_count"] == 2
     finally:
         await service.close()
+
+
+async def test_deepgram_receive_timeout_is_inside_mcp_deadline_and_counts_failed_wait():
+    peer = Peer()
+    provider = DeepgramTTS(spec("tts"), Wire(peer), mcp_call_timeout=0.1)
+    with pytest.raises(ProviderError) as caught:
+        _ = [chunk async for chunk in provider.synthesize("Short timeout fixture.")]
+    assert caught.value.code == "provider_timeout"
+    assert caught.value.error_stage == "tts_receive"
+    diagnostics = provider.diagnostics()
+    assert diagnostics["status"] == "failed"
+    assert diagnostics["provider_receive_wait_seconds"] >= 0.05
+    assert provider.transport.requests[0]["status"] == "failure"
+    await provider.aclose()
 
 
 async def test_tts_reuses_one_deepgram_connection_across_mcp_segments_and_reduces_setup_wall():
@@ -2505,6 +2567,40 @@ async def test_openrouter_free_reasoning_adds_zero_price_guard_and_rejects_paid_
     assert peer.body["model"] == model_id
 
 
+async def test_openrouter_gpt_oss_paid_reasoning_uses_standard_chat_contract():
+    from dataclasses import replace
+    from me3_voice.remote import ChatReasoning
+
+    llm_spec = replace(
+        spec("llm"),
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        model="openai/gpt-oss-120b",
+    )
+    llm_spec.validate("llm", runnable=True)
+
+    class Peer:
+        async def events(self, body, *, total_timeout=True):
+            self.body = body
+            yield {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {"content": "The streamed answer."},
+                        "finish_reason": "stop",
+                    }
+                ]
+            }
+
+    peer = Peer()
+    model = ChatReasoning(llm_spec, peer)
+    assert [text async for text in model.respond([{"role": "user", "content": "Answer."}])] == [
+        "The streamed answer."
+    ]
+    assert peer.body["model"] == "openai/gpt-oss-120b"
+    assert peer.body["stream"] is True
+    assert "provider" not in peer.body
+
+
 async def test_deepgram_partial_arrives_between_audio_appends_via_mcp_event_read():
     peer = Peer()
     service = SpeechService(DeepgramASR(spec("asr"), Wire(peer)), DeepgramTTS(spec("tts"), Wire()))
@@ -2525,3 +2621,147 @@ async def test_deepgram_partial_arrives_between_audio_appends_via_mcp_event_read
     assert len([x for x in peer.sent if isinstance(x, bytes)]) == 1
     await service.cancel(identifier)
     assert peer.closed
+
+
+async def test_asr_reservation_wait_does_not_block_loop_or_dispatch_after_cancel():
+    import threading
+    from me3_voice.remote import LiveTransport
+    from me3_voice.configuration import BackendSpec
+
+    started, release = threading.Event(), threading.Event()
+    transport = LiveTransport(BackendSpec())
+    network = []
+    terminal = []
+
+    def reserve():
+        started.set()
+        assert release.wait(2)
+        return "offline-key", "offline-reservation"
+
+    def forbidden_session():
+        network.append(True)
+        raise AssertionError("cancelled reservation must not dispatch")
+
+    transport.authorize = reserve
+    transport.session = forbidden_session
+    # This scheduling-only fixture returns an artificial identity without SQL.
+    # The separate real-ledger cancellation regression verifies durable state.
+    transport.finish_request = lambda *args: terminal.append(args)
+
+    async def connect():
+        async with transport.socket({}):
+            raise AssertionError("must not connect")
+
+    task = asyncio.create_task(connect())
+    try:
+        async with asyncio.timeout(1):
+            while not started.is_set():
+                await asyncio.sleep(0.001)
+        # Reaching here while the reservation thread waits proves loop progress.
+        assert not task.done()
+        task.cancel()
+        await asyncio.sleep(0)
+    finally:
+        release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert network == []
+    assert terminal == [("offline-reservation", "unknown")]
+
+
+@pytest.mark.parametrize("failure", ["pending", "raw_timeout"])
+async def test_asr_outer_connection_deadline_survives_mcp_and_client(
+    tmp_path, monkeypatch, failure
+):
+    from types import SimpleNamespace
+    from me3_voice.servers import speech_tool
+    from me3_voice.speech import SpeechClient
+
+    path = tmp_path / "outer-deadline.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "outer-deadline")
+    selected = replace(spec("asr"), allow_live=True, request_limit=1, timeout_seconds=0.3)
+    transport = LiveTransport(selected, {"ME3_TEST_ONLY_KEY": "offline-key"})
+    entered = asyncio.Event()
+
+    class Context:
+        async def __aenter__(self):
+            entered.set()
+            if failure == "raw_timeout":
+                raise TimeoutError("private provider details must not escape")
+            await asyncio.Event().wait()
+
+        async def __aexit__(self, *args):
+            return False
+
+    class PeerSession:
+        def ws_connect(self, *args, **kwargs):
+            return Context()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(transport, "session", lambda: PeerSession())
+    service = SpeechService(DeepgramASR(selected, transport), MockTTS())
+    opened = await service.open("outer-deadline", 1)
+    identifier = opened["operation_id"]
+    stream = service.operations[identifier].asr_stream
+    await service.append(identifier, 0, encode_pcm(b"\1\0" * 512))
+    await asyncio.wait_for(entered.wait(), 2)
+    result = await speech_tool(service.finish, "asr")(identifier)
+    error = result["speech_error"]
+    assert (error["code"], error["role"], error["stage"]) == ("provider_timeout", "asr", "asr_open")
+    assert error["boundary"] == "deepgram_websocket"
+    assert error["exception_type"] == "TimeoutError"
+    assert "private provider" not in json.dumps(result)
+    diagnostics = error["asr_diagnostics"]
+    assert diagnostics["accepted_audio_bytes"] == diagnostics["discarded_audio_bytes"] == 1024
+    assert diagnostics["sent_audio_bytes"] == diagnostics["queued_audio_bytes"] == 0
+    assert diagnostics["connection_failed_monotonic"] is not None
+    assert stream.connect_task.done()
+    assert not service.operations
+
+    class ClientPeer:
+        async def call_tool(self, name, arguments):
+            return SimpleNamespace(is_error=False, structured_content=result)
+
+    client = SpeechClient()
+    client.clients = {"asr": ClientPeer()}
+    with pytest.raises(ProviderError) as caught:
+        await client.call("asr", "asr_finish", {"operation_id": identifier})
+    assert caught.value.role == "asr"
+    assert caught.value.error_stage == "asr_open"
+    assert caught.value.code == "provider_timeout"
+    assert caught.value.asr_diagnostics == diagnostics
+    with sqlite3.connect(path) as db:
+        expected_status = "unknown" if failure == "pending" else "failure"
+        assert db.execute("SELECT status FROM provider_requests").fetchall() == [(expected_status,)]
+    await service.close()
+
+
+def test_new_asr_stream_does_not_report_previous_stream_readiness():
+    from types import SimpleNamespace
+
+    provider = SimpleNamespace(
+        spec=SimpleNamespace(max_audio_seconds=30),
+        transport=SimpleNamespace(
+            last_websocket_timing={
+                "websocket_handshake_monotonic": 10.0,
+                "connection_ready_monotonic": 11.0,
+                "request_reserved_monotonic": 10.0,
+                "dns_started": 10.1,
+            }
+        ),
+    )
+    stream = DeepgramASRStream(provider)
+    stream.connection_started_at = 20.0
+    snapshot = stream.diagnostics()
+    assert snapshot["connection_state"] == "connecting"
+    assert snapshot["connection_ready_monotonic"] is None
+    assert snapshot["provider_request_reserved_monotonic"] is None
+    assert not snapshot["connection_stages"]
+    provider.transport.last_websocket_timing = {
+        "websocket_handshake_monotonic": 20.1,
+        "connection_ready_monotonic": 21.0,
+    }
+    assert stream.diagnostics()["connection_ready_monotonic"] == 21.0

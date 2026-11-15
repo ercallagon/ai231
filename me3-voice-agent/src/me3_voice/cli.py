@@ -287,8 +287,117 @@ def main():
         action="store_true",
         help="connected application; providers default to mocks unless explicitly configured",
     )
+    capabilities = commands.add_parser(
+        "capabilities", help="export a sanitized profile-aware native capability catalog"
+    )
+    capabilities.add_argument("--backend-config", type=Path)
+    capabilities.add_argument("--runtime-config", type=Path)
+    capabilities.add_argument("--device-config", type=Path)
+    capabilities.add_argument("--music-config", type=Path)
+    capabilities.add_argument("--kws-assets", type=Path)
+    capabilities.add_argument("--keywords-file", type=Path)
+    capabilities.add_argument("--secrets-file", type=Path)
+    capabilities.add_argument("--llm-secrets-file", type=Path)
+    capabilities.add_argument("--research-secrets-file", type=Path)
+    capabilities.add_argument(
+        "--output-stem",
+        type=output_path,
+        default=output_path("var/results/swift-capabilities"),
+        help="exclusive JSON and Markdown output stem under var/",
+    )
     args = parser.parse_args()
     try:
+        if args.command == "capabilities":
+            from .capability_report import build_capability_report, export_capability_report
+            from .configuration import load_backends
+            from .credentials import load_secrets
+
+            backends = load_backends(args.backend_config)
+            options = load_runtime(args.runtime_config, engine="native")
+            selected = {
+                spec.auth_env for spec in backends.values()
+                if spec.backend == "external" and spec.auth_env
+            }
+            credentials = (
+                load_secrets(args.secrets_file, selected | {"ME3_RESEARCH_TAVILY_API_KEY"})
+                if args.secrets_file else {}
+            )
+            if args.llm_secrets_file:
+                credentials.update(load_secrets(args.llm_secrets_file, {backends["llm"].auth_env}))
+            if args.research_secrets_file:
+                credentials.update(
+                    load_secrets(
+                        args.research_secrets_file, {"ME3_RESEARCH_TAVILY_API_KEY"}
+                    )
+                )
+
+            device = {"target": "mock", "available": True}
+            if args.device_config:
+                import json as json_module
+
+                device_path = args.device_config
+                if device_path.is_symlink() or not device_path.resolve().is_relative_to(
+                    (Path.cwd() / "var/cache").resolve()
+                ):
+                    parser.error("device config must be an existing project var/cache file")
+                try:
+                    configured_device = json_module.loads(device_path.read_text(encoding="utf-8"))
+                    backend = configured_device.get("backend")
+                    if (
+                        configured_device.get("schema_version") != 1
+                        or backend not in {"mock", "pi"}
+                    ):
+                        raise ValueError
+                except (OSError, ValueError, AttributeError):
+                    parser.error("invalid device configuration; no hardware was initialized")
+                weather = configured_device.get("weather") or {}
+                communications = configured_device.get("communications") or {}
+                device.update(
+                    {
+                        "target": backend,
+                        "available": True if backend == "mock" else None,
+                        "weather_enabled": bool(weather.get("enabled")),
+                        "communications_enabled": bool(communications.get("enabled")),
+                    }
+                )
+
+            music_credentials = {}
+            music_caps = {"configured": False, "output_backend": "mock"}
+            music = None
+            try:
+                from .music import MusicController
+
+                music = MusicController.configured(args.music_config)
+                music_caps = music.capabilities()
+                music_credentials = {
+                    "ME3_SPOTIFY_ACCESS_TOKEN": bool(getattr(music, "token", None)),
+                    "ME3_SPOTIFY_REFRESH_TOKEN": bool(getattr(music, "refresh_token", None)),
+                }
+            except Exception:
+                # Publish only an unavailable state, never parser errors or config contents.
+                music_caps = {"configured": False, "output_backend": "unavailable"}
+
+            report = build_capability_report(
+                backends=backends,
+                options=options,
+                credentials=credentials,
+                credential_presence=music_credentials,
+                device_capabilities=device,
+                device_details={
+                    "weather_enabled": device.get("weather_enabled", False),
+                    "communications_enabled": device.get("communications_enabled", False),
+                },
+                music_capabilities=music_caps,
+                wake_configured=bool(
+                    args.kws_assets and args.kws_assets.is_dir()
+                    and args.keywords_file and args.keywords_file.is_file()
+                ),
+            )
+            paths = export_capability_report(report, args.output_stem)
+            if music is not None:
+                asyncio.run(music.close())
+            print(f"Sanitized capability JSON: {paths[0]}\nDeck-ready Markdown: {paths[1]}")
+            return
         options = load_runtime(args.runtime_config, engine=args.engine)
         if (
             args.command == "demo"

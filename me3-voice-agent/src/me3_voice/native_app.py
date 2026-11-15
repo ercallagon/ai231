@@ -43,13 +43,16 @@ from .native_llm import NativeLLM
 from .native_pipeline import make_native_pipeline
 from .preprocessing import PCMPreprocessor, PCMFrames
 from .providers import ToolCall
-from .remote import LiveTransport
+from .remote import LiveTransport, ProviderError
 from .speech import SpeechClient
+from .native_speech import ProgressTTSSpeakFrame
 from .tools import MockTaskExecutor
 
 
 NATIVE_REPLAY_SETTLE_TIMEOUT_SECONDS = 60
 NATIVE_REPLAY_EVENT_HISTORY_LIMIT = 4096
+RESEARCH_ACK_DELAY_SECONDS = 0.65
+_TERMINAL_TURN_EVENTS = {"turn_completed", "turn_failed", "turn_error", "turn_interrupted"}
 
 
 class NativeState:
@@ -309,6 +312,7 @@ class NativeApplication:
         # A 2,000-row ring discarded those events before the live replay failed.
         self.events = deque(maxlen=NATIVE_REPLAY_EVENT_HISTORY_LIMIT)
         self.event_count = 0
+        self.turn_terminal_outcomes = {}
         self.fast_action_rows = []
         self.response_records = {}
         self.response_order = deque(maxlen=64)
@@ -316,6 +320,9 @@ class NativeApplication:
         self.active_response_id = None
         self.last_llm_request_id = None
         self.last_vad_started_at = None
+        self.playback_busy_until = 0.0
+        self.research_ack_turns = set()
+        self.research_recovery_active = False
         self.action_revision = 0
         self.turn_id = 0  # Telemetry projection of native user-turn events only.
         self.run_id = uuid.uuid4().hex
@@ -323,9 +330,7 @@ class NativeApplication:
         self.gate = WakeGate(
             wake,
             active=annotated,
-            on_wake=lambda result: self.event(
-                "wake_detected", backend=result.get("backend"), score=result.get("score")
-            ),
+            on_wake=self._on_wake,
         )
         self.pending = set()
         self.audio_frames = 0
@@ -350,11 +355,39 @@ class NativeApplication:
 
     def event(self, name, **fields):
         if name == "turn_started":
-            self.turn_id += 1
+            previous_turn_id = self.turn_id
             previous = self.response_records.get(self.active_response_id)
-            if previous and previous.get("response_state") == "interrupted":
-                previous["response_state"] = "superseded"
+            if (
+                previous_turn_id > 0
+                and previous is not None
+                and previous.get("turn_id") == previous_turn_id
+                and previous.get("response_state") == "pending"
+                and previous_turn_id not in self.turn_terminal_outcomes
+            ):
+                previous["response_state"] = "interrupted"
+                previous["interruption_reason"] = "new_user_turn"
+                if previous.get("generated_state") == "streaming":
+                    previous["generated_state"] = "partial"
+                self.event(
+                    "turn_interrupted",
+                    owner_turn_id=previous_turn_id,
+                    response_id=previous["response_id"],
+                    reason="new_user_turn",
+                )
+            self.turn_id += 1
+            self.playback_busy_until = 0.0
+            self.research_ack_turns.clear()
+            previous = self.response_records.get(self.active_response_id)
+            if previous and previous.get("response_state") in {"interrupted", "superseded"}:
                 previous["superseded_by_turn_id"] = self.turn_id
+        owner_turn_id = fields.pop("owner_turn_id", None)
+        event_turn_id = self.turn_id
+        if type(owner_turn_id) is int and owner_turn_id >= 0:
+            event_turn_id = owner_turn_id
+        if name in _TERMINAL_TURN_EVENTS:
+            if event_turn_id in self.turn_terminal_outcomes:
+                return None
+            self.turn_terminal_outcomes[event_turn_id] = name
         if name == "vad_speech_started":
             self.last_vad_started_at = time.monotonic()
         if name == "tts_response_started":
@@ -377,6 +410,7 @@ class NativeApplication:
                     "playback_packets": 0,
                     "playback_acks": 0,
                     "started_at": time.monotonic(),
+                    "generated_text": "",
                 }
                 self.response_records[response_id] = record
                 if len(self.response_order) == self.response_order.maxlen:
@@ -390,8 +424,11 @@ class NativeApplication:
                 self.active_response_id = response_id
         elif name == "llm_request":
             self.last_llm_request_id = fields.get("request_id")
-        response_id = fields.get("response_id") or self.active_response_id
-        record = self.response_records.get(response_id)
+        progress_event = name.startswith("tts_progress_")
+        response_id = fields.get("response_id") or (
+            None if progress_event else self.active_response_id
+        )
+        record = None if progress_event else self.response_records.get(response_id)
         submitted_text = fields.pop("submitted_text", None) if name == "tts_start" else None
         if record is not None:
             if name == "tts_start":
@@ -424,12 +461,29 @@ class NativeApplication:
                     if fields.get("status") == "cancelled"
                     else record["tts_state"]
                 )
+                if fields.get("status") == "failed":
+                    record["response_state"] = "failed"
+                elif (
+                    fields.get("status") == "cancelled"
+                    and record.get("response_state") == "pending"
+                ):
+                    record["response_state"] = "interrupted"
             elif name == "playback_packet":
                 record["playback_packets"] += 1
                 record["playback_state"] = "queued"
             elif name == "playback_ack":
                 record["playback_acks"] += 1
                 record["playback_state"] = "browser_acknowledged"
+                queued = fields.get("queued_audio_seconds")
+                if (
+                    response_id == self.active_response_id
+                    and record.get("response_state") not in {"interrupted", "superseded"}
+                    and type(queued) in (int, float)
+                    and 0 <= queued <= 120
+                ):
+                    self.playback_busy_until = max(
+                        self.playback_busy_until, time.monotonic() + queued
+                    )
             elif name == "tts_response_interrupted":
                 record["response_state"] = "interrupted"
                 record["tts_state"] = "interrupted"
@@ -443,6 +497,17 @@ class NativeApplication:
                 record["interruption_reason"] = (
                     "vad_barge_in" if recent_vad else fields.get("reason", "speech_interruption")
                 )
+                response_turn_id = record.get("turn_id")
+                if (
+                    type(response_turn_id) is int
+                    and response_turn_id not in self.turn_terminal_outcomes
+                ):
+                    self.event(
+                        "turn_interrupted",
+                        owner_turn_id=response_turn_id,
+                        response_id=record["response_id"],
+                        reason=record["interruption_reason"],
+                    )
             elif name == "turn_completed":
                 record["response_state"] = "completed"
                 record["tts_state"] = "completed"
@@ -455,6 +520,27 @@ class NativeApplication:
                     else "not_acknowledged"
                 )
                 record["completed_at"] = time.monotonic()
+            elif name in {"turn_failed", "turn_error", "turn_interrupted"}:
+                record["response_state"] = (
+                    "interrupted" if name == "turn_interrupted" else "failed"
+                )
+                if name == "turn_interrupted":
+                    record["interruption_reason"] = fields.get("reason", "interrupted")
+        if name == "interrupt_requested":
+            active = self.response_records.get(self.active_response_id)
+            if (
+                active
+                and active.get("response_state") == "pending"
+                and active.get("turn_id") not in self.turn_terminal_outcomes
+            ):
+                active["response_state"] = "interrupted"
+                active["interruption_reason"] = fields.get("reason", "user_requested")
+                self.event(
+                    "turn_interrupted",
+                    owner_turn_id=active["turn_id"],
+                    response_id=active["response_id"],
+                    reason=active["interruption_reason"],
+                )
         if name in {"tool_started", "tool_completed", "tool_operation_blocked"}:
             fields.setdefault("operation_id", fields.get("tool_call_id"))
             fields.setdefault("llm_request_id", self.last_llm_request_id)
@@ -463,7 +549,7 @@ class NativeApplication:
             "at": time.monotonic(),
             "run_id": self.run_id,
             "session_id": self.resources.session_id,
-            "turn_id": self.turn_id,
+            "turn_id": event_turn_id,
             **fields,
         }
         self.event_count += 1
@@ -785,7 +871,12 @@ class NativeApplication:
                 "mode": result.get("mode", "reported"),
             }
         )
-        return summary
+        spoken_summary = result.get("spoken_summary") if isinstance(result, dict) else None
+        return (
+            spoken_summary
+            if isinstance(spoken_summary, str) and spoken_summary.strip()
+            else summary
+        )
 
     async def __aenter__(self):
         try:
@@ -821,6 +912,9 @@ class NativeApplication:
             upstream=self.upstream,
             clock=self.clock,
             source_ids=lambda: set(self.resources.research.sources),
+            source_lookup=lambda source_id: self.resources.research.sources.get(source_id),
+            evidence_passage_ids=self.resources.research.evidence_passage_ids,
+            evidence_passage_lookup=self.resources.research.lookup_evidence_passage,
             research_remaining=lambda: (
                 max(
                     0,
@@ -830,6 +924,7 @@ class NativeApplication:
                 if self.resources.research.options.allow_live
                 else None
             ),
+            research_alternatives=lambda: self.resources.research.alternative_leads(limit=1),
             on_event=self.event,
             max_model_calls_per_turn=self.options.max_model_calls_per_turn,
             max_tool_calls_per_turn=self.options.max_tool_calls_per_turn,
@@ -851,6 +946,24 @@ class NativeApplication:
             on_partial=self.update_partial_transcript,
             user_idle_seconds=0 if self.annotated else self.idle_seconds,
         )
+
+        def progress_allowed(frame):
+            response_id = self.response_by_conversation_turn.get(self.turn_id)
+            response = self.response_records.get(response_id) if response_id else None
+            # A tool-call response record exists before the task has spoken.
+            # Permit its one acceptance cue while that response has produced
+            # neither TTS segments nor playback packets; never interrupt speech.
+            before_answer_audio = response is None or (
+                not response.get("tts_segments") and response.get("playback_packets", 0) == 0
+            )
+            return (
+                frame.owner_turn_id == max(1, self.turn_id)
+                and not self.settled.is_set()
+                and before_answer_audio
+                and self.error is None
+            )
+
+        self.parts.tts.progress_allowed = progress_allowed
         self.worker = PipelineWorker(
             self.parts.pipeline,
             params=PipelineParams(audio_in_sample_rate=16000, audio_out_sample_rate=16000),
@@ -881,6 +994,7 @@ class NativeApplication:
                 "turn_error",
                 exception_type=type(self.error).__name__,
                 error_code=getattr(self.error, "code", "pipeline_error"),
+                error_role=getattr(self.error, "role", None),
                 error_stage=getattr(self.error, "error_stage", None),
                 error_boundary=getattr(self.error, "error_boundary", None),
                 provider_exception_type=getattr(self.error, "error_detail", None),
@@ -902,6 +1016,7 @@ class NativeApplication:
         @self.parts.aggregators.user().event_handler("on_user_turn_started")
         async def user_started(*_):
             self._cancel_followup_timer()
+            self.research_recovery_active = False
             self.llm.new_turn()
             self.terminal_failure_code = None
             self.settled.clear()
@@ -922,6 +1037,19 @@ class NativeApplication:
             self.projection = (
                 "listening" if message.interrupted or self.settled.is_set() else "thinking"
             )
+            conversation_turn = sum(
+                item.get("role") == "user"
+                for item in self.resources.context.get_messages()
+                if isinstance(item, dict)
+            )
+            response_id = self.response_by_conversation_turn.get(conversation_turn)
+            response = self.response_records.get(response_id)
+            if response is not None and isinstance(message.content, str) and message.content:
+                response["generated_text"] = message.content[:12000]
+                if message.interrupted:
+                    response["generated_state"] = "partial"
+                    if response.get("response_state") == "pending":
+                        response["response_state"] = "interrupted"
             self.event(
                 "assistant_turn_stopped",
                 interrupted=bool(message.interrupted),
@@ -944,6 +1072,9 @@ class NativeApplication:
                 )
                 if response is not None:
                     response["generated_state"] = "completed"
+                    # Pipecat's assistant aggregator may commit the text after
+                    # this callback. Keep the generated response independently
+                    # addressable for interruption/error archive projections.
             if (
                 isinstance(frame, LLMFullResponseEndFrame)
                 and frame.metadata.get("me3_response_epoch") == self.llm.epoch
@@ -977,28 +1108,52 @@ class NativeApplication:
         await asyncio.wait_for(self.ready.wait(), 15)
         return self
 
+    @staticmethod
+    def registered_tool_schemas():
+        """Return every Pipecat handler registered by the native application."""
+        from .task_runtime import conversation_schemas
+
+        return [*schemas(), *conversation_schemas()]
+
+    @staticmethod
+    def available_tool_schemas(
+        research_options, research_requests=0, research_sources=(), *, research_recovery=False
+    ):
+        """Return tools available under the profile and active research turn."""
+        result = []
+        for schema in NativeApplication.registered_tool_schemas():
+            if research_recovery and schema.name not in {
+                "web_search",
+                "retrieve_source",
+                "verify_evidence",
+            }:
+                continue
+            if schema.name in {"web_search", "retrieve_source"}:
+                if (
+                    not research_options.allow_live
+                    or research_requests >= research_options.request_limit
+                ):
+                    continue
+            elif schema.name == "verify_evidence" and not research_sources:
+                continue
+            result.append(schema)
+        return result
+
     def register_tools(self):
-        from .task_runtime import conversation_schemas, validate_control_arguments
+        from .task_runtime import validate_control_arguments
 
         task_tool_names = {"start_task", "task_status", "steer_task"}
-        all_schemas = [*schemas(), *conversation_schemas()]
-        research_names = {"web_search", "retrieve_source", "verify_evidence"}
-
-        def research_available(name):
-            research = self.resources.research
-            if name == "verify_evidence":
-                return bool(research.sources)
-            return bool(
-                research.options.allow_live and research.requests < research.options.request_limit
-            )
+        research = self.resources.research
+        all_schemas = self.registered_tool_schemas()
 
         def refresh_tools(context):
-            available = [
-                schema
-                for schema in all_schemas
-                if schema.name not in research_names or research_available(schema.name)
-            ]
-            context.set_tools(ToolsSchema(standard_tools=available))
+            refreshed = self.available_tool_schemas(
+                research.options,
+                research.requests,
+                research.sources,
+                research_recovery=self.research_recovery_active,
+            )
+            context.set_tools(ToolsSchema(standard_tools=refreshed))
 
         refresh_tools(self.resources.context)
         self.llm.refresh_tools = refresh_tools
@@ -1020,6 +1175,12 @@ class NativeApplication:
                 operation_hash, operation_count, blocked = self.llm.claim_tool_operation(
                     call.name, call.arguments
                 )
+                if self.research_recovery_active and call.name not in {
+                    "web_search",
+                    "retrieve_source",
+                    "verify_evidence",
+                }:
+                    blocked = "tool_unavailable_during_research"
                 self.event(
                     "tool_started",
                     tool_call_id=call.call_id,
@@ -1040,27 +1201,177 @@ class NativeApplication:
                     )
                 else:
                     try:
-                        if call.name in research_names and not research_available(call.name):
+                        hidden_research_tool = call.name in {
+                            "web_search",
+                            "retrieve_source",
+                            "verify_evidence",
+                        } and call.name not in {
+                            schema.name
+                            for schema in self.available_tool_schemas(
+                                self.resources.research.options,
+                                self.resources.research.requests,
+                                self.resources.research.sources,
+                            )
+                        }
+                        if hidden_research_tool:
                             result = {"ok": False, "error": "research_unavailable"}
                         elif call.name in task_tool_names:
                             args = validate_control_arguments(call.name, call.arguments)
                             result = await self.dispatch_task_tool(call, args)
                         else:
                             args = validate_arguments(call.name, call.arguments)
-                        if call.name in task_tool_names:
+                        if hidden_research_tool:
+                            # The call is intentionally rejected above. Do not fall
+                            # through into its handler: research arguments were not
+                            # validated and must never reach the provider client.
+                            pass
+                        elif call.name in task_tool_names:
                             pass
                         elif call.name == "get_runtime_time":
                             result = runtime_time(args.get("timezone", "UTC"))
                         elif call.name == "web_search":
-                            result = await self.resources.research.search(
-                                args["query"], args.get("max_results", 5)
+                            self.research_recovery_active = True
+                            alternatives = (
+                                self.resources.research.alternative_leads()
+                                if self.llm.retrieval_failures
+                                else []
                             )
+                            if alternatives:
+                                result = {
+                                    "kind": "untrusted_search_leads",
+                                    "query": args["query"],
+                                    "results": alternatives,
+                                    "retrieved_utc": datetime.now(timezone.utc).isoformat(),
+                                    "reused_existing_leads": True,
+                                }
+                            else:
+                                result = await self.research_operation_with_ack(
+                                    call,
+                                    self.resources.research.search(
+                                        args["query"], args.get("max_results", 5)
+                                    ),
+                                )
+                            result = self.llm.project_search_snippets(
+                                self.resources.research, result, args["query"], limit=1
+                            )
+                            # Offer only the best-ranked snippet as answer evidence;
+                            # keep other leads discoverable for retrieval. This avoids
+                            # competing, partial snippets while preserving a fetch path.
                         elif call.name == "retrieve_source":
+                            self.research_recovery_active = True
                             safe_url = public_url(args["url"])
                             parsed = urlsplit(safe_url)
                             source_origin = f"{parsed.scheme}://{parsed.hostname}"
                             source_url_hash = hashlib.sha256(safe_url.encode()).hexdigest()[:16]
-                            source = await self.resources.research.retrieve(safe_url)
+                            research = self.resources.research
+                            if safe_url in research.failed_retrieval_urls:
+                                raise ResearchError(
+                                    "source_previously_failed",
+                                    host=parsed.hostname,
+                                    stage="session_cache",
+                                    failure_class="not_retried",
+                                )
+                            existing_alternatives = research.alternative_leads(
+                                exclude_url=safe_url, limit=1
+                            )
+                            remaining_http = max(
+                                0, research.options.request_limit - research.requests
+                            )
+                            # When only the direct fetch plus one alternate fit,
+                            # leave the remaining HTTP allowance for the alternate.
+                            allow_extract_fallback = not (
+                                existing_alternatives and remaining_http <= 2
+                            )
+                            try:
+                                source = await self.research_operation_with_ack(
+                                    call,
+                                    research.retrieve(
+                                        safe_url,
+                                        allow_extract_fallback=allow_extract_fallback,
+                                    ),
+                                )
+                            except ResearchError as primary_error:
+                                alternate_eligible = primary_error.code in {
+                                    "research_http_failure",
+                                    "research_timeout",
+                                    "research_connect_failure",
+                                    "research_connection_refused",
+                                    "source_too_large",
+                                    "insufficient_source_content",
+                                    "unsupported_source_type",
+                                }
+                                alternatives = research.alternative_leads(
+                                    exclude_url=safe_url, limit=1
+                                )
+                                if (
+                                    not alternate_eligible
+                                    or not alternatives
+                                    or research.requests >= research.options.request_limit
+                                    or not self.llm.reserve_alternate_retrieval()
+                                ):
+                                    raise
+                                alternate_url = public_url(alternatives[0]["url"])
+                                alternate_hash = hashlib.sha256(alternate_url.encode()).hexdigest()[
+                                    :16
+                                ]
+                                self.llm.record_retrieval_result(
+                                    failed=True, error_code=primary_error.code
+                                )
+                                self.event(
+                                    "research_alternate_source_started",
+                                    primary_source_url_hash=source_url_hash,
+                                    alternate_source_url_hash=alternate_hash,
+                                    primary_error_code=primary_error.code,
+                                    remaining_http_requests=max(
+                                        0,
+                                        research.options.request_limit - research.requests,
+                                    ),
+                                )
+                                try:
+                                    source = await research.retrieve(alternate_url)
+                                except ResearchError as alternate_error:
+                                    self.event(
+                                        "research_alternate_source_failed",
+                                        primary_source_url_hash=source_url_hash,
+                                        alternate_source_url_hash=alternate_hash,
+                                        error_code=alternate_error.code,
+                                        http_status=alternate_error.status,
+                                        host_hash=alternate_error.host_hash,
+                                        stage=alternate_error.stage,
+                                        failure_class=alternate_error.failure_class,
+                                    )
+                                    raise ResearchError(
+                                        primary_error.code,
+                                        status=primary_error.status,
+                                        host=parsed.hostname,
+                                        stage=primary_error.stage,
+                                        failure_class=primary_error.failure_class,
+                                        fallback_status=primary_error.fallback_status,
+                                        fallback_error=primary_error.fallback_error
+                                        or {"error": primary_error.code},
+                                        alternate_source_attempt={
+                                            "source_url_hash": alternate_hash,
+                                            "error": alternate_error.code,
+                                            "http_status": alternate_error.status,
+                                            "host_hash": alternate_error.host_hash,
+                                            "stage": alternate_error.stage,
+                                            "failure_class": alternate_error.failure_class,
+                                        },
+                                    ) from None
+                                source_origin = (
+                                    f"{urlsplit(alternate_url).scheme}://"
+                                    f"{urlsplit(alternate_url).hostname}"
+                                )
+                                source_url_hash = alternate_hash
+                                self.event(
+                                    "research_alternate_source_succeeded",
+                                    primary_source_url_hash=hashlib.sha256(
+                                        safe_url.encode()
+                                    ).hexdigest()[:16],
+                                    source_id=source.get("source_id"),
+                                    source_url_hash=alternate_hash,
+                                    extraction_method=source.get("extraction_method"),
+                                )
                             query = next(
                                 (
                                     m.get("content", "")
@@ -1071,7 +1382,9 @@ class NativeApplication:
                                 ),
                                 "",
                             )
-                            result = self.resources.research.evidence_for_model(source, query)
+                            result = self.llm.evidence_for_model(
+                                self.resources.research, source, query
+                            )
                         elif call.name == "verify_evidence":
                             result = self.resources.research.verify(
                                 args["source_id"], args["quote"]
@@ -1089,10 +1402,38 @@ class NativeApplication:
                         result = (
                             exc.result()
                             if isinstance(exc, ResearchError)
-                            else {"ok": False, "error": "invalid_arguments_or_tool_budget"}
+                            else {
+                                "ok": False,
+                                "error": (
+                                    "research_evidence_budget_exhausted"
+                                    if str(exc) == "research_evidence_budget_exhausted"
+                                    else "invalid_arguments_or_tool_budget"
+                                ),
+                            }
                         )
-                    except Exception:
-                        result = {"ok": False, "error": "tool_service_unavailable"}
+                        if call.name == "retrieve_source" and isinstance(exc, ResearchError):
+                            alternatives = self.resources.research.alternative_leads(
+                                exclude_url=call.arguments.get("url")
+                                if isinstance(call.arguments, dict)
+                                else None
+                            )
+                            if alternatives:
+                                result["alternative_leads"] = alternatives
+                    except Exception as exc:
+                        # Keep the provider/tool message private; the sanitized
+                        # exception class is enough to localize a failed boundary.
+                        failure_frame = exc.__traceback__
+                        while failure_frame and failure_frame.tb_next:
+                            failure_frame = failure_frame.tb_next
+                        result = {
+                            "ok": False,
+                            "error": "tool_service_unavailable",
+                            "exception_type": type(exc).__name__,
+                            "exception_function": (
+                                failure_frame.tb_frame.f_code.co_name if failure_frame else None
+                            ),
+                            "exception_line": failure_frame.tb_lineno if failure_frame else None,
+                        }
                 if action_row:
                     if isinstance(result, dict) and (
                         result.get("ok") is False
@@ -1124,7 +1465,10 @@ class NativeApplication:
                     else "tool_result"
                 )
                 if call.name == "retrieve_source":
-                    self.llm.record_retrieval_result(failed=failed, error_code=error_code)
+                    self.llm.record_retrieval_result(
+                        failed=(failed and error_code != "source_previously_failed"),
+                        error_code=error_code,
+                    )
                 safe_diagnostics = {
                     key: result[key]
                     for key in (
@@ -1136,14 +1480,42 @@ class NativeApplication:
                         "local_extraction",
                         "fallback_status",
                         "fallback_error",
+                        "alternate_source_attempt",
+                        "reused_existing_leads",
+                        "exception_type",
+                        "exception_function",
+                        "exception_line",
                     )
                     if isinstance(result, dict) and key in result
                 }
                 if result_kind == "retrieved_source":
+                    evidence_text = result.get("text")
+                    source_url_hash = hashlib.sha256(
+                        str(result.get("url", "")).encode()
+                    ).hexdigest()[:16]
                     safe_diagnostics.update(
                         extraction_method=result.get("extraction_method"),
                         evidence_status=result.get("evidence_status"),
+                        source_id=result.get("source_id"),
+                        source_url_hash=source_url_hash,
+                        evidence_characters=len(evidence_text)
+                        if isinstance(evidence_text, str)
+                        else 0,
+                        evidence_chunks=result.get("evidence_chunks"),
                     )
+                elif result_kind == "search_leads":
+                    search_evidence = [
+                        row
+                        for row in result.get("results", [])
+                        if isinstance(row, dict)
+                        and row.get("evidence_status") == "search_result_snippet"
+                    ]
+                    if search_evidence:
+                        safe_diagnostics.update(
+                            search_evidence_count=len(search_evidence),
+                            source_ids=[row.get("source_id") for row in search_evidence],
+                            extraction_method="tavily_search_snippet",
+                        )
                 self.event(
                     "tool_completed",
                     tool_call_id=call.call_id,
@@ -1198,13 +1570,61 @@ class NativeApplication:
             return await runtime.steer(args["task_id"], args["expected_revision"], args["delta"])
         raise ValueError("unknown_task_command")
 
+    async def research_operation_with_ack(self, call, operation):
+        """Start retrieval now; queue one brief Pipecat cue only if it stays slow."""
+        owner_turn = max(1, self.turn_id)
+        if owner_turn in self.research_ack_turns:
+            return await operation
+        operation_task = asyncio.create_task(operation)
+
+        async def acknowledge_if_still_running():
+            await asyncio.sleep(RESEARCH_ACK_DELAY_SECONDS)
+            if (
+                operation_task.done()
+                or owner_turn != max(1, self.turn_id)
+                or self.error is not None
+                or self.parts is None
+            ):
+                return
+            # Claim before yielding so simultaneous research calls in one turn
+            # cannot enqueue overlapping acknowledgments.
+            self.research_ack_turns.add(owner_turn)
+            self.event(
+                "research_acknowledgment_queued",
+                tool_call_id=call.call_id,
+                owner_turn_id=owner_turn,
+            )
+            await self.parts.tts.queue_frame(
+                ProgressTTSSpeakFrame(
+                    "I'll check that.", owner_id=call.call_id, owner_turn_id=owner_turn
+                )
+            )
+
+        acknowledgment = asyncio.create_task(acknowledge_if_still_running())
+        try:
+            return await operation_task
+        finally:
+            if not operation_task.done():
+                operation_task.cancel()
+            acknowledgment.cancel()
+            await asyncio.gather(operation_task, acknowledgment, return_exceptions=True)
+
     def standby(self):
         self._cancel_followup_timer()
+        self.playback_busy_until = 0.0
         self.gate.active = False
         self.projection = "wake_listening"
         if self.gate.wake and hasattr(self.gate.wake, "end_session"):
             self.gate.wake.end_session()
         self.event("engagement_expired")
+
+    def _on_wake(self, result):
+        self.projection = "listening"
+        self.event("wake_detected", backend=result.get("backend"), score=result.get("score"))
+        # Speech MCP children, the Groq client and the task runtime already
+        # belong to this application. Start only the inactivity lease here;
+        # opening a provider stream without speech would spend a request.
+        self._arm_followup_timer()
 
     def _cancel_followup_timer(self):
         task, self.followup_timer = self.followup_timer, None
@@ -1218,6 +1638,9 @@ class NativeApplication:
 
         async def expire():
             await asyncio.sleep(self.idle_seconds)
+            remaining = self.playback_busy_until + self.idle_seconds - time.monotonic()
+            if remaining > 0:
+                await asyncio.sleep(remaining)
             if (
                 self.settled.is_set()
                 and self.projection == "listening"
@@ -1311,6 +1734,7 @@ class NativeApplication:
 
     async def interrupt(self):
         self.event("interrupt_requested", reason="user_requested")
+        self.playback_busy_until = 0.0
         self.error = None
         await self.worker.queue_frame(InterruptionFrame())
         # Reset current recognizer input explicitly; UI interruption is distinct
@@ -1434,13 +1858,10 @@ async def replay_native_application(args, options, *, upstream=None):
     ):
         raise ConfigurationError("native trace requires fresh separate path")
     backends = load_backends(args.backend_config)
-    credentials = (
-        load_secrets(
-            args.secrets_file, {p.auth_env for p in backends.values() if p.backend == "external"}
-        )
-        if args.secrets_file
-        else {}
-    )
+    selected_credentials = {p.auth_env for p in backends.values() if p.backend == "external"}
+    if options.research.allow_live:
+        selected_credentials.add("ME3_RESEARCH_TAVILY_API_KEY")
+    credentials = load_secrets(args.secrets_file, selected_credentials) if args.secrets_file else {}
     if args.llm_secrets_file:
         credentials.update(load_secrets(args.llm_secrets_file, {backends["llm"].auth_env}))
     for spec in backends.values():
@@ -1526,6 +1947,34 @@ async def replay_native_application(args, options, *, upstream=None):
                     # replay result.
                     if application.error:
                         raise application.error
+                    # Live conversation may recover to accept another utterance.
+                    # A replay qualification must still retain any failed turn;
+                    # later silence must not clear the failure into a PASS.
+                    recorded_failure = next(
+                        (
+                            event
+                            for event in reversed(application.events)
+                            if event.get("event") == "turn_error"
+                        ),
+                        None,
+                    )
+                    if recorded_failure:
+                        if recorded_failure.get("error_code") == "pipeline_error":
+                            recorded_failure = next(
+                                (
+                                    event
+                                    for event in reversed(application.events)
+                                    if event.get("event") == "asr_turn_aborted"
+                                    and event.get("turn_id") == recorded_failure.get("turn_id")
+                                ),
+                                recorded_failure,
+                            )
+                        raise ProviderError(
+                            "native replay contained a failed turn",
+                            code=recorded_failure.get("error_code") or "native_replay_turn_failed",
+                            error_stage=recorded_failure.get("error_stage"),
+                            error_boundary=recorded_failure.get("error_boundary"),
+                        )
                     result = {
                         "engine": "native",
                         "agent_mode": "native-framework",

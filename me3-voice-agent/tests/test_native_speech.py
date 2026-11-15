@@ -22,6 +22,15 @@ from me3_voice.speech import SpeechClient
 from me3_voice.contracts import TurnKey, decode_pcm, encode_pcm
 
 
+def test_asr_event_does_not_require_tts_response_context():
+    events = []
+    service = McpSTTService(object(), on_event=events.append)
+    service.event("asr_open", stream_id="stream-safe")
+    assert events[0]["event"] == "asr_open"
+    assert events[0]["stream_id"] == "stream-safe"
+    assert "response_id" not in events[0]
+
+
 async def until(predicate, timeout=8):
     async with asyncio.timeout(timeout):
         while not predicate():
@@ -600,3 +609,72 @@ async def test_delayed_asr_cancel_cannot_revive_native_context_or_model_request(
         finally:
             await runner.cancel()
             await asyncio.wait_for(task, 8)
+
+
+async def test_failed_asr_open_does_not_retry_on_queued_audio():
+    from me3_voice.remote import ProviderError
+
+    class FailedOpen:
+        calls = 0
+
+        async def open_operation(self, *_args):
+            self.calls += 1
+            raise ProviderError("offline timeout", code="provider_timeout")
+
+    speech = FailedOpen()
+    events = []
+    service = McpSTTService(speech, on_event=events.append)
+    service.speaking = True
+    with pytest.raises(ProviderError):
+        _ = [frame async for frame in service.run_stt(b"\1\0" * 512)]
+    for _ in range(20):
+        assert [frame async for frame in service.run_stt(b"\1\0" * 512)] == []
+    assert speech.calls == 1
+    assert service.closing and not service.speaking
+    assert events[-1]["event"] == "asr_open_failed"
+    assert events[-1]["error_code"] == "provider_timeout"
+
+
+async def test_asr_append_failure_is_not_overwritten_by_closed_operation_poll():
+    from me3_voice.remote import ProviderError
+
+    class Speech:
+        async def call(self, *args):
+            raise AssertionError("failed ASR operations must not be polled")
+
+    service = McpSTTService(Speech())
+    service.operation = "operation"
+    service.poll_interval = 0.001
+    queue = asyncio.Queue(maxsize=2)
+    queue.put_nowait(b"\1\0")
+    original = ProviderError("request cap reached", code="request_limit_reached", role="asr")
+
+    async def rejected(*args):
+        raise original
+
+    service.append = rejected
+    await service._append_loop("operation", service.generation, queue)
+    await asyncio.wait_for(queue.join(), 1)
+    await asyncio.wait_for(service.poll("operation", service.generation), 1)
+    assert service.append_error == "request_limit_reached"
+    assert service.append_exception is original
+
+
+async def test_asr_secondary_inflight_poll_error_preserves_first_failure():
+    from me3_voice.remote import ProviderError
+
+    original = ProviderError("request cap reached", code="request_limit_reached", role="asr")
+
+    class Speech:
+        async def call(self, *args):
+            # Simulate a primary failure recorded while a poll was in flight.
+            service.append_error = original.code
+            service.append_exception = original
+            raise ProviderError("closed operation", code="mcp_tool_error")
+
+    service = McpSTTService(Speech())
+    service.operation = "operation"
+    service.poll_interval = 0.001
+    await asyncio.wait_for(service.poll("operation", service.generation), 1)
+    assert service.append_error == "request_limit_reached"
+    assert service.append_exception is original

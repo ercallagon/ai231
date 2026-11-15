@@ -151,14 +151,20 @@ class BackendSpec:
                 raise ConfigurationError(
                     f"{role}: supply endpoint without credentials/query, documented protocol, model and auth_env variable name"
                 )
+            openrouter_model = self.model.endswith(":free") or self.model in {
+                "openrouter/free",
+                # Explicit opt-in paid route; other paid OpenRouter models
+                # remain outside this project's supported provider contract.
+                "openai/gpt-oss-120b",
+            }
             if url.hostname == "openrouter.ai" and (
                 role != "llm"
                 or self.protocol != "chat-completions-v1"
                 or self.endpoint != "https://openrouter.ai/api/v1/chat/completions"
-                or not (self.model.endswith(":free") or self.model == "openrouter/free")
+                or not openrouter_model
             ):
                 raise ConfigurationError(
-                    "OpenRouter requires its exact HTTPS chat endpoint and an explicit :free model"
+                    "OpenRouter requires its exact HTTPS chat endpoint and a supported model"
                 )
             if runnable:
                 contracts = {
@@ -198,7 +204,16 @@ class BackendSpec:
                         (8001, "/v1/chat/completions", "chat-completions-v1"),
                     },
                 }
-                approved_http = (
+                local_ollama_http = (
+                    self.allow_private_http
+                    and role == "llm"
+                    and self.protocol == "chat-completions-v1"
+                    and url.scheme == "http"
+                    and url.hostname in {"localhost", "127.0.0.1", "::1"}
+                    and url.port == 11434
+                    and url.path == "/v1/chat/completions"
+                )
+                approved_http = local_ollama_http or (
                     self.allow_private_http
                     and role in dgx_paths
                     and url.scheme == "http"
@@ -213,7 +228,7 @@ class BackendSpec:
                 )
                 if self.allow_private_http and not approved_http:
                     raise ConfigurationError(
-                        f"{role}: private HTTP exception is restricted to the supplied service endpoints"
+                        f"{role}: private HTTP exception is restricted to approved local Ollama or supplied service endpoints"
                     )
                 if url.scheme not in {"https", "wss"} and not approved_http:
                     raise ConfigurationError(f"{role}: live adapters require TLS endpoints")
@@ -295,7 +310,7 @@ class RuntimeOptions:
     engine: str = "legacy"
     silence_seconds: float = 0.5
     research: ResearchOptions = field(default_factory=lambda: ResearchOptions())
-    max_model_calls_per_turn: int = 6
+    max_model_calls_per_turn: int = 7
     max_tool_calls_per_turn: int = 8
     max_repeated_tool_calls: int = 2
 
@@ -333,7 +348,7 @@ def load_runtime(path=None, *, engine=None):
             or not math.isfinite(result.silence_seconds)
             or not 0 <= result.silence_seconds <= 3
             or type(result.max_model_calls_per_turn) is not int
-            or not 1 <= result.max_model_calls_per_turn <= 12
+            or not 1 <= result.max_model_calls_per_turn <= 7
             or type(result.max_tool_calls_per_turn) is not int
             or not 1 <= result.max_tool_calls_per_turn <= 8
             or type(result.max_repeated_tool_calls) is not int

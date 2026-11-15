@@ -83,6 +83,63 @@ async def test_stdio_timeout_recovery():
         assert await speech.transcribe(TurnKey(session_id="timeout", turn_id=2), b"\x01\0" * 10)
 
 
+async def test_tts_inner_timeout_persists_terminal_diagnostics_before_mcp_error():
+    from me3_voice.servers import speech_tool
+
+    class StalledTTS:
+        state = {"status": "running", "provider_receive_wait_seconds": 0.0}
+
+        def synthesize(self, _text):
+            async def stream():
+                try:
+                    await asyncio.Event().wait()
+                    yield b"\0\0"
+                finally:
+                    self.state = {
+                        "status": "failed",
+                        "provider_receive_wait_seconds": 0.08,
+                        "error_code": "provider_timeout",
+                    }
+
+            return stream()
+
+        def diagnostics(self):
+            return dict(self.state)
+
+    provider = StalledTTS()
+    service = SpeechService(MockASR(), provider, call_timeout=0.1)
+    opened = await service.open("tts-timeout", 1, "A short sentence.")
+    wrapped_next = speech_tool(service.next, "tts")
+    result = await wrapped_next(opened["operation_id"])
+    error = result["speech_error"]
+    assert error["code"] == "provider_timeout"
+    assert error["stage"] == "tts_next"
+    diagnostic = error["tts_diagnostics"]
+    assert diagnostic["status"] == "failed"
+    assert diagnostic["provider"]["status"] == "failed"
+    assert diagnostic["provider"]["error_code"] == "provider_timeout"
+    assert not service.operations
+    await service.close()
+
+
+def test_safe_tts_diagnostics_preserves_connection_reuse_boolean():
+    from me3_voice.speech import _safe_tts_diagnostics
+
+    result = _safe_tts_diagnostics(
+        {
+            "status": "completed",
+            "provider": {
+                "connection_reused": True,
+                "connection_setup_seconds": 0.25,
+                "authorization": "never retain",
+            },
+        }
+    )
+    assert result["provider"]["connection_reused"] is True
+    assert result["provider"]["connection_setup_seconds"] == 0.25
+    assert "authorization" not in repr(result)
+
+
 async def test_role_timeout_clamps_larger_shared_speech_timeout():
     from me3_voice.remote import ProviderError
 

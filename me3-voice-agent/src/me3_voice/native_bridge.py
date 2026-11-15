@@ -23,6 +23,9 @@ _SAFE_EVENT_TEXT = {
     "run_id",
     "session_id",
     "error_code",
+    "error_role",
+    "connection_state",
+    "failure_code",
     "error_stage",
     "error_boundary",
     "exception_type",
@@ -51,6 +54,8 @@ _SAFE_EVENT_TEXT = {
     "operation_id",
     "tool_call_id",
     "call_id",
+    "owner_id",
+    "audio_context_state",
 }
 
 
@@ -72,29 +77,67 @@ def _safe_event(event):
             and re.fullmatch(r"[A-Za-z0-9_.:-]{1,100}", value)
         ):
             result[key] = value
+    if result.get("event") == "asr_provider_transport":
+        stages = event.get("connection_stages")
+        if isinstance(stages, dict):
+            for name in (
+                "dns_started",
+                "dns_completed",
+                "connection_establishment_started",
+                "connection_established",
+                "websocket_upgrade_request_sent",
+                "websocket_http_response_received",
+                "websocket_http_status",
+                "connection_failed_monotonic",
+                "connection_cancelled_monotonic",
+            ):
+                value = stages.get(name)
+                if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+                    result[name] = value
+            value = stages.get("connection_terminal_exception")
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", value):
+                result["connection_terminal_exception"] = value
     if result.get("event") == "tts_segment_summary":
         diagnostics = event.get("diagnostics")
         if isinstance(diagnostics, dict):
-            for section, fields in (
+            for section, source_name, fields in (
                 (
+                    "provider",
                     "provider",
                     (
                         "provider_audio_seconds",
+                        "provider_receive_wait_seconds",
+                        "consumer_pause_seconds",
                         "synthesis_wall_seconds",
                         "provider_pcm_bytes",
                         "first_pcm_monotonic",
                         "last_pcm_monotonic",
                         "provider_flushed_monotonic",
+                        "connection_setup_seconds",
+                        "connection_ready_monotonic",
+                        "connection_reused",
+                        "connection_attempt_monotonic",
+                        "first_text_submitted_monotonic",
+                        "flush_submitted_monotonic",
                     ),
                 ),
-                ("client_mcp", ("tts_next_count", "pcm_bytes", "audio_seconds")),
+                ("client_mcp", "client_mcp", ("tts_next_count", "pcm_bytes", "audio_seconds")),
+                (
+                    "mcp_server",
+                    "mcp_server",
+                    ("tts_next_count", "pcm_chunks", "pcm_bytes", "audio_seconds"),
+                ),
             ):
-                values = diagnostics.get(section)
+                values = diagnostics.get(source_name)
+                if section == "mcp_server" and isinstance(values, dict):
+                    values = values.get("mcp")
                 if not isinstance(values, dict):
                     continue
                 for name in fields:
                     value = values.get(name)
-                    if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+                    if name == "connection_reused" and type(value) is bool:
+                        result[f"{section}_{name}"] = value
+                    elif type(value) in (int, float) and math.isfinite(value) and value >= 0:
                         result[f"{section}_{name}"] = value
                 if section == "client_mcp":
                     latency = values.get("tts_next_latency_seconds")
@@ -102,6 +145,123 @@ def _safe_event(event):
                         value = latency.get("p95_seconds")
                         if type(value) in (int, float) and math.isfinite(value) and value >= 0:
                             result["client_mcp_next_p95_seconds"] = value
+                elif section == "mcp_server":
+                    latency = (values.get("tts_next_seconds") or {}).get("p95_seconds")
+                    if type(latency) in (int, float) and math.isfinite(latency) and latency >= 0:
+                        result["mcp_server_next_p95_seconds"] = latency
+            provider = diagnostics.get("provider")
+            if isinstance(provider, dict):
+                connection_trace = provider.get("connection_trace")
+                if isinstance(connection_trace, dict):
+                    for name in (
+                        "dns_started",
+                        "dns_completed",
+                        "dns_cache_hit",
+                        "dns_cache_miss",
+                        "connection_pool_wait_started",
+                        "connection_pool_wait_completed",
+                        "connection_establishment_started",
+                        "connection_established",
+                        "websocket_upgrade_request_sent",
+                        "websocket_http_response_received",
+                        "connection_failed_monotonic",
+                        "connection_cancelled_monotonic",
+                    ):
+                        value = connection_trace.get(name)
+                        if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+                            result[f"tts_connection_{name}"] = value
+                for key in ("status", "error_code", "failure_type"):
+                    value = provider.get(key)
+                    pattern = (
+                        r"[a-z0-9_]{1,48}"
+                        if key == "error_code"
+                        else r"[A-Za-z][A-Za-z0-9_.-]{0,79}"
+                    )
+                    if isinstance(value, str) and re.fullmatch(pattern, value):
+                        result[f"provider_{key}"] = value
+            mcp_server = diagnostics.get("mcp_server")
+            if isinstance(mcp_server, dict):
+                value = mcp_server.get("status")
+                if isinstance(value, str) and value in {
+                    "running",
+                    "completed",
+                    "cancelled",
+                    "failed",
+                    "unknown",
+                }:
+                    result["mcp_server_status"] = value
+    if result.get("event") == "tool_completed":
+        diagnostics = event.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            # Retrieved evidence diagnostics are deliberately projected field by
+            # field. Never serialize the nested result/evidence object itself.
+            source_id = diagnostics.get("source_id")
+            if isinstance(source_id, str) and re.fullmatch(r"S[0-9]{1,6}", source_id):
+                result["research_source_id"] = source_id
+            source_url_hash = diagnostics.get("source_url_hash")
+            if isinstance(source_url_hash, str) and re.fullmatch(r"[a-f0-9]{16}", source_url_hash):
+                result["research_source_url_hash"] = source_url_hash
+            for key in ("extraction_method", "evidence_status"):
+                value = diagnostics.get(key)
+                if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,48}", value):
+                    result[f"research_{key}"] = value
+            for key in ("evidence_characters", "evidence_chunks"):
+                value = diagnostics.get(key)
+                if type(value) is int and 0 <= value <= 10_000_000:
+                    result[f"research_{key}"] = value
+            for key in ("http_status", "redirect_count"):
+                value = diagnostics.get(key)
+                if type(value) is int and 0 <= value <= 10000:
+                    result[f"research_{key}"] = value
+            for key in ("stage", "failure_class", "fallback_status"):
+                value = diagnostics.get(key)
+                if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,48}", value):
+                    result[f"research_{key}"] = value
+            host_hash = diagnostics.get("host_hash")
+            if isinstance(host_hash, str) and re.fullmatch(r"[a-f0-9]{12}", host_hash):
+                result["research_host_hash"] = host_hash
+            if type(diagnostics.get("reused_existing_leads")) is bool:
+                result["research_reused_existing_leads"] = diagnostics["reused_existing_leads"]
+            fallback = diagnostics.get("fallback_error")
+            if isinstance(fallback, dict):
+                for key in ("error", "stage", "failure_class"):
+                    value = fallback.get(key)
+                    if isinstance(value, str) and re.fullmatch(r"[a-z0-9_]{1,48}", value):
+                        result[f"research_fallback_{key}"] = value
+                status = fallback.get("http_status")
+                if type(status) is int and 0 <= status <= 10000:
+                    result["research_fallback_http_status"] = status
+                fallback_host = fallback.get("host_hash")
+                if isinstance(fallback_host, str) and re.fullmatch(r"[a-f0-9]{12}", fallback_host):
+                    result["research_fallback_host_hash"] = fallback_host
+    if result.get("event") == "llm_citation_check":
+        for key in ("citation_ids", "retained_source_ids"):
+            values = event.get(key)
+            if (
+                isinstance(values, list)
+                and len(values) <= 256
+                and all(
+                    isinstance(value, str) and re.fullmatch(r"S[0-9]{1,6}", value)
+                    for value in values
+                )
+            ):
+                result[key] = values
+    if result.get("event") == "llm_claim_support_diagnostic":
+        for key, pattern in (
+            ("source_id", r"S[0-9]{1,6}"),
+            ("passage_id", r"S[0-9]{1,6}-P[0-9]{1,6}"),
+        ):
+            value = event.get(key)
+            if isinstance(value, str) and re.fullmatch(pattern, value):
+                result[key] = value
+        codes = event.get("contradiction_codes")
+        allowed = {"entity_anchor_conflict", "numeric_anchor_conflict", "polarity_conflict"}
+        if (
+            isinstance(codes, list)
+            and len(codes) <= 3
+            and all(isinstance(code, str) and code in allowed for code in codes)
+        ):
+            result["contradiction_codes"] = sorted(set(codes))
     return result
 
 
@@ -188,7 +348,11 @@ def context_view(state, application, *, archived=False):
                 rows[key]["response"] = {
                     "response_id": response.get("response_id"),
                     "state": response.get("response_state", "pending"),
-                    "generation": response.get("generated_state", "unknown"),
+                    "generation": (
+                        "interrupted"
+                        if response.get("generated_state") == "partial"
+                        else response.get("generated_state", "unknown")
+                    ),
                     "tts": response.get("tts_state", "unknown"),
                     "playback": response.get("playback_state", "unknown"),
                     "archive": "included" if archived else "pending",
@@ -209,6 +373,55 @@ def context_view(state, application, *, archived=False):
             "confirmed_text": "",
             "status": "partial",
             "delivery": "asr_partial",
+        }
+    # A failed/interrupted response may not have been committed into the
+    # canonical LLM context. Project its already captured text as partial,
+    # retaining the stable response identity and lifecycle states.
+    for response_id in getattr(application, "response_order", ()):
+        response = getattr(application, "response_records", {}).get(response_id)
+        if not isinstance(response, dict):
+            continue
+        text = response.get("generated_text")
+        response_turn = response.get("turn_id")
+        if (
+            not isinstance(text, str)
+            or not text
+            or type(response_turn) is not int
+            or response_turn < 1
+        ):
+            continue
+        key = f"{response_turn}:assistant"
+        if key in rows:
+            continue
+        completed = (
+            response.get("response_state") == "completed"
+            and response.get("tts_state") == "completed"
+            and response.get("playback_state") == "browser_acknowledged"
+            and response.get("playback_packets", 0) == response.get("playback_acks", 0)
+        )
+        state_name = response.get("response_state", "partial")
+        rows[key] = {
+            "id": f"{response_turn}:assistant:{response_id}",
+            "turn_id": response_turn,
+            "role": "assistant",
+            "text": text[:8000],
+            "confirmed_text": text[:8000] if completed else "",
+            "status": "final" if completed else state_name,
+            "delivery": "sink_confirmed" if completed else "generated",
+            "generation_complete": response.get("generated_state") == "completed",
+            "response": {
+                "response_id": response_id,
+                "state": state_name,
+                "generation": response.get("generated_state", "unknown"),
+                "tts": response.get("tts_state", "unknown"),
+                "playback": response.get("playback_state", "unknown"),
+                "archive": "included" if archived else "pending",
+                "segments": response.get("tts_segments", [])[-50:],
+                "packets": response.get("playback_packets", 0),
+                "acks": response.get("playback_acks", 0),
+                "superseded_by_turn_id": response.get("superseded_by_turn_id"),
+                "interruption_reason": response.get("interruption_reason"),
+            },
         }
     visible = []
     remaining = 90000
@@ -281,7 +494,7 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
     async def page(request):
         local_request(request)
         return web.Response(
-            text=render(snapshot(root), live=True),
+            text=await asyncio.to_thread(lambda: render(snapshot(root), live=True)),
             content_type="text/html",
             headers={
                 "Cache-Control": "no-store",
@@ -330,6 +543,30 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
 
     async def capability(request):
         local_request(request)
+        from .capability_report import build_capability_report
+
+        capability_report = build_capability_report(
+            backends=backends,
+            options=options,
+            credentials=state.credentials,
+            device_capabilities=devices,
+            device_details={
+                "weather_enabled": getattr(state.tasks.actions, "weather", None) is not None,
+                "communications_enabled": bool(
+                    getattr(getattr(state.tasks.actions, "communications", None), "enabled", False)
+                ),
+            },
+            music_capabilities=music,
+            credential_presence={
+                "ME3_SPOTIFY_ACCESS_TOKEN": bool(getattr(state.tasks.music, "token", None)),
+                "ME3_SPOTIFY_REFRESH_TOKEN": bool(
+                    getattr(state.tasks.music, "refresh_token", None)
+                ),
+            },
+            task_runtime=state.task_runtime,
+            speech_client=state.speech,
+            wake_configured=bool(getattr(wake_args, "kws_assets", None)),
+        )
         return web.json_response(
             {
                 "available": True,
@@ -348,13 +585,16 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
                 },
                 "devices": devices,
                 "music": music,
+                "capability_report": capability_report,
             },
             headers={"Cache-Control": "no-store"},
         )
 
     async def reports(request):
         local_request(request)
-        return web.json_response(snapshot(root), headers={"Cache-Control": "no-store"})
+        return web.json_response(
+            await asyncio.to_thread(snapshot, root), headers={"Cache-Control": "no-store"}
+        )
 
     async def unsupported(request):
         local_request(request)
@@ -375,6 +615,7 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
         busy = True
         ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=10)
         publisher = None
+        event_publisher = None
         sink = None
         application = None
         journal = None
@@ -539,7 +780,7 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
                         application.event("bridge_error", exception_type=type(exc).__name__)
                         await ws.close()
 
-                publisher = asyncio.create_task(publish())
+                event_publisher = asyncio.create_task(publish())
                 sequence = 0
                 async for message in ws:
                     if message.type == WSMsgType.BINARY:
@@ -553,9 +794,50 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
                         value = json.loads(message.data)
                         if (
                             isinstance(value, dict)
-                            and set(value) == {"type", "id"}
                             and value.get("type") == "audio_ack"
+                            and set(value).issubset(
+                                {
+                                    "type",
+                                    "id",
+                                    "schedule_gap_seconds",
+                                    "queued_audio_seconds",
+                                    "audio_context_state",
+                                    "arrival_ms",
+                                }
+                            )
+                            and set(value).issuperset({"type", "id"})
                         ):
+                            schedule_gap = value.get("schedule_gap_seconds")
+                            queued_audio = value.get("queued_audio_seconds")
+                            arrival_ms = value.get("arrival_ms")
+                            context_state = value.get("audio_context_state")
+                            if (
+                                type(value["id"]) is not int
+                                or any(
+                                    item is not None
+                                    and (
+                                        type(item) not in (int, float)
+                                        or not math.isfinite(item)
+                                        or item < 0
+                                        or item > 120
+                                    )
+                                    for item in (schedule_gap, queued_audio)
+                                )
+                                or (
+                                    arrival_ms is not None
+                                    and (
+                                        type(arrival_ms) not in (int, float)
+                                        or not math.isfinite(arrival_ms)
+                                        or arrival_ms < 0
+                                        or arrival_ms > 86_400_000
+                                    )
+                                )
+                                or (
+                                    context_state is not None
+                                    and context_state not in ("running", "suspended", "closed")
+                                )
+                            ):
+                                continue
                             ack = sink.acknowledge_with_response(value["id"])
                             if ack is not None:
                                 ack_seconds, response_id = ack
@@ -565,6 +847,10 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
                                     response_id=response_id,
                                     latency_seconds=ack_seconds,
                                     pending_packets=len(sink.pending),
+                                    schedule_gap_seconds=schedule_gap,
+                                    queued_audio_seconds=queued_audio,
+                                    audio_context_state=context_state,
+                                    browser_arrival_ms=arrival_ms,
                                 )
                         elif isinstance(value, dict) and value.get("type") in {
                             "music_ui_control",
@@ -692,6 +978,9 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
                         }
                     )
         finally:
+            if event_publisher:
+                event_publisher.cancel()
+                await asyncio.gather(event_publisher, return_exceptions=True)
             if publisher:
                 try:
                     await publisher.__aexit__(None, None, None)

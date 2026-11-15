@@ -4,7 +4,7 @@ Audit date: 2026-11-09. This is a read-only source and artifact audit. No applic
 
 ## Repository and provenance
 
-The ME3 directory is currently an untracked directory inside the parent sandbox Git repository. Git resolves to `/mnt/jfs_hpc/home/edgardo.callagon.jr/sandbox`; its current HEAD is `9338bc205420747988f8b2254cae37701c13488a`, dated 2026-10-16, with subject “ME2: Voice Controlled Smart Device - models and Pi 5 readiness”. Parent branch reports `main...origin/main [ahead 1, behind 32]`, with numerous unrelated untracked paths. That parent commit is **not an ME3 source revision**. Existing ME3 logs/results are therefore not reliably bound to a reproducible ME3 commit. No branch, index, or history operation was performed.
+The ME3 directory is currently an untracked directory inside the parent sandbox Git repository. Git resolves to `$HPC_SANDBOX`; its current HEAD is `9338bc205420747988f8b2254cae37701c13488a`, dated 2026-10-16, with subject “ME2: Voice Controlled Smart Device - models and Pi 5 readiness”. Parent branch reports `main...origin/main [ahead 1, behind 32]`, with numerous unrelated untracked paths. That parent commit is **not an ME3 source revision**. Existing ME3 logs/results are therefore not reliably bound to a reproducible ME3 commit. No branch, index, or history operation was performed.
 
 Canonical current project docs are README, `docs/ARCHITECTURE.md`, `docs/PLAN.md`, `docs/BENCHMARK.md`, and `deploy/rpi/README.md`. `docs/PLAN.md` has an old “Updated” header but detailed entries through 2026-11-06; consult the dated tail for later status. Supporting cumulative evidence is in `docs/evidence/cumulative-assessment.md`; raw trials are under ignored `var/experiments/` and `var/results/`.
 

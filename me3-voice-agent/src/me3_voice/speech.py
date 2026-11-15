@@ -76,14 +76,23 @@ def _safe_tts_diagnostics(value):
             numbers(
                 provider_source,
                 {
+                    "connection_attempt_monotonic",
+                    "connection_reuse_monotonic",
+                    "connection_ready_monotonic",
+                    "connection_setup_seconds",
                     "request_started_monotonic",
                     "socket_ready_monotonic",
+                    "first_text_submitted_monotonic",
+                    "flush_submitted_monotonic",
                     "first_pcm_monotonic",
                     "last_pcm_monotonic",
                     "provider_flushed_monotonic",
                     "completed_monotonic",
                     "synthesis_wall_seconds",
                     "provider_audio_seconds",
+                    "provider_receive_wait_seconds",
+                    "consumer_pause_seconds",
+                    "connection_reused",
                 },
                 integers={
                     "submitted_characters",
@@ -92,10 +101,32 @@ def _safe_tts_diagnostics(value):
                 },
             )
         )
+        reused = provider_source.get("connection_reused")
+        if type(reused) is bool:
+            provider["connection_reused"] = reused
         for name in ("failure_type", "error_code"):
             item = provider_source.get(name)
             if isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", item):
                 provider[name] = item
+        connection_trace = provider_source.get("connection_trace")
+        if isinstance(connection_trace, dict):
+            provider["connection_trace"] = numbers(
+                connection_trace,
+                {
+                    "dns_started",
+                    "dns_completed",
+                    "dns_cache_hit",
+                    "dns_cache_miss",
+                    "connection_pool_wait_started",
+                    "connection_pool_wait_completed",
+                    "connection_establishment_started",
+                    "connection_established",
+                    "websocket_upgrade_request_sent",
+                    "websocket_http_response_received",
+                    "connection_failed_monotonic",
+                    "connection_cancelled_monotonic",
+                },
+            )
     return {"status": value["status"], "mcp": server, "provider": provider or None}
 
 
@@ -118,7 +149,9 @@ def _timing_summary(samples):
     }
 
 
-def _server_params(kind, spec, transcript, delay=0, tts_delay=0, credentials=None):
+def _server_params(
+    kind, spec, transcript, delay=0, tts_delay=0, credentials=None, *, client_call_timeout=5.0
+):
     environment = {"PYTHONDONTWRITEBYTECODE": "1"}
     for name in ("ME3_REQUEST_RUN_ID", "ME3_REQUEST_LEDGER"):
         if os.environ.get(name):
@@ -134,6 +167,8 @@ def _server_params(kind, spec, transcript, delay=0, tts_delay=0, credentials=Non
         str(delay),
         "--mock-tts-delay",
         str(tts_delay),
+        "--client-call-timeout",
+        str(client_call_timeout),
     ]
     if spec:
         args += ["--backend-spec-json", json.dumps(asdict(spec))]
@@ -244,7 +279,15 @@ class SpeechClient:
                 service_started = time.monotonic()
                 spec = self.backends[kind] if self.backends else None
                 params = _server_params(
-                    kind, spec, self.transcript, self.delay, self.tts_delay, self.credentials
+                    kind,
+                    spec,
+                    self.transcript,
+                    self.delay,
+                    self.tts_delay,
+                    self.credentials,
+                    client_call_timeout=min(
+                        self.timeout, spec.timeout_seconds if spec else self.timeout
+                    ),
                 )
                 self.clients[kind] = await self.stack.enter_async_context(
                     Client(
@@ -380,6 +423,7 @@ class SpeechClient:
             error.role = kind
             error.remote_cause_type = cause_type
             error.tts_diagnostics = _safe_tts_diagnostics(failure.get("tts_diagnostics"))
+            error.asr_diagnostics = failure.get("asr_diagnostics")
             raise error
         return data
 

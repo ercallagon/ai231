@@ -1,13 +1,141 @@
 # Delivery plan and status
 
-2026-11-15 duplicate research finalization: the Japan trace showed one
-validated answer followed by a duplicate terminal stream choice, not an extra
-model request. NativeLLM now drains repeated terminal choices while suppressing
-the already-finalized research text. The SDK/native-MCP regression emits two
-terminal choices and checks one TTS emission and one completed turn per spoken
-answer, with no continuation request after completion. The corresponding
-source-tree focused run passed 2 tests; this checkpoint-only port was not
-rerun. No live calls were made.
+2026-11-15 offline local-model research qualification: the retained answer
+validator now permits one citation-format correction using the same evidence,
+without tools or a second recovery loop. Five focused regressions passed,
+including a complete mocked Michigan-shaped native turn. A real local
+`qwen3:0.6b` request was then attempted through native Pipecat with the archived
+Japan Prime Minister's Office retrieval available to the native research
+client. It reserved an estimated 13,585 input tokens, made no search/retrieval
+tool call, and hit `turn_deadline_reached` after 110.023 seconds; no model answer
+or `turn_completed` was produced. The request remains `dispatched_unknown` in
+its isolated local ledger, with zero external provider calls. A separate direct
+Ollama inference generated a source-related sentence, but that is not native
+pipeline qualification. Only the archived Japan source was available; no
+Michigan evidence was found. Six-question native acceptance therefore remains
+unmet. The current bottleneck is local CPU/model-context suitability for the
+full native request (the ledger estimate exceeds the previously observed 4,096
+Ollama context); exact server-side timeout cause is not available. Do not
+increase provider or turn deadlines to mask it. Evidence is in
+`var/results/native-qwen-cache-37c25f0e3b90.json` and
+`var/experiments/032-native-qwen-cached-research/`.
+
+2026-11-15 Japan/Michigan research failures: archived traces show two distinct
+failure groups. Japan's search and retrieval succeeded, but its final model
+request remained pending when a new VAD turn began; the archive has no final
+answer and the historical trace cannot prove whether provider stall or
+supersession came first. Michigan's retained-source answer was rejected as
+`contradictory_claim`; the old trace omitted the validator's contradiction
+codes, so the exact live predicate cannot be reconstructed. The validator
+previously scanned a whole passage for any date/number/negation, allowing
+unrelated sentences to conflict with the selected claim. Conflict checks now
+use the most relevant passage sentence while keeping source/passage identity,
+provenance and citation checks intact. NativeLLM request terminals are
+correlated with owner turn IDs; superseded, canceled and failed streams emit
+sanitized terminal diagnostics. A pending response interrupted by a new turn
+now receives one `turn_interrupted`, and terminal outcomes are deduplicated.
+Focused regressions exercise the long-passage distractor and complete mocked
+native Michigan answer, plus Japan-shaped pending-final supersession followed
+by a successful contextual turn. Eight focused tests passed with command-
+scoped local MCP IPC; Ruff passed. No live providers were called. The exact
+Michigan live cause remains uncertain because its raw text and dropped
+contradiction codes were not archived. A controlled live qualification is
+justified but not guaranteed by mock evidence.
+
+2026-11-15 research recovery guard correction: the latest live turn found five
+search leads and retained official source S1, but a later encyclopedia 403 plus
+alternate-source 403 exhausted a separate two-failure guard despite the existing
+five-retrieval budget. The guard now reads the same retrieval-cap constant
+directly, eliminating the duplicate threshold. Native recovery tests cover retained S1, two failed fetches (including
+the automatic alternate), then both valid outcomes: answer from S1 or fetch a
+remaining lead. Both produce a cited answer and `turn_completed`. The 24-case
+research-only selection plus both recovery cases passed, and Ruff check passed.
+No live requests were made. Retest the research turn live before claiming
+the issue is fully qualified; details are in the Phase 7 reliability handoff.
+
+2026-11-15 duplicate research finalization correction: the successful Japan
+trace had four OpenRouter requests (two searches, one source retrieval, one
+validated final answer) and no model request after that answer. The final
+stream emitted a second terminal choice, causing NativeLLM to repeat citation/
+grounding finalization and forward the same answer to TTS again. Research
+finalization is now idempotent per response: later terminal choices are
+drained but their answer text is suppressed. The same terminal-fragment pattern
+is covered for structured answers and the local SDK/native-MCP integration;
+that integration verifies one answer and one completed TTS segment per turn,
+one `turn_completed`, and no extra model request. Focused tests passed 2/2;
+Ruff check and format passed. No live calls were made. Search/retrieval counts
+were left unchanged because the trace shows the extra search supplied the
+retained source needed by the verified final answer.
+
+2026-11-15 structured research claim acceptance: retained source and passage
+IDs, projected-evidence membership, source ownership, and passage integrity
+remain mandatory. For ordinary low-risk answers, content-term mismatch is now
+diagnostic only; explicit entity, numeric/date, and polarity mismatches are
+rejected, and high-risk query topics retain the existing stricter term-support
+check. This is heuristic contradiction screening, not semantic entailment; a
+same-entity unsupported low-risk relation may still pass. Focused structured
+answer/schema/projection tests passed 3/3; Ruff check and format passed. No live
+calls were made.
+
+2026-11-15 structured research passage handoff: the latest Japan trace had a
+valid S1 citation but failed the previous exact-quote check (`unsupported_evidence`).
+Because raw model/source text is intentionally absent from routine traces, that
+failure cannot establish whether the quote was a paraphrase, truncation, or
+unsupported wording. Grounded finals now select stable retained source-passage
+IDs from a dynamic JSON Schema enum; NativeLLM resolves each ID to the original
+passage and retains conservative claim-term support checks before adding the
+source citation. Invalid IDs and unsupported claims still fail closed. Focused
+offline projection, paraphrase, invalid-ID, multi-source, evidence-cap, and
+native alternate-source recovery checks passed (6 cases); Ruff check/format
+passed. No provider calls were made; live structured-output compatibility is
+unverified.
+
+2026-11-15 native replay research credential correction: native WAV replay now
+selects `ME3_RESEARCH_TAVILY_API_KEY` through the existing secure secrets
+loader only when live research is enabled, matching browser startup. Focused
+offline native replay cases verified configured-key delivery to mocked Tavily
+HTTP and fail-closed behavior for absent/misplaced keys: 3 passed; Ruff passed.
+No live provider calls were made.
+
+2026-11-15 failed-source recovery: native quick research now uses the next
+untried search lead immediately after eligible source HTTP/content failures,
+reserving the action inside existing per-turn retrieval and shared HTTP caps.
+The primary extract fallback is deferred when it would consume the alternate's
+last required request. Recovery exposes only research tools and rejects device
+actions for the active research turn. Focused offline cases passed 7/7 with
+command-scoped MCP IPC; Ruff passed. No live providers were called.
+
+2026-11-15 adaptive research budgets: native Pipecat turns now reserve at most
+3 search attempts and 5 retrieval attempts before I/O, expose a 5-lead quick
+research path, retain only query-relevant source sections within a conservative
+5,000-token cumulative evidence estimate, and enforce at most 7 model calls.
+Weak/missing/conflicting evidence may continue within those ceilings; exhausted
+budgets return explicit errors while full sources remain available for strict
+citation verification. LangGraph task counters for 10 searches and 25 retrievals
+are durable/migrated in SQLite, task model calls are capped at 30, and retrieved
+full documents are projected to requirement-relevant sections before model input.
+Existing per-request/campaign serialized-token accounting and OpenRouter profile
+were not changed; no 12k global cap or provider calls were added. Focused offline
+research/tool-round, citation, request-compaction and deep-task tests passed
+11/11; Ruff passed on changed Python files. Measured fixture coverage is up to
+6 native model rounds for a cited research continuation, hard caps 3/5/7 and
+10/25/30 for native/task flows, with evidence projection clamped at 5,000
+conservative evidence tokens. These are mocked/fixture results, not live Tavily
+or OpenRouter qualification.
+
+2026-11-14 OpenRouter GPT-OSS-120B selection: the native provisional backend now uses the OpenAI-compatible OpenRouter chat endpoint, with Groq retained as `configs/groq-gpt-oss-120b.rollback.json`. Both profiles remain fail-closed (`allow_live=false`, request limit 0); the generated LLM key is loaded separately through `--llm-secrets-file`. Exact GPT-OSS-120B is the only paid OpenRouter model enabled; existing free-route price guards remain. Native Pipecat and LangGraph task requests omit Groq-only fields on OpenRouter. Focused adapter/config/credential tests passed 10/10; Ruff check and format passed. One live, 96-token-capped adapter check returned `OK` and the ledger finalized 1 OpenRouter request with 6,462 conservatively estimated input tokens. A preceding sandbox-restricted attempt was canceled after no response and remains `dispatched_unknown`; it is preserved as consumed. No ASR, TTS, Tavily, browser, or task execution was part of the live check; live tool routing and full voice response remain unqualified.
+
+2026-11-14 comprehensive session-reliability correction: reproduced the startup report banner from an actual interrupted session rejected by JavaScript despite Python acceptance; corrected browser validation without relaxing final-playback checks. Offloaded native report scans from the audio event loop (one local heartbeat comparison: 533 ms maximum synchronous gap versus 11 ms offloaded). Replay qualification retains failed turns and original ASR error identity; free-form exception text is excluded; cancellation during SQLite authorization now joins and records consumed terminal unknown without dispatch. Full offline sweep: 761 passed / 5 failed; all five resolved. Post-correction affected sweep: 282 passed / 2 fixture mismatches; both corrected, full transport/ledger rerun 96 passed. All 284 affected cases have passing post-correction evidence across those runs, not a single final full-suite PASS. Ruff/JS syntax passed. Existing sustained profile retains every registered route with Nova20/Groq60/Aura60/research20 session limits and standard private credentials. No new live calls; neither recent operator attempt reached research. Aura startup reliability remains a live-only uncertainty. Details and logs: `docs/architecture_modernization/PHASE7_RELIABILITY_HANDOFF.md`.
+
+2026-11-14 current-news response qualification: open-ended “what is the issue/story with [person or company]?” questions now explicitly signal a need for current research, and the policy directs Swift to keep the first spoken answer concise while attributing and qualifying allegations. Added standalone native integration scenarios for the Michigan Senate result and NVIDIA CEO news, including source retrieval, short cited answers, citation-free speech projection, and an NVIDIA detail follow-up. The existing Texas Senate research case and both new scenarios passed (2 tests); Ruff check/format passed. Provider/model choices and source retrieval were deterministic mocks through local speech MCP stdio; this does not qualify autonomous Groq routing or live Tavily. Current fact check used AP/CBS/Michigan Public and NVIDIA’s announcement; no provider APIs were called.
+
+2026-11-14 research bridge readiness: Tavily’s existing private key was merged into `var/cache/provider-keys.env` using a mode-0600 atomic replacement without printing the value. The native bridge now selects that key automatically when the chosen runtime enables live research; research-disabled/demo runtimes still do not load or call Tavily. Reused the existing `swift-laptop-research-pretrial` profiles and raised their bounded capacity for the three-turn Michigan → NVIDIA → contextual-detail test: Nova-3 3, Groq 12 (12k per serialized request / 1M aggregate planning ceiling), Aura-2 12, Tavily 8 research operations; 4 model/tool calls per turn. The per-request and aggregate input ceilings match the previously completed native laptop run; aggregate provider requests remain bounded. Profile/key checks and focused tests passed; no provider request was made. Tavily account credit/endpoint reachability are still unverified.
+
+2026-11-14 latest laptop correction (`native-0d1854c7847d42cfb405352213bbef77`, session `3848235615244b6eb864e99ea965af91`): two answers completed, the simulated light result was interrupted, and the fourth utterance hit the old run's 5-request Nova cap. `asr_append_rpc_failed` at sequence 5122 correctly reported `request_limit_reached`; subsequent `asr_events_failed` at 5135 overwrote it with an unknown-operation error. Native STT now retains the first failure and stops polling failed streams; connection snapshots reject timestamps belonging to a previous stream. Targeted checks passed 7 tests plus 5 buffering/admission/interruption preservation checks, with local IPC. No live calls. At operator request, prepared ignored `swift-laptop-sustained` backend/runtime profiles with supported null ASR/LLM/TTS request counts, unchanged per-request input compaction, 1M conservative aggregate input ceiling and 100 research operations. Old records/caps untouched; fresh run identity required to select the new profile. No provider-rate/quota overrides.
+
+2026-11-14 first-wake ASR failure correction: the outer Deepgram connection deadline raised raw `TimeoutError`, bypassing provider classification and reaching the browser as generic `mcp_tool_error`. It now produces `provider_timeout` / `asr_open` / `deepgram_websocket`. MCP finalization preserves post-cleanup buffered/sent/discarded diagnostics; native error events retain the ASR role, connection state and safe connection-stage timings. The browser explains this specific connection failure rather than claiming an unspecified response failure. Existing asynchronous setup, bounded buffering and flush-before-finalization remain unchanged. Focused offline checks passed 13 tests plus 2 successful delayed-handshake checks; Ruff and JS syntax passed. Two recovery fixtures initially collided with the running bridge's task database and now use temporary task storage. Restricted-environment async tests stalled; final verification used command-scoped local IPC. No live calls, ledger resets or provider-limit changes. Real Deepgram connection reliability remains unqualified; no blind retry recommended.
+
+2026-11-14 Phase 7 targeted reliability checkpoint: request-local provider context projection preserves canonical Pipecat history and paired tool calls; TTS failure deadlines/diagnostics, interrupted response projection, TTS-only Markdown cleanup, bounded research fallback/lead reuse, slow-research spoken acknowledgment, and browser playback scheduling telemetry are implemented. Focused offline native/MCP/research/TTS/fake-WebSocket checks passed **35 tests**; Ruff check/format passed. The first grouped run exposed `task_database_already_owned` in a test sharing the default SQLite path; the test now has isolated temporary task storage and passes. Full suite was not run. Fake WebSocket reuse reduced setup-only time by 80.1 ms across three segments (0.1213 s cold vs 0.0411 s reused); this is not provider or end-to-end latency. No live calls or physical audio measurements were made. TTS stutter and the ≤2 s end-of-speech→meaningful-audio goal remain unqualified; no provider profile or remaining budget was verified. Details: `docs/architecture_modernization/PHASE7_RELIABILITY_HANDOFF.md`.
 
 2026-11-14 naturalness readiness: one newer live turn completed with two Aura segments and `turn_completed`, but the next ASR connection timed out; earlier traces still show intermittent TTS pacing gaps and incomplete turns. Latest code-only checks passed 8/8. This sandbox's socket/MCP-dependent selection was 8 passed/7 blocked by local IPC permissions. README and test-fixture follow-up defaults were aligned to 20 seconds. Tavily remains unconfigured/disabled in the saved laptop profile; KWS recall, sustained live turn-taking, task UX, and smooth TTS are not qualified. Recommend a staged short diagnostic only, not a 10–15-turn demo. Details: `docs/architecture_modernization/PHASE7_PREPARATION.md`.
 
@@ -4839,3 +4967,15 @@ Three existing Phase5 tests also passed offline: multipage artifact verification
 2026-11-14 native ME2 command parity: reused legacy direct clarification for underspecified music-on/play requests; confirmed standalone light, pause, and volume commands execute through the shared mock action path without Groq. Recorded completed fast-action tool/result in Pipecat context before TTS so interruption cannot make it appear pending in the next turn. Regression set: 13 passed, Ruff clean. Compound track-plus-volume still goes through model tools; live Spotify and post-fix laptop qualification remain pending. Details: `docs/architecture_modernization/PHASE7_PREPARATION.md`.
 
 2026-11-14 native end-to-end visibility follow-up: the last long browser session was audited turn-by-turn from its bridge log. It showed a correct arithmetic answer, mock light action, an accidental repeated light action after interrupted confirmation (fixed by adding the committed action receipt to Pipecat context), a rain follow-up with extra unrelated light context, incomplete music clarification/tool friction, failed volume-slot extraction with simulated-only music, and an ungrounded temporally inconsistent Senate answer after research was not invoked. Native bridge now archives authorized session transcripts via the existing `TranscriptPublisher`, includes fast device/music receipts in the live task projection, and republishes on action updates. Transcript revision counts task and action changes to avoid the browser discarding unchanged-chat updates. LangGraph task cards expose recorded phases/steps/timestamps rather than synthetic percent progress. ME3-VOICE-4 now more explicitly resolves topical follow-ups without unrelated action receipts; live effect is unverified. Focused route/UI/task regression: 45 passed, 1 unrelated loopback contract test deselected; an additional 3 context/action/music-focus tests passed; Ruff clean. Remaining: verify research-enabled/disabled temporal follow-up, topical versus historical context recall, actual Spotify, one live guided LangGraph task, complete TTS and classify the prior 31 broad-suite failures. Full details and evidence boundaries: `docs/architecture_modernization/PHASE7_PREPARATION.md`.
+
+2026-11-14 profile-aware capability report: native browser `/api/voice/capabilities` now includes a sanitized projection derived from the Pipecat schema/advertisement policy, `TaskRuntime`'s existing LangGraph tool builder, actual shared fast-action handlers, and the same registration function used by the ASR/TTS MCP servers. Added `me3-voice capabilities` to export matching JSON and deck-ready Markdown under `var/`; credential output is names and presence-only/unvalidated status, never values. No tools/providers are invoked by reporting. Python compile check passed. Focused pytest could not run in the active system Python because this HPC session has no project `.venv` or installed Pipecat (`ModuleNotFoundError: pipecat`); Ruff is also unavailable in the discovered environments. Re-run the focused capability tests and Ruff in the project runtime before treating the report as qualified.
+
+2026-11-14 targeted laptop-trial follow-up (`hpc-20261114T054805Z-2425852`, session `27588f666f3a4c02b075293a1c9417f0`): the Texas Senate question invoked web search and received five discovery leads, but the next Groq request was conservatively estimated at 15,344 input tokens against the configured 12,000 per-request cap and was rejected before dispatch. Native request preparation now dynamically drops oldest complete prior turns, then compacts discovery-only snippets and, only if still necessary, model-visible retrieved excerpts while retaining source URLs/IDs, evidence status and fail-closed budget enforcement. Time fast-action speech now uses a concise spoken summary while its UI receipt keeps the full timezone/host caveat. In this run the 90-character time answer produced 6.88 s PCM over 23.80 s provider-stream wall time; `tts_next` p95 was 315 ms, so this is a provider-stream pacing outlier rather than evidence of local MCP pull overhead. Concision reduces unnecessary spoken duration but does not qualify or fix provider-side jitter. Focused changes: 8 tests passed; Ruff clean. No live provider call. Socket/MCP research integration tests could not run in this restricted execution (localhost bind returned `PermissionError`; separate MCP initialize timed out); source-selection and evidence-retention unit regressions passed.
+
+2026-11-14 wake failure correction (`swift-hpc-20261114T061630Z-24663`, native traces `a9fb4de22e0b42d2a5ccf2debb1a40e6` and `729e9a08c59c452c9bee25d1970ccdee`): ASR open blocked admission beyond the 512 ms ingress bound, then timed out at 5 s; queued frames repeatedly attempted opens against an occupied MCP slot. One Nova reservation remains unknown. Native STT now fences further frame-triggered opens after an open error. SQLite ASR authorization moves to a joined worker thread so durable lock/filesystem waits cannot starve the MCP event loop; cancellation still reserves conservatively and dispatches no network request. Exact initial delay cause remains unproven. Fixed transcript publisher being overwritten by its event-delivery task, and join that task on shutdown. TTS wall time previously labeled provider pacing includes generator suspension; new receive-wait/consumer-pause counters distinguish those boundaries without changing playback buffering. Offline checks with command-scoped local IPC: 3 lifecycle/archive tests, 6 Deepgram/TTS regressions, 3 native browser/trace tests, and 3 final changed tests passed (overlapping selections); Ruff passed. No agent live calls; two-turn live qualification stopped at the confirmed wake blocker. Existing smooth laptop acoustic evidence remains valid; first-audible latency and current TTS smoothness remain operator measurements.
+
+2026-11-15 grounded research answer contract: OpenRouter GPT-OSS research finals now request strict JSON Schema only after retained evidence exists; each claim carries its source ID and supporting quote. The native validator checks IDs against retained sources, quotes against original source text, and claim terms against the quote before rendering `[S#]` in UI text; the existing TTS boundary removes citation labels. Ordinary chat/tool streaming is unchanged. Focused tests: 5 passed; Ruff check/format passed. No live calls. OpenRouter advertises structured output for GPT-OSS-120B; endpoint support varies, so `provider.require_parameters` fails closed if no supporting endpoint is available. Exact quote and term checks are deterministic but do not prove full semantic entailment; live provider behavior remains unqualified.
+
+2026-11-15 research qualification follow-up: authorized campaign `swift-research-3q-20261115-8d7b31c4` was reused without resetting records. Latest FIFA run passed with two OpenRouter requests and one Tavily search: concise Spain answer cited an official FIFA search-result snippet, produced one `turn_completed`, and used 4,705 actual prompt / 221 completion tokens; endpoint→answer packet was 8.28 s and turn completion 8.62 s (mock ASR/TTS; not acoustic evidence). Latest Oscars run failed closed after an unsupported S2 claim triggered one official-page retrieval; the campaign input estimator then rejected final synthesis at 20,205 tokens, emitting exactly `I couldn't complete that request reliably, so I can't give a confident answer.` Earlier successful Oscar output cited an extracted passage that did not contain the winner, so it is not source-grounded evidence. The earlier Nobel run passed with the official Nobel Prize press release and one completed turn. The campaign is now at 29/60 OpenRouter reservations and 493,756/500,000 estimated input tokens, zero unknown, only 6,244 estimated tokens left; no further live call is safe. Tavily has only a process-local request cap, not a campaign ledger.
+
+Offline correction: unavailable research-tool callbacks now stop before their handlers, fixing an `UnboundLocalError` fall-through. Quick research now projects one top-ranked snippet as evidence while retaining other leads for retrieval; focused native tests cover two leads, unavailable-tool handling, one-shot recovery, cross-host alternatives and paraphrase/source validation. `pytest` focused selection: 5 passed; Ruff passed. This projection change is not yet live-qualified on Oscars/Nobel. Speech remains mocked for these native replay tests; no physical-audibility claim.

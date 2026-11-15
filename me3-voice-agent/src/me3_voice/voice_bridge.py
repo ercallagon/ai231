@@ -36,6 +36,14 @@ from .devices import load_device_service
 from .tools import MockTaskExecutor
 
 
+def bridge_secret_names(backends, *, research_enabled=False):
+    """Select only active provider keys, including Tavily for live research."""
+    selected = {spec.auth_env for spec in backends.values() if spec.backend == "external"}
+    if research_enabled:
+        selected.add("ME3_RESEARCH_TAVILY_API_KEY")
+    return selected
+
+
 def music_ui_control_fields(value):
     if (
         set(value) != {"type", "action", "outcome"}
@@ -1277,7 +1285,9 @@ def main():
             parser.error(
                 "Onit requires the documented DGX Qwen contract, exact free-only OpenRouter route, or allowlisted Groq model"
             )
-    selected_keys = {spec.auth_env for spec in backends.values() if spec.backend == "external"}
+    selected_keys = bridge_secret_names(
+        backends, research_enabled=args.runtime_options.research.allow_live
+    )
     if args.onit_python:
         if args.onit_tavily_credits:
             selected_keys.add("ME3_ONIT_TAVILY_API_KEY")

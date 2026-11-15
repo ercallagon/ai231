@@ -4,6 +4,87 @@ import json
 from me3_voice.dashboard import normalize, render, snapshot, stream_records
 
 
+def test_browser_accepts_interrupted_and_failed_generated_transcripts():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to execute the browser validator")
+    source = (Path(__file__).parents[1] / "src/me3_voice/ui/dashboard.js").read_text()
+    validator = source[
+        source.index("  function validate(next)") : source.index("  function selected(")
+    ]
+    script = (
+        validator
+        + """
+const report = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+for (const status of ['partial', 'interrupted', 'error']) {
+  report.reports[0].data.messages[0].status = status;
+  validate(report);
+}
+report.reports[0].data.messages[0].status = 'final';
+let rejected = false;
+try { validate(report); } catch (_) { rejected = true; }
+if (!rejected) throw new Error('Unplayed final response was accepted');
+report.reports[0].data.messages[0].status = 'interrupted';
+report.reports[0].data.messages[0].confirmed_text = 'unrelated';
+rejected = false;
+try { validate(report); } catch (_) { rejected = true; }
+if (!rejected) throw new Error('Invalid confirmed prefix was accepted');
+"""
+    )
+    report = {
+        "schema_version": 1,
+        "generated_utc": "2026-11-14T00:00:00Z",
+        "warnings": [],
+        "reports": [
+            {
+                "id": "fixture",
+                "source": "fixture",
+                "evidence": "mock",
+                "kind": "transcript",
+                "data": {
+                    "schema_version": 1,
+                    "kind": "conversation-transcript",
+                    "display_authorized": True,
+                    "mode": "HPC-live",
+                    "state": "listening",
+                    "session_id": "fixture",
+                    "updated_utc": "2026-11-14T00:00:00Z",
+                    "revision": 1,
+                    "messages": [
+                        {
+                            "id": "1:assistant",
+                            "turn_id": 1,
+                            "role": "assistant",
+                            "text": "Yes, I am here.",
+                            "confirmed_text": "",
+                            "status": "interrupted",
+                            "delivery": "generated",
+                        }
+                    ],
+                    "tasks": [],
+                },
+            }
+        ],
+    }
+    from me3_voice.transcript import normalize_transcript
+
+    report["reports"][0]["data"] = normalize_transcript(report["reports"][0]["data"])
+    subprocess.run(
+        [node, "-e", script],
+        input=json.dumps(report),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=10,
+    )
+
+
 def test_live_dashboard_embeds_the_bounded_native_audio_prebuffer():
     html = render(
         {"schema_version": 1, "reports": [], "warnings": [], "generated_utc": ""}, live=True

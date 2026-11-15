@@ -11,6 +11,7 @@ NAMES = {
     # Provider/model-qualified names are canonical for new profiles.
     "ME3_DEEPGRAM_API_KEY",
     "ME3_GROQ_API_KEY",
+    "ME3_OPENROUTER_API_KEY",
     "ME3_QWEN_ASR_API_KEY",
     "ME3_QWEN_LLM_API_KEY",
     "ME3_QWEN_TTS_API_KEY",

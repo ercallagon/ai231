@@ -47,6 +47,30 @@
       "utterance": "Hi, Swift.",
       "expected_route": "direct_answer",
       "expected_action": "Respond naturally without research, device actions, or task delegation."
+    },
+    {
+      "id": "texas_senate_natural_wording",
+      "utterance": "Who won the Texas Senate election?",
+      "expected_route": "research",
+      "expected_action": "Search, retrieve the frozen authoritative fixture, and answer with its evidence citation."
+    }
+  ],
+  "standalone_current_research": [
+    {
+      "id": "michigan_us_senate_winner",
+      "utterance": "Who won the US Senatorial elections on Michigan?",
+      "expected_route": "research",
+      "expected_answer_facts": ["Abdul El-Sayed", "Mike Rogers", "2026"],
+      "max_answer_words": 32
+    },
+    {
+      "id": "nvidia_ceo_issue",
+      "utterance": "What is the issue regarding NVIDIA CEO?",
+      "expected_route": "research",
+      "expected_answer_facts": ["Jensen Huang", "resigned", "allegations", "Colette Kress"],
+      "max_answer_words": 42,
+      "follow_up": "What is confirmed and what is still alleged?",
+      "follow_up_must_add_detail": true
     }
   ],
   "scenario": {

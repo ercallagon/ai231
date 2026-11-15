@@ -25,6 +25,7 @@ import stat
 import time
 import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -45,8 +46,10 @@ from .request_budget import RequestBudgetError, conservative_input_token_estimat
 MAX_GOAL = 4000
 MAX_STEER = 2000
 MAX_ARTIFACT_BYTES = 64 * 1024
-MAX_MODEL_CALLS = 20
+MAX_MODEL_CALLS = 30
 MAX_TOOL_CALLS = 60
+MAX_RESEARCH_SEARCHES_PER_TASK = 10
+MAX_RESEARCH_RETRIEVALS_PER_TASK = 25
 MAX_ACTIVE_TASKS = 1
 APPROVAL_SECONDS = 600
 TASK_ID_RE = re.compile(r"^task_[a-f0-9]{24}$")
@@ -170,6 +173,8 @@ class TaskStore:
                     verification TEXT NOT NULL DEFAULT '{}',
                     model_calls INTEGER NOT NULL DEFAULT 0,
                     tool_calls INTEGER NOT NULL DEFAULT 0,
+                    search_calls INTEGER NOT NULL DEFAULT 0,
+                    retrieval_calls INTEGER NOT NULL DEFAULT 0,
                     created REAL NOT NULL,
                     updated REAL NOT NULL
                 );
@@ -253,6 +258,13 @@ class TaskStore:
                 );
                 """
             )
+            async with self.conn.execute("PRAGMA table_info(me3_tasks)") as cursor:
+                columns = {row[1] for row in await cursor.fetchall()}
+            for name in ("search_calls", "retrieval_calls"):
+                if name not in columns:
+                    await self.conn.execute(
+                        f"ALTER TABLE me3_tasks ADD COLUMN {name} INTEGER NOT NULL DEFAULT 0"
+                    )
             await self.conn.commit()
             await self._refresh_locked()
 
@@ -331,6 +343,8 @@ class TaskStore:
         verification=None,
         model_calls=None,
         tool_calls=None,
+        search_calls=None,
+        retrieval_calls=None,
     ):
         fields, values = [], []
         for name, value in (
@@ -346,6 +360,8 @@ class TaskStore:
             ),
             ("model_calls", model_calls),
             ("tool_calls", tool_calls),
+            ("search_calls", search_calls),
+            ("retrieval_calls", retrieval_calls),
         ):
             if value is not None:
                 fields.append(f"{name}=?")
@@ -1164,14 +1180,10 @@ class TaskRuntime:
         # data volume by default. Operators may relocate both for constrained
         # devices; paths remain subject to the same permission/confinement checks.
         self.database = Path(
-            database or os.environ.get(
-                "ME3_TASK_DATABASE", "var/cache/task-runtime/tasks.sqlite"
-            )
+            database or os.environ.get("ME3_TASK_DATABASE", "var/cache/task-runtime/tasks.sqlite")
         )
         self.artifact_root = Path(
-            artifact_root or os.environ.get(
-                "ME3_TASK_WORKSPACE", "var/scratch/task-runtime"
-            )
+            artifact_root or os.environ.get("ME3_TASK_WORKSPACE", "var/scratch/task-runtime")
         )
         self.model = model
         self.effect_dispatcher = effect_dispatcher or self._mock_dispatch
@@ -1180,6 +1192,7 @@ class TaskRuntime:
         self._saver_context = None
         self.store: TaskStore | None = None
         self.graph = None
+        self._tools = None
         self._jobs: dict[str, asyncio.Task] = {}
         self._pending_resumes: dict[str, dict[str, Any]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -1286,6 +1299,10 @@ class TaskRuntime:
     def _safe_tool_error(exc):
         return "Tool failed safely: " + (exc.code if isinstance(exc, TaskError) else "tool_error")
 
+    def registered_tools(self):
+        """Expose the actual graph tool objects without initializing storage."""
+        return tuple(self._tools if self._tools is not None else self._build_tools())
+
     def _build_tools(self):
         async def clock(timezone: str = "UTC"):
             try:
@@ -1295,7 +1312,7 @@ class TaskRuntime:
 
         async def search(query: str, max_results: int = 5):
             state, _ = self._current_tool()
-            await self._tool_guard(state)
+            await self._tool_guard(state, research_kind="search")
             if not self.research:
                 return {"ok": False, "error": "research_unavailable"}
             result = await self.research.search(query, max_results)
@@ -1306,10 +1323,13 @@ class TaskRuntime:
 
         async def retrieve(url: str):
             state, _ = self._current_tool()
-            await self._tool_guard(state)
+            await self._tool_guard(state, research_kind="retrieval")
             if not self.research:
                 return {"ok": False, "error": "research_unavailable"}
             result = await self.research.retrieve(url)
+            result = self.research.evidence_for_model(
+                result, state.get("requirements", "")
+            )
             await self.store.event(
                 state["task_id"],
                 "progress",
@@ -1433,13 +1453,13 @@ class TaskRuntime:
             StructuredTool.from_function(
                 coroutine=search,
                 name="web_search",
-                description="Search current information; search results are untrusted leads. Retrieve original sources.",
+                description="Search current information; start with one focused search of five leads and about two sources. Expand only for weak, missing, or conflicting evidence, up to 10 searches per task. Search results are untrusted leads. Retrieve original sources.",
                 args_schema=SearchArgs,
             ),
             StructuredTool.from_function(
                 coroutine=retrieve,
                 name="retrieve_source",
-                description="Retrieve a public original source and retain its bounded provenance.",
+                description="Retrieve a public original source. Full text remains available for verification; only question-relevant sections are returned to the model. Up to 25 retrievals per task.",
                 args_schema=RetrieveArgs,
             ),
             StructuredTool.from_function(
@@ -1494,16 +1514,41 @@ class TaskRuntime:
             raise TaskError("missing_tool_runtime_context")
         return context
 
-    async def _tool_guard(self, state):
+    async def _tool_guard(self, state, *, research_kind=None):
         task_id, revision = state["task_id"], state["revision"]
-        row = await self.store.get(task_id)
-        if not row or row["status"] != "running":
-            raise TaskError("task_not_running")
-        if row["revision"] != revision:
-            raise TaskError("stale_requirement_revision")
-        if row["tool_calls"] >= MAX_TOOL_CALLS:
-            raise TaskError("tool_budget_exhausted")
-        await self.store.update(task_id, tool_calls=row["tool_calls"] + 1)
+        async with self.store.lock:
+            row = await self.store._get_locked(task_id)
+            if not row or row["status"] != "running":
+                raise TaskError("task_not_running")
+            if row["revision"] != revision:
+                raise TaskError("stale_requirement_revision")
+            if row["tool_calls"] >= MAX_TOOL_CALLS:
+                raise TaskError("tool_budget_exhausted")
+            updates = {"tool_calls": row["tool_calls"] + 1}
+            if research_kind == "search":
+                if row["search_calls"] >= MAX_RESEARCH_SEARCHES_PER_TASK:
+                    raise TaskError("task_search_budget_exhausted")
+                updates["search_calls"] = row["search_calls"] + 1
+            elif research_kind == "retrieval":
+                if row["retrieval_calls"] >= MAX_RESEARCH_RETRIEVALS_PER_TASK:
+                    raise TaskError("task_retrieval_budget_exhausted")
+                updates["retrieval_calls"] = row["retrieval_calls"] + 1
+            await self.store._set_locked(task_id, **updates)
+            if research_kind:
+                await self.store._emit_locked(
+                    task_id,
+                    "research_budget_reserved",
+                    {
+                        "kind": research_kind,
+                        "search_calls": updates.get("search_calls", row["search_calls"]),
+                        "retrieval_calls": updates.get(
+                            "retrieval_calls", row["retrieval_calls"]
+                        ),
+                    },
+                )
+            else:
+                await self.store.conn.commit()
+                await self.store._refresh_locked()
         self.metrics["tool_calls"] += 1
 
     async def _control_boundary(self, state):
@@ -1537,7 +1582,7 @@ class TaskRuntime:
         task = await self.store.get(state["task_id"])
         if not task or task["status"] != "running":
             raise TaskError("task_not_running")
-        if task["model_calls"] >= self.max_model_calls:
+        if task["model_calls"] >= min(self.max_model_calls, MAX_MODEL_CALLS):
             raise TaskError("model_budget_exhausted")
         next_calls = task["model_calls"] + 1
         await self.store.update(task["task_id"], model_calls=next_calls)
@@ -1549,7 +1594,11 @@ class TaskRuntime:
             "update files, list and read them back to check requested artifacts. Never access outside that "
             "workspace. Request scoped human approval before any simulated external action. "
             "Do not claim a result is verified unless an independent tool/readback established it. If verification "
-            "cannot establish truth, state that limitation. Current runtime time: "
+            "cannot establish truth, state that limitation. For research, start with a focused search returning "
+            "five leads and about two relevant sources; expand only when evidence is weak, missing, or conflicting. "
+            "The hard task limits are 10 searches, 25 source retrievals, and 30 model calls. Full documents remain "
+            "available for exact verification, but provide only relevant sections to the model. If a limit is "
+            "reached, report or pause with retained progress; never invent evidence. Current runtime time: "
             + json.dumps(runtime_time("UTC"), ensure_ascii=False)
             + f". Task {task['task_id']} requirement revision {task['revision']}:\n{task['requirements']}"
         )
@@ -1639,12 +1688,13 @@ class TaskRuntime:
         if self.spec.backend != "external" or not self.spec.allow_live:
             raise TaskError("task_model_disabled")
         wire = [self._to_openai_message(message) for message in messages]
+        groq = urlsplit(self.spec.endpoint).hostname == "api.groq.com"
         extra = (
             {
                 "reasoning_effort": "low",
                 "extra_body": {"include_reasoning": False},
             }
-            if self.spec.model == "openai/gpt-oss-120b"
+            if groq and self.spec.model == "openai/gpt-oss-120b"
             else {}
         )
         params = {

@@ -14,7 +14,13 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 from pipecat.processors.aggregators.llm_context import LLMContext
 from openai.types.chat import ChatCompletionChunk
-from me3_voice.configuration import BackendSpec, load_runtime, ConfigurationError, RuntimeOptions
+from me3_voice.configuration import (
+    BackendSpec,
+    ConfigurationError,
+    RuntimeOptions,
+    load_backends,
+    load_runtime,
+)
 from me3_voice.conversation_context import prepare_context, runtime_time
 from me3_voice.conversation_tools import validate_arguments
 from me3_voice.native_llm import NativeLLM
@@ -186,6 +192,81 @@ async def test_research_reserves_fetch_budget_and_deadline_terminates_without_ne
         await llm._client.close()
 
 
+async def test_native_research_turn_limits_progressively_expand_and_reset():
+    llm = NativeLLM(load_backends()["llm"], max_model_calls_per_turn=8)
+    try:
+        assert llm.max_model_calls_per_turn == 7
+        llm.new_turn()
+        for index in range(3):
+            assert llm.claim_tool_operation("web_search", {"query": f"question {index}"})[2] is None
+        assert llm.research_searches == 3
+        assert (
+            llm.claim_tool_operation("web_search", {"query": "one more question"})[2]
+            == "research_search_budget_exhausted"
+        )
+        for index in range(5):
+            assert (
+                llm.claim_tool_operation(
+                    "retrieve_source", {"url": f"https://source{index}.example/"}
+                )[2]
+                is None
+            )
+        assert llm.research_retrievals == 5
+        assert (
+            llm.claim_tool_operation("retrieve_source", {"url": "https://source-final.example/"})[2]
+            == "research_retrieval_budget_exhausted"
+        )
+        llm.new_turn()
+        assert (llm.research_searches, llm.research_retrievals, llm.research_evidence_tokens) == (
+            0,
+            0,
+            0,
+        )
+        for _ in range(5):
+            llm.record_retrieval_result(failed=True, error_code="research_http_failure")
+        terminal = await llm.get_chat_completions(LLMContext())
+        terminal_text = "".join(
+            chunk.choices[0].delta.content or "" for chunk in [item async for item in terminal]
+        )
+        assert "couldn't complete that request reliably" in terminal_text
+        assert llm.calls == 0
+    finally:
+        await llm._client.close()
+
+
+async def test_native_research_evidence_cap_trims_projection_and_keeps_full_source():
+    from me3_voice.conversation_context import POLICY
+
+    assert "source-owned evidence passage IDs" in POLICY
+    llm = NativeLLM(load_backends()["llm"])
+    research = ResearchClient()
+    source = {
+        "source_id": "S1",
+        "url": "https://source.example/results",
+        "title": "Election results",
+        "text": ("The official result names Candidate Blue as the winner. " * 180),
+        "text_sha256": "fixture",
+    }
+    research.sources["S1"] = source
+    try:
+        llm.new_turn()
+        first = llm.evidence_for_model(research, source, "official result winner")
+        second = llm.evidence_for_model(research, source, "official result winner")
+        assert first["source_id"] == second["source_id"] == "S1"
+        assert first["citation"] == second["citation"] == "[S1]"
+        assert first["passage_ids"]
+        assert all(passage_id in first["text"] for passage_id in first["passage_ids"])
+        assert len(second["text"]) < len(first["text"])
+        assert llm.research_evidence_tokens <= 5000
+        assert research.verify("S1", "Candidate Blue as the winner")["quote_found"]
+        with pytest.raises(ValueError, match="research_evidence_budget_exhausted"):
+            for _ in range(4):
+                llm.evidence_for_model(research, source, "official result winner")
+        assert llm.research_evidence_tokens <= 5000
+    finally:
+        await llm._client.close()
+
+
 async def test_native_mcp_delayed_model_deadline_settles_with_explicit_failure():
     class DelayedModel:
         async def respond(self, _history):
@@ -318,6 +399,10 @@ def test_native_llm_debug_log_does_not_emit_conversation_text():
 
 
 def test_clock_and_bounded_context_keep_complete_tool_groups():
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from me3_voice.native_bridge import context_view
+
     when = datetime(2031, 1, 1, 23, 58, tzinfo=timezone.utc)
     assert runtime_time("Asia/Manila", lambda: when)["local"].startswith("2031-01-02")
     context = LLMContext(
@@ -338,22 +423,46 @@ def test_clock_and_bounded_context_keep_complete_tool_groups():
             {"role": "tool", "tool_call_id": "x", "content": "evidence"},
         ]
     )
-    dropped, instruction = prepare_context(context, clock=lambda: when, max_turns=1)
+    canonical_before = deepcopy(context.get_messages())
+    projected_state = SimpleNamespace(
+        context=context,
+        session_id="context-projection",
+        task_runtime=None,
+        backends={},
+    )
+    projected_app = SimpleNamespace(
+        response_records={},
+        response_by_conversation_turn={},
+        response_order=(),
+        partial_transcript=None,
+        event_count=0,
+        action_revision=0,
+        fast_action_rows=[],
+        projection="listening",
+    )
+    turn_ids_before = [
+        row["id"] for row in context_view(projected_state, projected_app)["messages"]
+    ]
+    dropped, instruction, projection = prepare_context(context, clock=lambda: when, max_turns=1)
     assert dropped == 1
-    messages = context.get_messages()
+    messages = projection.get_messages()
     assert len(messages) == 3 and messages[0]["role"] == "user"
+    assert context.get_messages() == canonical_before
+    assert [
+        row["id"] for row in context_view(projected_state, projected_app)["messages"]
+    ] == turn_ids_before
     assert "2031-01-01T23:58" in instruction
     assert "latest relevant completed event" in instruction
     assert "distinguish event" in instruction
     assert "Search snippets are discovery leads only" in instruction
-    assert "about\n30 words" in instruction
+    assert "about 30 words" in " ".join(instruction.split())
     assert "Preserve essential qualifications" in instruction
     assert "not merely" in instruction and "unrelated device or task receipts" in instruction
     assert messages[-1]["tool_call_id"] == messages[-2]["tool_calls"][0]["id"]
-    _, instruction = prepare_context(
+    _, instruction, _ = prepare_context(
         context, clock=lambda: datetime(2031, 1, 2, tzinfo=timezone.utc)
     )
-    assert sum(m["role"] == "system" for m in context.get_messages()) == 0
+    assert context.get_messages() == canonical_before
     assert "2031-01-02T00:00" in instruction
     oversized = LLMContext([{"role": "user", "content": "x" * 10000}])
     with pytest.raises(ProviderError):
@@ -368,6 +477,7 @@ def test_research_configuration_fail_closed(tmp_path):
         {"research": {"endpoint": "http://private/"}},
         {"research": []},
         {"max_model_calls_per_turn": 0},
+        {"max_model_calls_per_turn": 8},
         {"max_tool_calls_per_turn": 9},
         {"max_repeated_tool_calls": True},
     ]:
@@ -382,6 +492,7 @@ def test_research_configuration_fail_closed(tmp_path):
     )
     options = load_runtime(path)
     assert (options.max_model_calls_per_turn, options.max_tool_calls_per_turn) == (4, 5)
+    assert RuntimeOptions().max_model_calls_per_turn == 7
     assert options.max_repeated_tool_calls == 1
     with pytest.raises(ResearchError):
         ResearchClient().authorize()
@@ -530,6 +641,153 @@ async def test_tavily_extract_failure_is_distinguished_from_empty_source(monkeyp
     assert not client.sources
 
 
+async def test_retrieval_http_failure_uses_one_bounded_basic_extract_fallback(monkeypatch):
+    client = ResearchClient(
+        ResearchOptions(allow_live=True, request_limit=2),
+        {"ME3_RESEARCH_TAVILY_API_KEY": "fixture"},
+    )
+    calls = []
+
+    async def read(method, url, **_kwargs):
+        calls.append((method, url))
+        if method == "GET":
+            raise ResearchError(
+                "research_http_failure",
+                status=503,
+                host="source.example",
+                stage="http_status",
+                failure_class="non_success_status",
+            )
+        return {
+            "data": json.dumps(
+                {
+                    "results": [
+                        {
+                            "url": "https://source.example/article",
+                            "raw_content": (
+                                "The official results were certified on November 12. "
+                                "The report identifies the completed election, the office, "
+                                "and the statewide result with enough detail for verification."
+                            ),
+                        }
+                    ]
+                }
+            ).encode()
+        }
+
+    monkeypatch.setattr(client, "read", read)
+    source = await client.retrieve("https://source.example/article")
+    assert [method for method, _ in calls] == ["GET", "POST"]
+    assert calls[-1][1] == "https://api.tavily.com/extract"
+    assert source["url"] == "https://source.example/article"
+    assert source["extraction_method"] == "tavily_basic_extract"
+    assert source["fallback_status"] == "succeeded"
+    evidence = client.evidence_for_model(source, "certified election result November")
+    assert evidence["source_id"] == "S1" and evidence["url"] == source["url"]
+    assert "November 12" in evidence["text"]
+
+
+async def test_oversized_source_uses_one_bounded_basic_extract_fallback(monkeypatch):
+    client = ResearchClient(
+        ResearchOptions(allow_live=True, request_limit=2),
+        {"ME3_RESEARCH_TAVILY_API_KEY": "fixture"},
+    )
+    calls = []
+
+    async def read(method, url, **_kwargs):
+        calls.append((method, url))
+        if method == "GET":
+            raise ResearchError(
+                "source_too_large",
+                host="news.example",
+                stage="response_body",
+                failure_class="body_limit",
+            )
+        return {
+            "data": json.dumps(
+                {
+                    "results": [
+                        {
+                            "url": "https://news.example/election",
+                            "raw_content": (
+                                "The official election result names Candidate Blue as the winner. "
+                                "The state certified this result on November 12 after the final count."
+                            ),
+                        }
+                    ]
+                }
+            ).encode()
+        }
+
+    monkeypatch.setattr(client, "read", read)
+    source = await client.retrieve("https://news.example/election")
+    assert calls == [
+        ("GET", "https://news.example/election"),
+        ("POST", "https://api.tavily.com/extract"),
+    ]
+    assert source["extraction_method"] == "tavily_basic_extract"
+    assert source["fallback_status"] == "succeeded"
+    evidence = client.evidence_for_model(source, "election result winner")
+    assert evidence["source_id"] == "S1"
+    assert "Candidate Blue" in evidence["text"]
+
+
+async def test_retrieval_failure_preserves_original_and_extract_diagnostics(monkeypatch):
+    client = ResearchClient(
+        ResearchOptions(allow_live=True, request_limit=2),
+        {"ME3_RESEARCH_TAVILY_API_KEY": "fixture"},
+    )
+
+    async def read(method, _url, **_kwargs):
+        if method == "GET":
+            raise ResearchError(
+                "research_http_failure",
+                status=403,
+                host="source.example",
+                stage="http_status",
+                failure_class="non_success_status",
+            )
+        raise ResearchError(
+            "research_http_failure",
+            status=429,
+            host="api.tavily.com",
+            stage="http_status",
+            failure_class="non_success_status",
+        )
+
+    monkeypatch.setattr(client, "read", read)
+    with pytest.raises(ResearchError) as captured:
+        await client.retrieve("https://source.example/article")
+    result = captured.value.result()
+    assert result["error"] == "research_http_failure"
+    assert result["http_status"] == 403
+    assert result["stage"] == "http_status"
+    assert result["fallback_status"] == "failed"
+    assert result["fallback_error"]["http_status"] == 429
+    assert not client.sources
+
+
+async def test_retrieve_can_reserve_http_headroom_for_an_existing_alternate(monkeypatch):
+    client = ResearchClient(ResearchOptions(allow_live=True, request_limit=3))
+    calls = []
+
+    async def read(method, url, **_kwargs):
+        calls.append((method, url))
+        raise ResearchError(
+            "research_http_failure",
+            status=403,
+            host="blocked.example",
+            stage="http_status",
+            failure_class="non_success_status",
+        )
+
+    monkeypatch.setattr(client, "read", read)
+    with pytest.raises(ResearchError, match="research_http_failure"):
+        await client.retrieve("https://blocked.example/page", allow_extract_fallback=False)
+    assert calls == [("GET", "https://blocked.example/page")]
+    assert "https://blocked.example/page" in client.failed_retrieval_urls
+
+
 async def test_search_cache_deduplicates_and_provenance_rank_is_generic(monkeypatch):
     client = ResearchClient(
         ResearchOptions(allow_live=True, request_limit=4),
@@ -569,6 +827,69 @@ async def test_search_cache_deduplicates_and_provenance_rank_is_generic(monkeypa
     assert all(row["evidence_status"] == "discovery_only" for row in first["results"])
 
 
+def test_retrieval_alternatives_exclude_failed_and_already_retrieved_sources():
+    client = ResearchClient()
+    result = {
+        "results": [
+            {"url": f"https://source.example/{index}", "title": f"Lead {index}"}
+            for index in range(3)
+        ]
+    }
+    client._remember_search_leads(result)
+    client.failed_retrieval_urls.add("https://source.example/0")
+    client.sources["S1"] = {
+        "url": "https://source.example/1",
+        "kind": "untrusted_retrieved_source",
+    }
+    assert client.alternative_leads(exclude_url="https://source.example/2") == []
+    alternatives = client.alternative_leads(exclude_url="https://source.example/0")
+    assert [row["url"] for row in alternatives] == ["https://source.example/2"]
+
+    client._remember_search_leads(
+        {
+            "results": [
+                {"url": "https://fifa.example/another-page", "title": "Same publisher"},
+                {"url": "https://independent.example/result", "title": "Other publisher"},
+            ]
+        }
+    )
+    client.failed_retrieval_urls.add("https://fifa.example/failed-page")
+    assert client.alternative_leads(limit=1)[0]["url"] == "https://independent.example/result"
+
+
+async def test_research_does_not_retry_failed_source_url_in_same_session():
+    client = ResearchClient(ResearchOptions(True, 5))
+    calls = 0
+
+    async def fail_once(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise ResearchError(
+            "research_http_failure", status=503, host="source.example", stage="http_status"
+        )
+
+    client.read = fail_once
+    url = "https://source.example/result"
+    with pytest.raises(ResearchError, match="research_http_failure"):
+        await client.retrieve(url)
+    with pytest.raises(ResearchError, match="source_previously_failed"):
+        await client.retrieve(url)
+    assert calls == 1
+
+
+def test_equivalent_web_search_arguments_share_operation_identity():
+    llm = NativeLLM(BackendSpec())
+    try:
+        first = llm.claim_tool_operation("web_search", {"query": " Latest  Senate Results "})
+        second = llm.claim_tool_operation(
+            "web_search", {"query": "latest senate results", "max_results": 5}
+        )
+        assert first[0] == second[0]
+        assert first[1] == 1 and second[1] == 2
+    finally:
+        asyncio.run(llm._client.close())
+
+
 def test_query_relevant_evidence_chunks_keep_full_source_and_provenance():
     client = ResearchClient()
     source = {
@@ -584,7 +905,20 @@ def test_query_relevant_evidence_chunks_keep_full_source_and_provenance():
     assert "420 millimeters" in output["text"]
     assert "office hours" not in output["text"]
     assert output["source_id"] == "S1" and output["url"] == source["url"]
+    assert output["passage_ids"] == ["S1-P2"]
+    assert "S1-P2:" in output["text"]
+    assert client.lookup_evidence_passage("S1-P2")["text"] == (
+        "The annual rainfall total was 420 millimeters in 2025."
+    )
+    assert client.evidence_passage_ids() == ["S1-P2"]
     assert client.sources["S1"]["text"] == source["text"]
+    assert "evidence_passages" in client.sources["S1"]
+    # Passage IDs are stable source-owned keys; the projection carries IDs and
+    # text, while lookup resolves exactly to the retained original passage.
+    second_projection = client.evidence_for_model(source, "annual rainfall total 2025")
+    assert second_projection["passage_ids"] == output["passage_ids"]
+    assert client.lookup_evidence_passage("S1-P2")["text"] == output["text"].split(": ", 1)[1]
+    assert "evidence_passages" not in output
 
 
 async def test_source_memory_bounded(monkeypatch):
@@ -633,7 +967,7 @@ async def test_stream_fencing_citations_and_budget():
             yield chunk({"content": "stale response"})
 
         assert not [c async for c in llm.observe(stale(), llm.epoch, 0)]
-        llm.calls = 6
+        llm.calls = 7
         terminal = await llm.get_chat_completions(LLMContext())
         terminal_chunks = [c async for c in terminal]
         assert "couldn't complete that request reliably" in "".join(
@@ -644,6 +978,1149 @@ async def test_stream_fencing_citations_and_budget():
             llm.claim_tool()
         with pytest.raises(ValueError):
             llm.claim_tool()
+    finally:
+        await llm._client.close()
+
+
+async def test_llm_stream_terminal_records_cancellation_and_supersession():
+    events = []
+    llm = NativeLLM(
+        BackendSpec(), on_event=lambda name, **fields: events.append({"event": name, **fields})
+    )
+    started = asyncio.Event()
+    release = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def blocked():
+        started.set()
+        try:
+            await release.wait()
+            yield chunk({"content": "late answer"})
+            yield chunk({}, "stop")
+        finally:
+            closed.set()
+
+    try:
+        task = asyncio.create_task(
+            _collect(llm.observe(blocked(), llm.epoch, time.monotonic(), request_id="japan-r3", owner_turn_id=1))
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert closed.is_set()
+        terminals = [event for event in events if event["event"] == "llm_stream_terminal"]
+        assert terminals == [
+            {
+                "event": "llm_stream_terminal",
+                "request_id": "japan-r3",
+                "owner_turn_id": 1,
+                "outcome": "cancelled",
+                "error_code": "pipecat_interruption",
+                "elapsed_seconds": terminals[0]["elapsed_seconds"],
+            }
+        ]
+
+        events.clear()
+        stale_started = asyncio.Event()
+        stale_release = asyncio.Event()
+
+        async def superseded():
+            stale_started.set()
+            await stale_release.wait()
+            yield chunk({"content": "stale answer"})
+
+        stale_task = asyncio.create_task(
+            _collect(
+                llm.observe(
+                    superseded(), llm.epoch, time.monotonic(), request_id="japan-r4", owner_turn_id=1
+                )
+            )
+        )
+        await stale_started.wait()
+        llm.new_turn()
+        stale_release.set()
+        assert await stale_task == []
+        assert [event for event in events if event["event"] == "llm_stream_terminal"] == [
+            {
+                "event": "llm_stream_terminal",
+                "request_id": "japan-r4",
+                "owner_turn_id": 1,
+                "outcome": "superseded",
+                "error_code": "turn_epoch_changed",
+                "elapsed_seconds": next(
+                    event["elapsed_seconds"]
+                    for event in events
+                    if event["event"] == "llm_stream_terminal"
+                ),
+            }
+        ]
+    finally:
+        release.set()
+        await llm._client.close()
+
+
+async def _collect(stream):
+    return [item async for item in stream]
+
+
+async def test_research_citation_handoff_accepts_only_retained_source_citations():
+    events = []
+    llm = NativeLLM(
+        BackendSpec(),
+        source_ids=lambda: {"S1"},
+        on_event=lambda name, **fields: events.append({"event": name, **fields}),
+    )
+    llm.research_tool_calls = 1
+    try:
+
+        async def cited_answer():
+            yield chunk({"content": "Sanae Takaichi is Japan’s prime minister [S1]."})
+            yield chunk({}, "stop")
+
+        output = [c async for c in llm.observe(cited_answer(), llm.epoch, 0)]
+        text = "".join(c.choices[0].delta.content or "" for c in output)
+        assert text == "Sanae Takaichi is Japan’s prime minister [S1]."
+        assert any(row["event"] == "llm_grounding_check" for row in events)
+
+        async def missing_citation():
+            yield chunk({"content": "Sanae Takaichi is Japan’s prime minister."})
+            yield chunk({}, "stop")
+
+        output = [c async for c in llm.observe(missing_citation(), llm.epoch, 0)]
+        text = "".join(c.choices[0].delta.content or "" for c in output)
+        assert "won't guess" in text
+        assert llm.response_failure_reason == "insufficient_verified_evidence"
+
+        llm.new_turn()
+        llm.research_tool_calls = 1
+        llm.source_ids = lambda: set()
+
+        async def unsupported_evidence():
+            yield chunk({"content": "Sanae Takaichi is Japan’s prime minister."})
+            yield chunk({}, "stop")
+
+        output = [c async for c in llm.observe(unsupported_evidence(), llm.epoch, 0)]
+        text = "".join(c.choices[0].delta.content or "" for c in output)
+        assert "won't guess" in text
+        assert llm.response_failure_reason == "insufficient_verified_evidence"
+    finally:
+        await llm._client.close()
+
+
+async def test_structured_research_answer_resolves_passages_and_keeps_chat_streaming():
+    from me3_voice.native_speech import spoken_text
+
+    source = {
+        "source_id": "S1",
+        "text": (
+            "Prime Minister Takaichi Sanae attended the meeting on November 12, 2026. "
+            "The nearby station serves lunch menus."
+        ),
+        "evidence_passages": {
+            "S1-P1": "Prime Minister Takaichi Sanae attended the meeting on November 12, 2026.",
+            "S1-P2": "The nearby station serves lunch menus.",
+        },
+    }
+    second_source = {
+        "source_id": "S2",
+        "text": "The event took place in Tokyo during 2026.",
+        "evidence_passages": {"S2-P1": "The event took place in Tokyo during 2026."},
+    }
+    sources = {"S1": source, "S2": second_source}
+    passages = {
+        "S1-P1": {
+            "passage_id": "S1-P1",
+            "source_id": "S1",
+            "text": source["evidence_passages"]["S1-P1"],
+        },
+        "S1-P2": {
+            "passage_id": "S1-P2",
+            "source_id": "S1",
+            "text": source["evidence_passages"]["S1-P2"],
+        },
+        "S2-P1": {
+            "passage_id": "S2-P1",
+            "source_id": "S2",
+            "text": second_source["text"],
+        },
+    }
+    projected_passages = {"S1-P1", "S2-P1"}
+    events = []
+    llm = NativeLLM(
+        BackendSpec(),
+        source_ids=lambda: set(sources),
+        source_lookup=lambda source_id: sources.get(source_id),
+        evidence_passage_ids=lambda: set(projected_passages),
+        evidence_passage_lookup=lambda passage_id: passages.get(passage_id),
+        on_event=lambda name, **fields: events.append({"event": name, **fields}),
+    )
+
+    async def structured(payload, *, terminal_count=1):
+        yield chunk({"content": json.dumps(payload)})
+        for _ in range(terminal_count):
+            yield chunk({}, "stop")
+
+    async def result(payload, *, question="", strict_support=False, terminal_count=1):
+        chunks = [
+            item
+            async for item in llm.observe(
+                structured(payload, terminal_count=terminal_count),
+                llm.epoch,
+                0,
+                structured_research=True,
+                research_question=question,
+                strict_research_support=strict_support,
+            )
+        ]
+        return "".join(item.choices[0].delta.content or "" for item in chunks)
+
+    try:
+        llm.research_tool_calls = 1
+        answer = await result(
+            {
+                "claims": [
+                    {
+                        "text": "Sanae Takaichi was present at the gathering on 12 November 2026.",
+                        "passage_id": "S1-P1",
+                    },
+                    {
+                        "text": "The event took place in Tokyo in 2026.",
+                        "passage_id": "S2-P1",
+                    },
+                ]
+            },
+            terminal_count=2,
+        )
+        assert answer == (
+            "Sanae Takaichi was present at the gathering on 12 November 2026 [S1]. "
+            "The event took place in Tokyo in 2026 [S2]."
+        )
+        assert "[S1]" not in spoken_text(answer)
+        assert any(event["event"] == "llm_grounding_check" for event in events)
+        assert any(
+            event["event"] == "llm_claim_support_diagnostic"
+            and event["lexical_mismatch"]
+            and event["source_id"] == "S1"
+            for event in events
+        )
+        assert len([event for event in events if event["event"] == "llm_citation_check"]) == 1
+        assert (
+            len(
+                [
+                    event
+                    for event in events
+                    if event["event"] == "llm_duplicate_finalization_suppressed"
+                ]
+            )
+            == 1
+        )
+
+        llm.response_failure_reason = None
+        missing = await result({"claims": [{"text": "Takaichi attended the meeting."}]})
+        assert "won't guess" in missing
+        assert llm.response_failure_reason == "invalid_structured_answer"
+
+        llm.response_failure_reason = None
+        invented = await result(
+            {
+                "claims": [
+                    {
+                        "text": "Takaichi attended the meeting.",
+                        "passage_id": "S1-P2",
+                    }
+                ]
+            }
+        )
+        assert "won't guess" in invented
+        assert llm.response_failure_reason == "unsupported_evidence_passage"
+
+        llm.response_failure_reason = None
+        irrelevant = await result(
+            {"claims": [{"text": "The station served lunch.", "passage_id": "S1-P2"}]}
+        )
+        assert "won't guess" in irrelevant
+        assert llm.response_failure_reason == "unsupported_evidence_passage"
+
+        llm.response_failure_reason = None
+        passages["S1-P1"]["source_id"] = "S99"
+        mismatched_owner = await result(
+            {
+                "claims": [
+                    {
+                        "text": "Takaichi attended the meeting.",
+                        "passage_id": "S1-P1",
+                    }
+                ]
+            }
+        )
+        assert "won't guess" in mismatched_owner
+        assert llm.response_failure_reason == "insufficient_verified_evidence"
+        passages["S1-P1"]["source_id"] = "S1"
+
+        llm.response_failure_reason = None
+        wrong_entity = await result(
+            {
+                "claims": [
+                    {
+                        "text": "Prime Minister Ishiba attended the meeting on November 12, 2026.",
+                        "passage_id": "S1-P1",
+                    }
+                ]
+            }
+        )
+        assert "won't guess" in wrong_entity
+        assert llm.response_failure_reason == "contradictory_claim"
+
+        llm.response_failure_reason = None
+        negated = await result(
+            {
+                "claims": [
+                    {
+                        "text": "Takaichi Sanae did not attend the meeting on November 12, 2026.",
+                        "passage_id": "S1-P1",
+                    }
+                ]
+            }
+        )
+        assert "won't guess" in negated
+        assert llm.response_failure_reason == "contradictory_claim"
+
+        llm.response_failure_reason = None
+        wrong_date = await result(
+            {
+                "claims": [
+                    {
+                        "text": "Takaichi attended the meeting on November 13, 2026.",
+                        "passage_id": "S1-P1",
+                    }
+                ]
+            }
+        )
+        assert "won't guess" in wrong_date
+        assert llm.response_failure_reason == "contradictory_claim"
+
+        # Low-risk unsupported relations are not semantically disproven by
+        # lexical mismatch alone; the diagnostic makes this limitation visible.
+        llm.response_failure_reason = None
+        unsupported_relation = await result(
+            {"claims": [{"text": "Takaichi won the election.", "passage_id": "S1-P1"}]}
+        )
+        assert "won't guess" not in unsupported_relation
+        assert llm.response_failure_reason is None
+        assert any(
+            event["event"] == "llm_claim_support_diagnostic"
+            and event["lexical_mismatch"]
+            and event["strict_support_required"] is False
+            for event in events
+        )
+
+        assert llm._requires_strict_research_support(
+            LLMContext(messages=[{"role": "user", "content": "What medication dose is safe?"}])
+        )
+        llm.response_failure_reason = None
+        high_risk = await result(
+            {"claims": [{"text": "Takaichi should take medication.", "passage_id": "S1-P1"}]},
+            question="What medication dose is safe?",
+            strict_support=True,
+        )
+        assert "won't guess" in high_risk
+        assert llm.response_failure_reason == "unsupported_claim"
+
+        llm.new_turn()
+
+        async def plain_conversation():
+            yield chunk({"content": "Hello, how can I help?"})
+            yield chunk({}, "stop")
+
+        ordinary = [item async for item in llm.observe(plain_conversation(), llm.epoch, 0)]
+        assert "".join(item.choices[0].delta.content or "" for item in ordinary) == (
+            "Hello, how can I help?"
+        )
+    finally:
+        await llm._client.close()
+
+
+async def test_native_research_repairs_one_invalid_structured_final_with_same_evidence():
+    source = {
+        "source_id": "S1",
+        "url": "https://example.org/pm",
+        "text": "Prime Minister Example attended the cabinet meeting.",
+        "evidence_passages": {
+            "S1-P1": "Prime Minister Example attended the cabinet meeting."
+        },
+    }
+    passage = {
+        "passage_id": "S1-P1",
+        "source_id": "S1",
+        "text": source["evidence_passages"]["S1-P1"],
+    }
+    events = []
+    llm = NativeLLM(
+        BackendSpec(),
+        source_ids=lambda: {"S1"},
+        source_lookup=lambda source_id: source if source_id == "S1" else None,
+        evidence_passage_ids=lambda: {"S1-P1"},
+        evidence_passage_lookup=lambda _passage_id: passage,
+        on_event=lambda name, **fields: events.append({"event": name, **fields}),
+        max_model_calls_per_turn=4,
+    )
+    llm.research_tool_calls = 1
+    original_context = LLMContext(
+        messages=[
+            {"role": "user", "content": "Who is the current prime minister?"},
+            {"role": "tool", "content": "S1-P1: Prime Minister Example attended the cabinet meeting."},
+        ],
+        tools=[],
+    )
+
+    async def malformed():
+        yield chunk({"content": "not the expected JSON contract"})
+        yield chunk({}, "stop")
+
+    async def valid():
+        yield chunk(
+            {
+                "content": json.dumps(
+                    {
+                        "claims": [
+                            {
+                                "text": "Example is identified as prime minister.",
+                                "passage_id": "S1-P1",
+                            }
+                        ]
+                    }
+                )
+            }
+        )
+        yield chunk({}, "stop")
+
+    repair_contexts = []
+
+    async def fake_get_chat_completions(context):
+        repair_contexts.append(context)
+        return llm.observe(
+            valid(),
+            llm.epoch,
+            0,
+            structured_research=True,
+            research_question="Who is the current prime minister?",
+        )
+
+    llm.get_chat_completions = fake_get_chat_completions
+    try:
+        first = llm.observe(
+            malformed(),
+            llm.epoch,
+            0,
+            structured_research=True,
+            research_question="Who is the current prime minister?",
+        )
+        output = [
+            item
+            async for item in llm._research_answer_with_one_format_repair(
+                first,
+                epoch=llm.epoch,
+                started=0,
+                research_question="Who is the current prime minister?",
+                strict_research_support=False,
+                request_context=original_context,
+            )
+        ]
+        answer = "".join(item.choices[0].delta.content or "" for item in output)
+        assert answer == "Example is identified as prime minister [S1]."
+        assert "couldn't verify" not in answer
+        assert len(repair_contexts) == 1
+        repaired_messages = repair_contexts[0].get_messages()
+        assert repaired_messages[:-1] == original_context.get_messages()
+        assert repaired_messages[-1]["role"] == "developer"
+        assert repair_contexts[0].tool_choice == "none"
+        assert original_context.get_messages()[-1]["content"].startswith("S1-P1:")
+        assert llm.response_failure_reason is None
+        assert [event["event"] for event in events if "repair_" in event["event"]] == [
+            "llm_structured_answer_repair_started",
+            "llm_structured_answer_repair_finished",
+        ]
+    finally:
+        await llm._client.close()
+
+
+async def test_native_research_format_repair_respects_model_call_cap():
+    llm = NativeLLM(BackendSpec(), max_model_calls_per_turn=1)
+    llm.research_tool_calls = 1
+    llm.calls = 1
+
+    async def malformed():
+        yield chunk({"content": "not JSON"})
+        yield chunk({}, "stop")
+
+    async def unexpected_repair(_context):
+        raise AssertionError("repair must not exceed the configured model-call cap")
+
+    llm.get_chat_completions = unexpected_repair
+    try:
+        output = [
+            item
+            async for item in llm._research_answer_with_one_format_repair(
+                llm.observe(malformed(), llm.epoch, 0, structured_research=True),
+                epoch=llm.epoch,
+                started=0,
+                research_question="Question",
+                strict_research_support=False,
+                request_context=LLMContext(messages=[{"role": "user", "content": "Question"}]),
+            )
+        ]
+        text = "".join(item.choices[0].delta.content or "" for item in output)
+        assert "couldn't verify" in text
+        assert llm.response_failure_reason == "missing_research_citation"
+        assert not llm.research_format_repair_attempted
+    finally:
+        await llm._client.close()
+
+
+async def test_native_prose_research_repairs_one_missing_citation_without_tools():
+    class Answers:
+        def __init__(self):
+            self.calls = 0
+
+        async def respond(self, _history):
+            self.calls += 1
+            yield (
+                "Sanae Takaichi is Japan's prime minister [S1]."
+                if self.calls == 2
+                else "Sanae Takaichi is Japan's prime minister."
+            )
+
+    model = Answers()
+    events = []
+    llm = NativeLLM(
+        BackendSpec(),
+        upstream=model,
+        source_ids=lambda: {"S1"},
+        on_event=lambda name, **fields: events.append({"event": name, **fields}),
+    )
+    llm.research_tool_calls = 1
+    context = LLMContext(messages=[{"role": "user", "content": "Who is Japan's prime minister?"}])
+    try:
+        stream = await llm.get_chat_completions(context)
+        chunks = [chunk async for chunk in stream]
+        answer = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+        assert answer == "Sanae Takaichi is Japan's prime minister [S1]."
+        assert model.calls == 2
+        assert llm.response_failure_reason is None
+        assert [event["event"] for event in events if "citation_answer_repair_" in event["event"]] == [
+            "llm_citation_answer_repair_started",
+            "llm_citation_answer_repair_finished",
+        ]
+    finally:
+        await llm._client.close()
+
+
+def test_research_conflicts_are_scoped_to_relevant_evidence_sentence():
+    from me3_voice.native_llm import _research_claim_conflicts
+
+    passage = (
+        "Elissa Slotkin won the 2024 U.S. Senate election in Michigan. "
+        "A separate 2026 committee report did not discuss the Senate race. "
+        "An unrelated note says Ohio's candidates were not certified."
+    )
+    supported_paraphrase = "Elissa Slotkin was the winner of Michigan's 2024 Senate race."
+    wrong_year = "Elissa Slotkin won Michigan's 2026 Senate election."
+    reversed_polarity = "Elissa Slotkin did not win Michigan's 2024 Senate election."
+
+    assert _research_claim_conflicts(supported_paraphrase, passage) == []
+    assert _research_claim_conflicts(wrong_year, passage) == ["numeric_anchor_conflict"]
+    assert _research_claim_conflicts(reversed_polarity, passage) == ["polarity_conflict"]
+
+
+async def test_native_michigan_research_long_passage_delivers_one_cited_answer():
+    from me3_voice.providers import ToolCall
+    from me3_voice.speech import SpeechClient
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        async def respond(self, _history):
+            self.calls += 1
+            if self.calls == 1:
+                yield ToolCall("search-michigan", "web_search", {"query": "Michigan Senate winner"})
+            elif self.calls == 2:
+                yield ToolCall(
+                    "fetch-michigan",
+                    "retrieve_source",
+                    {"url": "https://official.example/michigan"},
+                )
+            else:
+                yield "Elissa Slotkin won Michigan's 2024 Senate race [S1]."
+
+    passage = (
+        "Elissa Slotkin won the 2024 U.S. Senate election in Michigan. "
+        "A separate 2026 committee report did not discuss the Senate race. "
+        "An unrelated note says Ohio's candidates were not certified. "
+        + "Background detail about the statewide campaign. " * 35
+    )
+    research = ResearchClient(ResearchOptions(True, 4))
+
+    async def search(query, max_results=5):
+        result = {
+            "kind": "untrusted_search_leads",
+            "query": query,
+            "results": [{"url": "https://official.example/michigan", "title": "Certified result"}],
+        }
+        research._remember_search_leads(result)
+        return result
+
+    async def retrieve(url, *, allow_extract_fallback=True):
+        source = {
+            "source_id": "S1",
+            "url": url,
+            "title": "Certified result",
+            "text": passage,
+            "text_sha256": "b" * 64,
+            "evidence_status": "retrieved_unverified",
+        }
+        research.sources["S1"] = source
+        return source
+
+    research.search = search
+    research.retrieve = retrieve
+    model = Model()
+    state = NativeState(
+        research=research,
+        speech_factory=lambda: SpeechClient(transcript="Who won the Senate election in Michigan?"),
+    )
+    sink = MemorySink()
+    try:
+        async with NativeApplication(state, sink, annotated=True, upstream=model) as native:
+            await native.utterance(b"\1\0" * 1024)
+            assert sum(event["event"] == "turn_completed" for event in native.events) == 1
+            assert not any(event["event"] == "turn_failed" for event in native.events)
+            assert model.calls == 3
+            assert len([event for event in native.events if event["event"] == "tool_completed"]) == 2
+            assert sum(event["event"] == "tts_start" for event in native.events) == 1
+            assert sum(event["event"] == "tts_segment_summary" for event in native.events) == 1
+            assert next(
+                event
+                for event in native.events
+                if event["event"] == "tts_segment_summary"
+            )["status"] == "completed"
+            assert any(event["event"] == "llm_grounding_check" for event in native.events)
+            assistant = [
+                message.get("content", "")
+                for message in state.context.get_messages()
+                if message.get("role") == "assistant" and isinstance(message.get("content"), str)
+            ]
+            assert assistant == ["Elissa Slotkin won Michigan's 2024 Senate race [S1]."]
+            assert sink.chunks
+    finally:
+        await state.close()
+
+
+async def test_native_structured_research_recovers_once_from_irrelevant_retained_source(
+    monkeypatch, tmp_path
+):
+    from me3_voice.providers import ToolCall
+    from me3_voice.speech import SpeechClient
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    private.chmod(0o700)
+    monkeypatch.setenv("ME3_TASK_DATABASE", str(private / "tasks.sqlite"))
+    monkeypatch.setenv("ME3_TASK_WORKSPACE", str(private / "workspace"))
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+
+        async def respond(self, _history):
+            self.calls += 1
+            if self.calls == 1:
+                yield ToolCall("search", "web_search", {"query": "2026 FIFA World Cup winner"})
+            elif self.calls == 2:
+                yield ToolCall("retrieve-irrelevant", "retrieve_source", {"url": "https://source.example/old"})
+            elif self.calls == 3:
+                yield json.dumps(
+                    {"claims": [{"text": "Spain won the 2026 FIFA World Cup", "passage_id": "S1-P1"}]}
+                )
+            elif self.calls == 4:
+                yield ToolCall("retrieve-alternate", "retrieve_source", {"url": "https://source.example/result"})
+            else:
+                yield json.dumps(
+                    {"claims": [{"text": "Spain won the 2026 FIFA World Cup", "passage_id": "S2-P1"}]}
+                )
+
+    research = ResearchClient(ResearchOptions(True, 8))
+
+    async def search(query, max_results=5):
+        assert query == "2026 FIFA World Cup winner"
+        result = {
+            "kind": "untrusted_search_leads",
+            "query": query,
+            "results": [
+                {"url": "https://source.example/old", "title": "World Cup history"},
+                {"url": "https://source.example/result", "title": "2026 final result"},
+            ][:max_results],
+        }
+        research._remember_search_leads(result)
+        return result
+
+    async def retrieve(url, *, allow_extract_fallback=True):
+        source_id, passage = (
+            ("S1", "Argentina won the 2022 World Cup.")
+            if url.endswith("/old")
+            else ("S2", "Spain won the 2026 FIFA World Cup.")
+        )
+        source = {
+            "source_id": source_id,
+            "url": url,
+            "title": "World Cup result",
+            "text": passage,
+            "text_sha256": source_id.lower() * 32,
+            "evidence_status": "retrieved_unverified",
+        }
+        research.sources[source_id] = source
+        return source
+
+    research.search = search
+    research.retrieve = retrieve
+    model = Model()
+    state = NativeState(
+        research=research,
+        speech_factory=lambda: SpeechClient(transcript="Who won the 2026 FIFA World Cup?"),
+    )
+    sink = MemorySink()
+    try:
+        async with NativeApplication(state, sink, annotated=True, upstream=model) as native:
+            native.llm._uses_structured_research_output = lambda: bool(research.sources)
+            await native.utterance(b"\1\0" * 1024)
+            events = list(native.events)
+            assert model.calls == 5
+            assert sum(event["event"] == "turn_completed" for event in events) == 1
+            assert not any(event["event"] == "turn_failed" for event in events)
+            assert sum(event["event"] == "tts_start" for event in events) == 1
+            assert sum(event["event"] == "tts_segment_summary" for event in events) == 1
+            assert sum(event["event"] == "llm_research_evidence_repair_started" for event in events) == 1
+            assert sum(event["event"] == "llm_research_evidence_repair_finished" for event in events) == 1
+            assert [
+                event.get("tool_name")
+                for event in events
+                if event["event"] == "tool_completed"
+            ] == ["web_search", "retrieve_source", "retrieve_source"]
+            assert sum(
+                event.get("tool_name") == "retrieve_source"
+                for event in events
+                if event["event"] == "tool_completed"
+            ) == 2
+            assistant = [
+                message.get("content")
+                for message in state.context.get_messages()
+                if message.get("role") == "assistant"
+                and isinstance(message.get("content"), str)
+            ]
+            assert assistant == ["Spain won the 2026 FIFA World Cup [S2]"]
+            assert sink.chunks
+    finally:
+        await state.close()
+
+
+async def test_native_relevant_search_snippet_answers_without_page_fetch(monkeypatch, tmp_path):
+    from me3_voice.providers import ToolCall
+    from me3_voice.speech import SpeechClient
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    private.chmod(0o700)
+    monkeypatch.setenv("ME3_TASK_DATABASE", str(private / "tasks.sqlite"))
+    monkeypatch.setenv("ME3_TASK_WORKSPACE", str(private / "workspace"))
+
+    class Model:
+        def __init__(self):
+            self.calls = 0
+            self.histories = []
+
+        async def respond(self, history):
+            self.calls += 1
+            self.histories.append(history)
+            if self.calls == 1:
+                yield ToolCall("search", "web_search", {"query": "2026 FIFA World Cup winner"})
+            else:
+                yield json.dumps(
+                    {
+                        "claims": [
+                            {
+                                "text": "Spain won the 2026 FIFA World Cup",
+                                "passage_id": "S1-P1",
+                            }
+                        ]
+                    }
+                )
+
+    research = ResearchClient(
+        ResearchOptions(True, 2),
+        {"ME3_RESEARCH_TAVILY_API_KEY": "offline-fixture-key"},
+    )
+
+    async def search(query, max_results=5):
+        assert query == "2026 FIFA World Cup winner"
+        result = {
+            "kind": "untrusted_search_leads",
+            "query": query,
+            "results": [
+                {
+                    "url": "https://sports.example/world-cup-2026-final",
+                    "title": "2026 World Cup final result",
+                    "snippet": "Spain defeated Argentina in the 2026 FIFA World Cup final to win the championship.",
+                    "evidence_status": "discovery_only",
+                },
+                {
+                    "url": "https://sports.example/world-cup-related-story",
+                    "title": "Related tournament report",
+                    "snippet": "A related report includes historical results and unrelated tournament context.",
+                    "evidence_status": "discovery_only",
+                },
+            ][:max_results],
+        }
+        research._remember_search_leads(result)
+        return result
+
+    research.search = search
+    model = Model()
+    state = NativeState(
+        research=research,
+        speech_factory=lambda: SpeechClient(transcript="Who won the 2026 FIFA World Cup?"),
+    )
+    sink = MemorySink()
+    try:
+        async with NativeApplication(state, sink, annotated=True, upstream=model) as native:
+            native.llm._uses_structured_research_output = lambda: bool(research.sources)
+            await native.utterance(b"\1\0" * 1024)
+            events = list(native.events)
+            assert model.calls == 2
+            search_tool_events = [
+                event
+                for event in events
+                if event.get("event") == "tool_completed"
+                and event.get("tool_name") == "web_search"
+            ]
+            assert search_tool_events and search_tool_events[0].get("ok"), search_tool_events
+            failure_diagnostics = [
+                (
+                    event.get("event"),
+                    event.get("reason", event.get("error_code")),
+                    event.get("response_characters"),
+                    event.get("citation_ids"),
+                    event.get("retained_source_ids"),
+                )
+                for event in events
+                if event.get("event")
+                in {"turn_failed", "llm_guardrail_termination", "llm_citation_check"}
+            ]
+            assert research.sources, [
+                message.get("content")
+                for message in model.histories[-1]
+                if isinstance(message, dict) and message.get("role") == "tool"
+            ]
+            assert set(research.evidence_passage_ids()) == {"S1-P1"}, [
+                sorted(research.sources),
+                sorted(research.projected_passage_ids),
+                failure_diagnostics,
+            ]
+            search_result = next(
+                json.loads(message["content"])
+                for message in model.histories[-1]
+                if isinstance(message, dict)
+                and message.get("role") == "tool"
+                and "untrusted_search_leads" in str(message.get("content", ""))
+            )
+            assert [row.get("evidence_status") for row in search_result["results"]] == [
+                "search_result_snippet",
+                "discovery_only",
+            ]
+            assert not any(event["event"] == "turn_failed" for event in events), failure_diagnostics
+            assert sum(event["event"] == "turn_completed" for event in events) == 1
+            assert not any(event["event"] == "turn_failed" for event in events)
+            assert [event["tool_name"] for event in events if event["event"] == "tool_completed"] == [
+                "web_search"
+            ]
+            assert sum(event["event"] == "tts_start" for event in events) == 1
+            assert sum(event["event"] == "tts_segment_summary" for event in events) == 1
+            evidence = research.sources["S1"]
+            assert evidence["kind"] == "untrusted_search_result"
+            assert evidence["evidence_status"] == "search_result_snippet"
+            assert evidence["extraction_method"] == "tavily_search_snippet"
+            assert evidence["fetched"] is False
+            assert set(native.llm.evidence_passage_ids()) == {"S1-P1"}
+            assert any(
+                event["event"] == "llm_citation_check" and event.get("evidence_valid")
+                for event in events
+            )
+            assistant = [
+                message.get("content")
+                for message in state.context.get_messages()
+                if message.get("role") == "assistant"
+                and isinstance(message.get("content"), str)
+            ]
+            assert assistant == ["Spain won the 2026 FIFA World Cup [S1]"]
+            assert sink.chunks
+    finally:
+        await state.close()
+
+
+async def test_unavailable_research_tool_does_not_fall_through_to_handler():
+    from me3_voice.providers import ToolCall
+    from me3_voice.speech import SpeechClient
+
+    class Model:
+        calls = 0
+
+        async def respond(self, history):
+            self.calls += 1
+            if self.calls == 1:
+                yield ToolCall("search", "web_search", {"query": "latest election result"})
+            else:
+                yield "I can't search the web right now."
+
+    research = ResearchClient()
+
+    async def forbidden_search(*args, **kwargs):
+        raise AssertionError("unavailable research must not invoke the search handler")
+
+    research.search = forbidden_search
+    model = Model()
+    state = NativeState(
+        research=research,
+        speech_factory=lambda: SpeechClient(transcript="Who won the latest election?"),
+    )
+    try:
+        async with NativeApplication(state, MemorySink(), annotated=True, upstream=model) as native:
+            await native.utterance(b"\1\0" * 1024)
+            event = next(
+                event
+                for event in native.events
+                if event.get("event") == "tool_completed"
+                and event.get("tool_name") == "web_search"
+            )
+            assert not event["ok"]
+            assert event["error_code"] == "research_unavailable"
+            assert event.get("diagnostics") is None
+            assert model.calls == 2
+            assert research.requests == 0
+    finally:
+        await state.close()
+
+
+async def test_structured_research_accepts_cited_natural_paraphrase_but_not_missing_or_fake_source():
+    passage_text = "Prime Minister Takaichi Sanae leads Japan's cabinet in November 2026."
+    source = {
+        "source_id": "S1",
+        "text": passage_text,
+        "evidence_passages": {"S1-P1": passage_text},
+    }
+    passage = {"source_id": "S1", "text": passage_text, "passage_id": "S1-P1"}
+    events = []
+    llm = NativeLLM(
+        BackendSpec(),
+        source_ids=lambda: {"S1"},
+        source_lookup=lambda source_id: source if source_id == "S1" else None,
+        evidence_passage_ids=lambda: {"S1-P1"},
+        evidence_passage_lookup=lambda _passage_id: passage,
+        on_event=lambda name, **fields: events.append({"event": name, **fields}),
+    )
+    try:
+        answer, failure, citations, invalid = llm._validate_structured_research_answer(
+            "Sanae Takaichi leads the Japanese cabinet [S1].",
+            question="Who is Japan's prime minister?",
+        )
+        assert answer == "Sanae Takaichi leads the Japanese cabinet [S1]."
+        assert failure is None and citations == ["S1"] and not invalid
+        assert any(event["event"] == "llm_cited_prose_accepted" for event in events)
+
+        missing, failure, _, _ = llm._validate_structured_research_answer(
+            "Sanae Takaichi leads the Japanese cabinet.",
+            question="Who is Japan's prime minister?",
+        )
+        assert missing is None and failure == "missing_research_citation"
+
+        invented, failure, _, invalid = llm._validate_structured_research_answer(
+            "Sanae Takaichi leads the Japanese cabinet [S9].",
+            question="Who is Japan's prime minister?",
+        )
+        assert invented is None and failure == "unsupported_source" and invalid
+    finally:
+        await llm._client.close()
+
+
+async def test_openrouter_research_format_repair_uses_ledger_and_finishes_once(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "research-format-repair-offline-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "requests.sqlite"))
+    monkeypatch.setenv("ME3_DISABLE_PROVIDER_RETRIES", "1")
+    requests = []
+    evidence_text = "Prime Minister Example attended the cabinet meeting."
+
+    async def completion(request):
+        body = await request.json()
+        requests.append(body)
+        sse.request = request
+        if len(requests) == 1:
+            deltas = [{"content": "This response does not match the JSON schema."}]
+        else:
+            deltas = [
+                {
+                    "content": json.dumps(
+                        {
+                            "claims": [
+                                {
+                                    "text": "Example is identified as prime minister.",
+                                    "passage_id": "S1-P1",
+                                }
+                            ]
+                        }
+                    )
+                }
+            ]
+        return await sse(
+            web.StreamResponse(headers={"Content-Type": "text/event-stream"}), deltas
+        )
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", completion)
+    async with TestServer(app) as server:
+        original = NativeLLM.create_client
+
+        def local_client(self, api_key=None, base_url=None, **kwargs):
+            return original(self, api_key=api_key, base_url=str(server.make_url("/v1")), **kwargs)
+
+        monkeypatch.setattr(NativeLLM, "create_client", local_client)
+        source = {
+            "source_id": "S1",
+            "url": "https://example.org/pm",
+            "text": evidence_text,
+            "evidence_passages": {"S1-P1": evidence_text},
+        }
+        passage = {"passage_id": "S1-P1", "source_id": "S1", "text": evidence_text}
+        events = []
+        llm = NativeLLM(
+            BackendSpec(
+                backend="external",
+                protocol="chat-completions-v1",
+                endpoint="https://openrouter.ai/api/v1/chat/completions",
+                auth_env="ME3_OPENROUTER_API_KEY",
+                model="openai/gpt-oss-120b",
+                allow_live=True,
+                request_limit=2,
+                max_input_tokens=32000,
+                max_input_tokens_total=64000,
+            ),
+            credentials={"ME3_OPENROUTER_API_KEY": "offline-fixture"},
+            source_ids=lambda: {"S1"},
+            source_lookup=lambda _source_id: source,
+            evidence_passage_ids=lambda: {"S1-P1"},
+            evidence_passage_lookup=lambda _passage_id: passage,
+            on_event=lambda name, **fields: events.append({"event": name, **fields}),
+        )
+        llm.new_turn()
+        llm.research_tool_calls = 1
+        context = LLMContext(
+            messages=[
+                {"role": "user", "content": "Who is the current prime minister?"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "retrieve-1",
+                            "type": "function",
+                            "function": {"name": "retrieve_source", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "retrieve-1",
+                    "content": json.dumps(
+                        {"source_id": "S1", "passage_ids": ["S1-P1"], "text": f"S1-P1: {evidence_text}"}
+                    ),
+                },
+            ]
+        )
+        try:
+            output = [item async for item in await llm.get_chat_completions(context)]
+            answer = "".join(item.choices[0].delta.content or "" for item in output)
+            assert answer == "Example is identified as prime minister [S1]."
+            assert len(requests) == 2
+            assert all(body["model"] == "openai/gpt-oss-120b" for body in requests)
+            assert all(body["response_format"]["type"] == "json_schema" for body in requests)
+            assert requests[1]["tool_choice"] == "none"
+            assert llm.calls == 2
+            assert llm.budget.requests == 2
+            assert llm.response_failure_reason is None
+            assert sum(event["event"] == "llm_grounding_check" for event in events) == 1
+            assert sum(event["event"] == "llm_structured_answer_repair_started" for event in events) == 1
+        finally:
+            await llm._client.close()
+
+
+async def test_openrouter_structured_output_is_added_only_after_retrieved_evidence():
+    from me3_voice.native_llm import RESEARCH_ANSWER_SCHEMA
+
+    spec = BackendSpec(
+        backend="external",
+        protocol="chat-completions-v1",
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        auth_env="ME3_OPENROUTER_API_KEY",
+        model="openai/gpt-oss-120b",
+        allow_live=True,
+        request_limit=2,
+        max_input_tokens=32000,
+        max_input_tokens_total=64000,
+    )
+    retained_sources = set()
+    retained_passages = set()
+    llm = NativeLLM(
+        spec,
+        credentials={"ME3_OPENROUTER_API_KEY": "offline-fixture"},
+        source_ids=lambda: retained_sources,
+        evidence_passage_ids=lambda: retained_passages,
+    )
+    try:
+        context = LLMContext(messages=[{"role": "user", "content": "Who is the prime minister?"}])
+        ordinary = await llm._prepare_provider_params(context)
+        assert "response_format" not in ordinary
+
+        llm.research_tool_calls = 1
+        # Search leads alone do not enable grounded final formatting. Once the
+        # alternate retrieval is retained as S1-P1, constrain the schema to it.
+        assert "response_format" not in await llm._prepare_provider_params(context)
+        retained_sources.add("S1")
+        retained_passages.add("S1-P1")
+        structured = await llm._prepare_provider_params(context)
+        response_format = structured["response_format"]
+        assert response_format["type"] == "json_schema"
+        assert response_format["json_schema"]["strict"] is True
+        schema = response_format["json_schema"]["schema"]
+        assert schema["properties"]["claims"]["items"]["properties"]["passage_id"] == {
+            "type": "string",
+            "enum": ["S1-P1"],
+        }
+        assert structured["extra_body"]["provider"]["require_parameters"] is True
+
+        # A recovered alternate becomes a retained source before the final
+        # request; the enum then follows the exact current evidence set.
+        retained_sources.update({"S2", "S10"})
+        retained_passages.update({"S2-P3", "S10-P1"})
+        multiple = await llm._prepare_provider_params(context)
+        source_enum = multiple["response_format"]["json_schema"]["schema"]["properties"]["claims"][
+            "items"
+        ]["properties"]["passage_id"]["enum"]
+        assert source_enum == ["S1-P1", "S2-P3", "S10-P1"]
+        assert (
+            "enum"
+            not in RESEARCH_ANSWER_SCHEMA["properties"]["claims"]["items"]["properties"][
+                "passage_id"
+            ]
+        )
     finally:
         await llm._client.close()
 
@@ -661,6 +2138,90 @@ async def sse(response, deltas, *, finish="stop", terminal_count=1):
     await response.write(b"data: [DONE]\n\n")
     await response.write_eof()
     return response
+
+
+async def test_openrouter_gpt_oss_native_sdk_streams_tool_call_and_uses_budget(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "openrouter-native-test-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "requests.sqlite"))
+    monkeypatch.setenv("ME3_DISABLE_PROVIDER_RETRIES", "1")
+    requests = []
+
+    async def completion(request):
+        body = await request.json()
+        requests.append(body)
+        sse.request = request
+        return await sse(
+            web.StreamResponse(headers={"Content-Type": "text/event-stream"}),
+            [
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "openrouter-call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "web_search",
+                                "arguments": '{"query":"Michigan Senate',
+                            },
+                        }
+                    ]
+                },
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {"arguments": ' election"}'},
+                        }
+                    ]
+                },
+            ],
+            finish="tool_calls",
+        )
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", completion)
+    async with TestServer(app) as server:
+        original = NativeLLM.create_client
+
+        def local_client(self, api_key=None, base_url=None, **kwargs):
+            return original(self, api_key=api_key, base_url=str(server.make_url("/v1")), **kwargs)
+
+        monkeypatch.setattr(NativeLLM, "create_client", local_client)
+        spec = BackendSpec(
+            backend="external",
+            protocol="chat-completions-v1",
+            endpoint="https://openrouter.ai/api/v1/chat/completions",
+            auth_env="ME3_OPENROUTER_API_KEY",
+            model="openai/gpt-oss-120b",
+            allow_live=True,
+            request_limit=1,
+            max_input_tokens=32000,
+            max_input_tokens_total=64000,
+        )
+        llm = NativeLLM(spec, credentials={"ME3_OPENROUTER_API_KEY": "offline-fixture"})
+        llm.new_turn()
+        try:
+            chunks = [
+                chunk
+                async for chunk in await llm.get_chat_completions(
+                    LLMContext(messages=[{"role": "user", "content": "Search Michigan Senate"}])
+                )
+            ]
+            calls = [call for item in chunks for call in (item.choices[0].delta.tool_calls or [])]
+            assert calls
+            assert calls[0].id == "openrouter-call-1"
+            assert calls[0].function.name == "web_search"
+            arguments = "".join(call.function.arguments or "" for call in calls)
+            assert json.loads(arguments) == {"query": "Michigan Senate election"}
+            assert requests[0]["model"] == "openai/gpt-oss-120b"
+            assert requests[0]["stream"] is True
+            assert "reasoning_effort" not in requests[0]
+            assert "extra_body" not in requests[0]
+            assert llm.budget.requests == 1
+        finally:
+            await llm._client.close()
 
 
 async def test_actual_sdk_tool_research_followup_and_mcp(monkeypatch, tmp_path):
@@ -771,11 +2332,35 @@ async def test_actual_sdk_tool_research_followup_and_mcp(monkeypatch, tmp_path):
                     len([e for e in native.events if e["event"] == "tool_result_callback_returned"])
                     == 5
                 )
-                assert len(
-                    [e for e in native.events if e["event"] == "llm_duplicate_finalization_suppressed"]
-                ) == 1
-                assert len([e for e in native.events if e["event"] == "tts_start"]) == 2
-                assert len([e for e in native.events if e["event"] == "turn_completed"]) == 2
+                completed_responses = [
+                    response
+                    for response in native.response_records.values()
+                    if response["response_state"] == "completed"
+                ]
+                assert len(completed_responses) == 2
+                assert all(
+                    response["generated_text"].count("The measured result is 37 units [S1].") == 1
+                    for response in completed_responses
+                )
+                assert all(
+                    len(response["tts_segments"]) == 1
+                    and response["tts_segments"][0]["state"] == "completed"
+                    for response in completed_responses
+                )
+                assert (
+                    len(
+                        [
+                            event
+                            for event in native.events
+                            if event["event"] == "llm_duplicate_finalization_suppressed"
+                        ]
+                    )
+                    == 1
+                )
+                assert (
+                    len([event for event in native.events if event["event"] == "turn_completed"])
+                    == 2
+                )
             assert len(requests) == 7 and all(r["stream"] for r in requests)
             assert all(
                 r["include_reasoning"] is False and not r["parallel_tool_calls"] for r in requests
@@ -787,18 +2372,17 @@ async def test_actual_sdk_tool_research_followup_and_mcp(monkeypatch, tmp_path):
                 for m in requests[-1]["messages"]
             )
             assert len([m for m in state.context.get_messages() if m.get("role") == "user"]) == 2
-            assistant_text = " ".join(
-                message.get("content", "")
-                for message in state.context.get_messages()
-                if message.get("role") == "assistant" and isinstance(message.get("content"), str)
-            )
-            assert assistant_text.count("The measured result is 37 units [S1].") == 2
         finally:
             await state.close()
 
 
-async def test_native_research_failure_context_loop_guard_and_grounding_fallback():
+async def test_native_research_failure_context_loop_guard_and_grounding_fallback(
+    tmp_path, monkeypatch
+):
     from me3_voice.providers import ToolCall
+
+    monkeypatch.setenv("ME3_TASK_DATABASE", str(tmp_path / "research-loop.sqlite"))
+    monkeypatch.setenv("ME3_TASK_WORKSPACE", str(tmp_path / "research-loop-workspace"))
 
     class ScriptedModel:
         def __init__(self):
@@ -834,7 +2418,7 @@ async def test_native_research_failure_context_loop_guard_and_grounding_fallback
             "results": [{"url": "https://official.example/ecb", "title": "ECB lead"}],
         }
 
-    async def retrieve(_url):
+    async def retrieve(_url, *, allow_extract_fallback=True):
         raise ResearchError("source_http_failure")
 
     research.search = search
@@ -854,12 +2438,6 @@ async def test_native_research_failure_context_loop_guard_and_grounding_fallback
             assert not state.research.sources
             assert sink.chunks
 
-        results = [m for m in model.requests[-1] if m.get("role") == "tool"]
-        assert any('"error": "source_http_failure"' in (m.get("content") or "") for m in results)
-        assert any(
-            '"error": "repeated_tool_operation_blocked"' in (m.get("content") or "")
-            for m in results
-        )
         assert "Christine Lagarde leads" not in "".join(
             m.get("content", "")
             for m in state.context.get_messages()
@@ -886,53 +2464,116 @@ async def test_native_research_failure_context_loop_guard_and_grounding_fallback
         await state.close()
 
 
-async def test_two_failed_source_retrievals_end_turn_without_another_model_request():
+@pytest.mark.parametrize(
+    ("request_limit", "primary_error", "primary_fallback_error"),
+    [
+        (3, "research_http_failure", None),
+        (5, "research_http_failure", "source_too_large"),
+    ],
+)
+async def test_native_retrieves_alternate_lead_before_research_continues(
+    tmp_path, request_limit, primary_error, primary_fallback_error
+):
     from me3_voice.providers import ToolCall
+    from me3_voice.speech import SpeechClient
 
-    class ScriptedModel:
+    class TaskSpy:
         def __init__(self):
-            self.requests = []
+            self.calls = []
 
-        async def respond(self, history):
-            self.requests.append(json.loads(json.dumps(history)))
-            step = len(self.requests)
-            if step in {1, 3}:
+        async def execute(self, key, call):
+            self.calls.append((key, call))
+            return {"ok": True}
+
+        async def close(self):
+            pass
+
+    class Model:
+        def __init__(self):
+            self.calls = []
+
+        async def respond(self, _history):
+            self.calls.append(len(self.calls) + 1)
+            step = len(self.calls)
+            if step == 1:
+                yield ToolCall("search-1", "web_search", {"query": "latest senate result"})
+            elif step == 2:
                 yield ToolCall(
-                    f"search-{step}",
-                    "web_search",
-                    {"query": f"official source retry {step}", "max_results": 2},
+                    "fetch-1", "retrieve_source", {"url": "https://source.example/failed"}
                 )
+            elif step == 3:
+                # This tool is hidden and must be rejected while research is active.
+                yield ToolCall("unrelated-light", "set_mock_light", {"enabled": False})
             else:
-                yield ToolCall(
-                    f"retrieve-{step}",
-                    "retrieve_source",
-                    {"url": f"https://official{step}.example/report"},
-                )
+                yield "The dated source supports the result [S1]."
 
-    model = ScriptedModel()
-    research = ResearchClient(ResearchOptions(True, 8))
-    retrievals = []
+    research = ResearchClient(ResearchOptions(True, request_limit))
+    searches = []
+    retrieved = []
+    search_timing = {}
 
     async def search(query, max_results=5):
-        return {
+        searches.append(query)
+        if len(searches) == 1:
+            # Deterministically cross the production progress-cue threshold;
+            # the search must already be running while the cue is spoken.
+            search_timing["started"] = time.monotonic()
+            await asyncio.sleep(0.75)
+            search_timing["finished"] = time.monotonic()
+        research.requests += 1  # Tavily search HTTP request.
+        result = {
             "kind": "untrusted_search_leads",
             "query": query,
-            "results": [],
+            "results": [
+                {"url": "https://source.example/failed", "title": "Primary result"},
+                {"url": "https://source.example/alternate", "title": "Alternative result"},
+            ],
         }
+        research._remember_search_leads(result)
+        return result
 
-    async def retrieve(url):
-        retrievals.append(url)
-        raise ResearchError(
-            "research_http_failure",
-            status=503,
-            host=urlsplit(url).hostname,
-            stage="http_status",
-            failure_class="non_success_status",
-        )
+    async def retrieve(url, *, allow_extract_fallback=True):
+        retrieved.append((url, allow_extract_fallback))
+        research.requests += 1  # Direct source fetch.
+        if url.endswith("failed"):
+            research.failed_retrieval_urls.add(url)
+            fallback_error = None
+            if allow_extract_fallback and primary_fallback_error:
+                research.requests += 1  # Tavily Extract fallback.
+                fallback_error = {
+                    "error": primary_fallback_error,
+                    "stage": "response_body",
+                    "failure_class": "body_limit",
+                }
+            raise ResearchError(
+                primary_error,
+                status=403,
+                host="source.example",
+                stage="http_status",
+                failure_class="non_success_status",
+                fallback_status="failed" if fallback_error else None,
+                fallback_error=fallback_error,
+            )
+        source = {
+            "source_id": "S1",
+            "url": url,
+            "title": "Certified result",
+            "text": "The statewide result was certified on November 12, and this source identifies the completed Senate election and winner.",
+            "text_sha256": "a" * 64,
+            "evidence_status": "retrieved_unverified",
+        }
+        research.sources["S1"] = source
+        return source
 
     research.search = search
     research.retrieve = retrieve
-    state = NativeState(research=research)
+    model = Model()
+    task_spy = TaskSpy()
+    state = NativeState(
+        research=research,
+        tasks=task_spy,
+        speech_factory=lambda: SpeechClient(transcript="Who won the latest Senate election?"),
+    )
     try:
         async with NativeApplication(
             state,
@@ -942,33 +2583,395 @@ async def test_two_failed_source_retrievals_end_turn_without_another_model_reque
             options=RuntimeOptions(engine="native"),
         ) as native:
             await native.utterance(b"\1\0" * 1024)
-            assert native.terminal_failure_code == "research_retrieval_failures_exhausted"
-            completed = [event for event in native.events if event["event"] == "tool_completed"]
-            retrieval_events = [
-                event for event in completed if event["tool_name"] == "retrieve_source"
-            ]
-            assert len(retrieval_events) == 2
-            assert [event["diagnostics"]["http_status"] for event in retrieval_events] == [503, 503]
-            assert all(event["diagnostics"]["stage"] == "http_status" for event in retrieval_events)
-            assert all(
-                event["source_origin"].startswith("https://official") for event in retrieval_events
-            )
-            assert all("/report" not in event["source_origin"] for event in retrieval_events)
-            assert len(retrievals) == 2
-            assert len(model.requests) == 4
-            assert any(
-                event.get("reason") == "research_retrieval_failures_exhausted"
+            assert any(event["event"] == "turn_completed" for event in native.events)
+            progress = [
+                event
                 for event in native.events
-                if event["event"] == "llm_guardrail_termination"
+                if event["event"] == "research_acknowledgment_queued"
+            ]
+            search_start = next(
+                event
+                for event in native.events
+                if event["event"] == "tool_started" and event["tool_name"] == "web_search"
             )
+            assert len(progress) == 1
+            assert progress[0]["tool_call_id"] == search_start["tool_call_id"]
+            assert search_timing["started"] < progress[0]["at"] < search_timing["finished"]
+            event_names = [event["event"] for event in native.events]
+            search_started = next(
+                index
+                for index, event in enumerate(native.events)
+                if event["event"] == "tool_started" and event["tool_name"] == "web_search"
+            )
+            search_completed = next(
+                index
+                for index, event in enumerate(native.events)
+                if event["event"] == "tool_completed" and event["tool_name"] == "web_search"
+            )
+            ack_queued = event_names.index("research_acknowledgment_queued")
+            assert search_started < ack_queued < search_completed
+            assert event_names.count("tts_progress_started") == 1
+            assert event_names.count("tts_progress_stop_queued") == 1
+            assert event_names.count("tts_start") == 1
+            progress_audio = next(
+                event for event in native.events if event["event"] == "tts_progress_segment_summary"
+            )
+            assert progress_audio["status"] == "completed"
+            assert progress_audio["at"] < search_timing["finished"]
+            assert event_names.count("turn_completed") == 1
+            assert native.research_recovery_active
+            available = native.available_tool_schemas(
+                research.options,
+                research.requests,
+                research.sources,
+                research_recovery=True,
+            )
+            available_names = {schema.name for schema in available}
+            assert {"web_search", "retrieve_source", "verify_evidence"} >= available_names
+            assert "set_mock_light" not in available_names
+            blocked = next(
+                event
+                for event in native.events
+                if event["event"] == "tool_operation_blocked"
+                and event.get("tool_name") == "set_mock_light"
+            )
+            assert blocked["error_code"] == "tool_unavailable_during_research"
+            assert not task_spy.calls
+            progress_response_id = next(
+                event["response_id"]
+                for event in native.events
+                if event["event"] == "tts_progress_started"
+            )
+            assert progress_response_id not in native.response_records
+            recovered = next(
+                event
+                for event in native.events
+                if event["event"] == "research_alternate_source_succeeded"
+            )
+            assert recovered["source_id"] == "S1"
+            assert (
+                recovered["source_url_hash"]
+                == hashlib.sha256(b"https://source.example/alternate").hexdigest()[:16]
+            )
+            retrieval_event = next(
+                event
+                for event in native.events
+                if event["event"] == "tool_completed" and event["tool_name"] == "retrieve_source"
+            )
+            assert retrieval_event["ok"]
+            assert retrieval_event["source_origin"] == "https://source.example"
+            assert retrieval_event["diagnostics"]["source_id"] == "S1"
+            assert retrieval_event["diagnostics"]["source_url_hash"] == recovered["source_url_hash"]
+            assert native.llm.research_retrievals == 2
+        assert searches == ["latest senate result"]
+        assert retrieved[0][0] == "https://source.example/failed"
+        assert retrieved[0][1] is (request_limit == 5)
+        assert retrieved[1] == ("https://source.example/alternate", True)
+        assert research.requests <= request_limit
+        assert "[S1]" in next(
+            message["content"]
+            for message in reversed(state.context.get_messages())
+            if message.get("role") == "assistant" and isinstance(message.get("content"), str)
+        )
+    finally:
+        await state.close()
+
+
+@pytest.mark.parametrize("retrieve_another_source", [False, True])
+async def test_two_failed_source_retrievals_allow_remaining_lead_recovery(retrieve_another_source):
+    from me3_voice.providers import ToolCall
+
+    class ScriptedModel:
+        def __init__(self):
+            self.requests = []
+
+        async def respond(self, history):
+            self.requests.append(json.loads(json.dumps(history)))
+            step = len(self.requests)
+            if step == 1:
+                yield ToolCall(
+                    "search-1",
+                    "web_search",
+                    {"query": "current Japan prime minister", "max_results": 3},
+                )
+            elif step == 2:
+                yield ToolCall(
+                    "retrieve-initial-source",
+                    "retrieve_source",
+                    {"url": "https://official.example/primary"},
+                )
+            elif step == 3:
+                yield ToolCall(
+                    "retrieve-broken-page",
+                    "retrieve_source",
+                    {"url": "https://encyclopedia.example/broken"},
+                )
+            elif step == 4 and retrieve_another_source:
+                yield ToolCall(
+                    "retrieve-third-lead",
+                    "retrieve_source",
+                    {"url": "https://verified.example/japan"},
+                )
+            else:
+                source_id = "S2" if retrieve_another_source else "S1"
+                yield f"Sanae Takaichi is Japan's prime minister [{source_id}]."
+
+    model = ScriptedModel()
+    research = ResearchClient(ResearchOptions(True, 8))
+    retrievals = []
+    searches = []
+
+    async def search(query, max_results=5):
+        searches.append(query)
+        research.requests += 1
+        result = {
+            "kind": "untrusted_search_leads",
+            "query": query,
+            "results": [
+                {"url": "https://official.example/primary", "title": "Primary result"},
+                {"url": "https://encyclopedia.example/broken", "title": "Encyclopedia result"},
+                {"url": "https://alternate.example/broken", "title": "Alternate result"},
+                {"url": "https://verified.example/japan", "title": "Japan prime minister"},
+                {"url": "https://remaining.example/japan", "title": "More Japan reporting"},
+            ],
+        }
+        research._remember_search_leads(result)
+        return result
+
+    async def retrieve(url, *, allow_extract_fallback=True):
+        retrievals.append(url)
+        research.requests += 1
+        if url in {
+            "https://encyclopedia.example/broken",
+            "https://alternate.example/broken",
+        }:
+            research.failed_retrieval_urls.add(url)
+            raise ResearchError(
+                "research_http_failure",
+                status=403,
+                host=urlsplit(url).hostname,
+                stage="http_status",
+                failure_class="non_success_status",
+            )
+        research.next_id += 1
+        source = {
+            "source_id": f"S{research.next_id}",
+            "url": url,
+            "title": "Japan prime minister official source",
+            "text": "Sanae Takaichi is Japan's prime minister.",
+            "kind": "untrusted_retrieved_source",
+        }
+        research._ensure_evidence_passages(source)
+        research.sources[source["source_id"]] = source
+        return source
+
+    research.search = search
+    research.retrieve = retrieve
+    state = NativeState(research=research)
+    sink = MemorySink()
+    try:
+        async with NativeApplication(
+            state,
+            sink,
+            annotated=True,
+            upstream=model,
+            options=RuntimeOptions(engine="native"),
+        ) as native:
+            await native.utterance(b"\1\0" * 1024)
+            assert native.terminal_failure_code is None
+            answer_source = "S2" if retrieve_another_source else "S1"
+            completed = [event for event in native.events if event["event"] == "tool_completed"]
+            retrieval_event = next(
+                event
+                for event in completed
+                if event["tool_name"] == "retrieve_source"
+                and event["ok"]
+                and event["diagnostics"].get("source_id") == answer_source
+            )
+            assert retrieval_event["diagnostics"]["source_id"] == answer_source
+            failures = [
+                event
+                for event in native.events
+                if event["event"] == "research_alternate_source_failed"
+            ]
+            assert len(failures) == 1
+            assert searches == ["current Japan prime minister"]
+            expected_retrievals = [
+                "https://official.example/primary",
+                "https://encyclopedia.example/broken",
+                "https://alternate.example/broken",
+            ]
+            if retrieve_another_source:
+                expected_retrievals.append("https://verified.example/japan")
+            assert retrievals == expected_retrievals
+            assert len(model.requests) == (5 if retrieve_another_source else 4)
+            recovery_context = json.dumps(model.requests[3], ensure_ascii=False)
+            assert "S1-P1" in recovery_context
+            assert "verified.example/japan" in recovery_context
+            assert native.llm.retrieval_failures == 2
+            assert native.llm.research_retrievals == (4 if retrieve_another_source else 3)
+            failure_limits = [
+                event["failure_limit"]
+                for event in native.events
+                if event["event"] == "research_retrieval_failure"
+            ]
+            assert failure_limits == [5, 5]
+            assert state.research.sources["S1"]["url"] == "https://official.example/primary"
+            if retrieve_another_source:
+                assert state.research.sources["S2"]["url"] == "https://verified.example/japan"
+                expected_alternatives = ["https://remaining.example/japan"]
+            else:
+                expected_alternatives = [
+                    "https://verified.example/japan",
+                    "https://remaining.example/japan",
+                ]
+            assert [lead["url"] for lead in state.research.alternative_leads()] == [
+                *expected_alternatives
+            ]
+            assert any(event["event"] == "turn_completed" for event in native.events)
+            assert not any(event["event"] == "turn_failed" for event in native.events)
+            assert sink.chunks and all(chunk and len(chunk) % 2 == 0 for chunk in sink.chunks)
             spoken = " ".join(
                 message.get("content", "")
                 for message in state.context.get_messages()
                 if message.get("role") == "assistant" and isinstance(message.get("content"), str)
             )
-            assert "can't give a confident answer" in spoken
-            assert "official" not in spoken
+            assert f"Sanae Takaichi is Japan's prime minister [{answer_source}]." in spoken
     finally:
+        await state.close()
+
+
+async def test_native_research_final_request_is_interrupted_then_followup_completes_once():
+    from me3_voice.providers import ToolCall
+    from me3_voice.speech import SpeechClient
+
+    class Model:
+        def __init__(self):
+            self.japan_calls = 0
+            self.final_started = asyncio.Event()
+            self.final_cancelled = asyncio.Event()
+            self.followup_answered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def respond(self, history):
+            latest = next(
+                row["content"]
+                for row in reversed(history)
+                if row.get("role") == "user" and isinstance(row.get("content"), str)
+            ).casefold()
+            if "japan" in latest:
+                self.japan_calls += 1
+                if self.japan_calls == 1:
+                    yield ToolCall("japan-search", "web_search", {"query": "Japan prime minister"})
+                elif self.japan_calls == 2:
+                    yield ToolCall(
+                        "japan-fetch",
+                        "retrieve_source",
+                        {"url": "https://official.example/japan"},
+                    )
+                else:
+                    self.final_started.set()
+                    try:
+                        await self.release.wait()
+                        yield "Sanae Takaichi is Japan's prime minister [S1]."
+                    finally:
+                        self.final_cancelled.set()
+                return
+            if "governor" in latest:
+                self.followup_answered.set()
+                yield "Gretchen Whitmer is Michigan's governor."
+                return
+            yield "Please clarify."
+
+    model = Model()
+    research = ResearchClient(ResearchOptions(True, 4))
+
+    async def search(query, max_results=5):
+        result = {
+            "kind": "untrusted_search_leads",
+            "query": query,
+            "results": [{"url": "https://official.example/japan", "title": "Official profile"}],
+        }
+        research._remember_search_leads(result)
+        return result
+
+    async def retrieve(url, *, allow_extract_fallback=True):
+        text = "Sanae Takaichi is Japan's prime minister."
+        source = {
+            "source_id": "S1",
+            "url": url,
+            "title": "Official profile",
+            "text": text,
+            "text_sha256": "a" * 64,
+            "evidence_status": "retrieved_unverified",
+        }
+        research.sources["S1"] = source
+        return source
+
+    research.search = search
+    research.retrieve = retrieve
+    state = NativeState(
+        research=research,
+        speech_factory=lambda: SpeechClient(
+            transcript=["Who is the prime minister of Japan?", "Who is Michigan's governor?"]
+        ),
+    )
+    sink = MemorySink()
+    try:
+        async with NativeApplication(state, sink, annotated=True, upstream=model) as native:
+            await native.utterance(b"\1\0" * 1024, wait=False)
+            await asyncio.wait_for(model.final_started.wait(), timeout=5)
+
+            # A new VAD turn supersedes the pending final answer; the same
+            # native session must then handle the new utterance normally.
+            await native.utterance(b"\1\0" * 1024, wait=False)
+            await asyncio.wait_for(model.followup_answered.wait(), timeout=5)
+            await asyncio.wait_for(native.settled.wait(), timeout=5)
+            await asyncio.wait_for(model.final_cancelled.wait(), timeout=5)
+
+            terminals = [
+                event
+                for event in native.events
+                if event["event"] in {"turn_completed", "turn_failed", "turn_error", "turn_interrupted"}
+            ]
+            assert [(event["turn_id"], event["event"]) for event in terminals] == [
+                (1, "turn_interrupted"),
+                (2, "turn_completed"),
+            ]
+            request_terminals = [
+                event
+                for event in native.events
+                if event["event"] == "llm_stream_terminal"
+                and event.get("turn_id") == 1
+            ]
+            assert request_terminals, [
+                event
+                for event in native.events
+                if event["event"].startswith("llm_")
+                or event["event"] in {"turn_started", "turn_interrupted", "turn_completed"}
+            ]
+            first_request = next(
+                event
+                for event in request_terminals
+                if event.get("outcome") in {"cancelled", "superseded"}
+            )
+            assert first_request["request_id"]
+            assert sum(
+                event["event"] == "turn_completed" and event["turn_id"] == 2
+                for event in native.events
+            ) == 1
+            completed = [
+                row
+                for row in native.response_records.values()
+                if row["response_state"] == "completed"
+            ]
+            assert len(completed) == 1
+            assert completed[0]["generated_text"] == "Gretchen Whitmer is Michigan's governor."
+            assert len(completed[0]["tts_segments"]) == 1
+            assert completed[0]["tts_segments"][0]["state"] == "completed"
+            assert sink.chunks
+    finally:
+        model.release.set()
         await state.close()
 
 

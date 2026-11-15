@@ -440,7 +440,19 @@ class LiveTransport:
 
     @asynccontextmanager
     async def socket(self, params):
-        key, request_id = self.authorize()
+        # SQLite may wait for a writer/filesystem. Keep the MCP control loop
+        # responsive while preserving reservation-before-network ordering.
+        reservation = asyncio.create_task(asyncio.to_thread(self.authorize))
+        try:
+            key, request_id = await asyncio.shield(reservation)
+        except asyncio.CancelledError:
+            # No network dispatch follows cancellation. An eventual durable
+            # reservation remains consumed, with a terminal unknown outcome.
+            result = (await asyncio.gather(reservation, return_exceptions=True))[0]
+            if not isinstance(result, BaseException):
+                _key, request_id = result
+                await asyncio.to_thread(self.finish_request, request_id, "unknown")
+            raise
         outcome, error_code = "unknown", None
         socket = None
         self.last_websocket_timing = {"request_reserved_monotonic": time.monotonic()}
@@ -1250,6 +1262,18 @@ class DeepgramASRStream:
             self.writer_task = asyncio.create_task(self._write_outbound())
         except asyncio.CancelledError:
             raise
+        except TimeoutError as exc:
+            self.connection_failed_at = time.monotonic()
+            self.background_error = ProviderError(
+                "ASR connection did not become ready within its configured deadline",
+                code="provider_timeout",
+                role="asr",
+                error_stage="asr_open",
+                error_boundary="deepgram_websocket",
+                error_detail="TimeoutError",
+                cause_type=_cause_type(exc),
+            )
+            raise self.background_error from None
         except Exception as exc:
             self.connection_failed_at = time.monotonic()
             self.background_error = exc
@@ -1273,6 +1297,13 @@ class DeepgramASRStream:
         if not isinstance(code, str) or not re.fullmatch(r"[a-z0-9_]{1,48}", code):
             code = None
         transport_times = getattr(self.provider.transport, "last_websocket_timing", {})
+        # The transport is reused across utterances. Before this connection's
+        # reservation finishes, its snapshot can still describe the last stream.
+        attempt_at = transport_times.get("websocket_handshake_monotonic")
+        if self.connection_started_at is not None and (
+            not isinstance(attempt_at, (int, float)) or attempt_at < self.connection_started_at
+        ):
+            transport_times = {}
         stage_keys = (
             "dns_started",
             "dns_completed",
@@ -1552,8 +1583,11 @@ class DeepgramTTS:
     # Longer idle periods release the provider connection/concurrency slot.
     IDLE_CLOSE_SECONDS = 15.0
 
-    def __init__(self, spec, transport=None):
+    def __init__(self, spec, transport=None, *, mcp_call_timeout=None):
         self.spec, self.transport = spec, transport or LiveTransport(spec)
+        self.mcp_call_timeout = float(
+            spec.timeout_seconds if mcp_call_timeout is None else mcp_call_timeout
+        )
         self._last_diagnostics = None
         self._connection = None
         self._active = False
@@ -1582,6 +1616,8 @@ class DeepgramTTS:
             "submitted_characters": len(text),
             "provider_pcm_packets": 0,
             "provider_pcm_bytes": 0,
+            "provider_receive_wait_seconds": 0.0,
+            "consumer_pause_seconds": 0.0,
         }
         self._last_diagnostics = metrics
         complete = False
@@ -1598,8 +1634,7 @@ class DeepgramTTS:
                     if self._connection is not None and (
                         getattr(self._connection.socket.peer, "closed", False)
                         or self._last_flushed_at is not None
-                        and time.monotonic() - self._last_flushed_at
-                        >= self._reuse_idle_seconds()
+                        and time.monotonic() - self._last_flushed_at >= self._reuse_idle_seconds()
                     ):
                         await self._close_connection()
                     key, request_id = self.transport.authorize()
@@ -1630,13 +1665,25 @@ class DeepgramTTS:
                     connection = self._connection
                     peer = connection.socket
                     peer.begin_operation()
+                    # A provider receive timeout must fire before the server's
+                    # bounded tts_next deadline, leaving time to close the
+                    # generator and serialize its sanitized diagnostics before
+                    # the MCP client reaches its unchanged outer deadline.
+                    provider_timeout = self.mcp_call_timeout - max(0.1, self.mcp_call_timeout * 0.2)
+                    peer.timeout = max(0.05, min(self.spec.timeout_seconds, provider_timeout))
                     metrics["socket_ready_monotonic"] = time.monotonic()
                     await peer.send({"type": "Speak", "text": text})
                     metrics["first_text_submitted_monotonic"] = time.monotonic()
                     await peer.send({"type": "Flush"})
                     metrics["flush_submitted_monotonic"] = time.monotonic()
                     while True:
-                        value = await peer.receive()
+                        receive_started = time.monotonic()
+                        try:
+                            value = await peer.receive()
+                        finally:
+                            metrics["provider_receive_wait_seconds"] += (
+                                time.monotonic() - receive_started
+                            )
                         if isinstance(value, bytes):
                             metrics["provider_pcm_packets"] += 1
                             metrics["provider_pcm_bytes"] += len(value)
@@ -1649,7 +1696,13 @@ class DeepgramTTS:
                             # retain only a possible odd byte across wire messages.
                             while len(pending) >= 2:
                                 size = min(FRAME_BYTES, len(pending) // 2 * 2)
-                                yield bytes(pending[:size])
+                                delivered = time.monotonic()
+                                try:
+                                    yield bytes(pending[:size])
+                                finally:
+                                    metrics["consumer_pause_seconds"] += (
+                                        time.monotonic() - delivered
+                                    )
                                 del pending[:size]
                         elif value.get("type") == "Flushed":
                             if pending or not metrics["provider_pcm_bytes"]:
@@ -2180,13 +2233,14 @@ class ChatReasoning:
                 "function": {"name": selected_tool},
             }
         if self.spec.endpoint == "https://openrouter.ai/api/v1/chat/completions":
-            if not (self.spec.model.endswith(":free") or self.spec.model == "openrouter/free"):
-                raise ProviderError("OpenRouter reasoning requires an explicit free model")
-            body["provider"] = {
-                "max_price": {"prompt": 0, "completion": 0},
-                "require_parameters": True,
-                "allow_fallbacks": True,
-            }
+            if self.spec.model.endswith(":free") or self.spec.model == "openrouter/free":
+                body["provider"] = {
+                    "max_price": {"prompt": 0, "completion": 0},
+                    "require_parameters": True,
+                    "allow_fallbacks": True,
+                }
+            elif self.spec.model != "openai/gpt-oss-120b":
+                raise ProviderError("OpenRouter model is not enabled by the project contract")
         # An active voice turn remains pending until the model responds, the
         # user interrupts, or the connection fails. The session's mic stays
         # available for barge-in, so an arbitrary total response deadline is

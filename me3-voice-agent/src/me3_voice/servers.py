@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from functools import wraps
 import re
+from contextlib import suppress
 
 from .remote import ProviderError
 from .english import EnglishTextRejected
@@ -43,6 +44,7 @@ class Operation:
     tts_pcm_chunks: int = 0
     tts_pcm_bytes: int = 0
     tts_status: str = "running"
+    tts_terminal_diagnostics: dict[str, Any] | None = None
 
 
 class SpeechService:
@@ -52,8 +54,21 @@ class SpeechService:
     cancelling always releases the generator; process shutdown is the final fence.
     """
 
-    def __init__(self, asr: ASRProvider, tts: TTSProvider, clock=time.monotonic):
+    def __init__(
+        self,
+        asr: ASRProvider,
+        tts: TTSProvider,
+        clock=time.monotonic,
+        *,
+        call_timeout: float = 5.0,
+    ):
+        if type(call_timeout) not in (int, float) or not 0.1 <= call_timeout <= 120:
+            raise ValueError("invalid speech MCP call timeout")
         self.asr, self.tts, self.clock = asr, tts, clock
+        self.call_timeout = float(call_timeout)
+        self.tts_operation_timeout = max(
+            0.05, self.call_timeout - min(0.5, self.call_timeout * 0.1)
+        )
         self.operations: dict[str, Operation] = {}
 
     async def dispose(self, op):
@@ -148,6 +163,8 @@ class SpeechService:
         }
 
     def tts_diagnostics(self, op):
+        if op.tts_terminal_diagnostics is not None:
+            return op.tts_terminal_diagnostics
         provider_snapshot = getattr(self.tts, "diagnostics", None)
         provider = provider_snapshot() if callable(provider_snapshot) else None
         return {
@@ -291,9 +308,11 @@ class SpeechService:
         try:
             result = await self.work(operation_id, op, op.asr_stream.finish())
             final = self.recognition(op, result, final=True)
-        except BaseException:
+        except BaseException as exc:
             self.operations.pop(operation_id, None)
             await self.dispose(op)
+            if isinstance(exc, ProviderError):
+                exc.asr_diagnostics = self.provider_diagnostics(op)
             raise
         self.operations.pop(operation_id, None)
         await self.dispose(op)
@@ -312,7 +331,18 @@ class SpeechService:
         if op.tts_first_next_at is None:
             op.tts_first_next_at = request_started
         try:
-            pcm = await self.work(operation_id, op, anext(op.iterator, None))
+            try:
+                async with asyncio.timeout(self.tts_operation_timeout):
+                    pcm = await self.work(operation_id, op, anext(op.iterator, None))
+            except TimeoutError as exc:
+                raise ProviderError(
+                    "TTS next operation exceeded its bounded MCP deadline",
+                    code="provider_timeout",
+                    role="tts",
+                    error_stage="tts_next",
+                    error_boundary="speech_mcp_server",
+                    error_detail=type(exc).__name__,
+                ) from None
             op.tts_next_seconds.append(self.clock() - request_started)
             op.tts_last_next_at = self.clock()
             if self.operations.get(operation_id) is not op:
@@ -347,9 +377,17 @@ class SpeechService:
             }
         except BaseException as exc:
             op.tts_status = "cancelled" if isinstance(exc, asyncio.CancelledError) else "failed"
+            # Close first so the provider generator's finally block records
+            # receive wait, terminal Flushed/error state, and completion time.
+            if op.worker is not None and not op.worker.done():
+                op.worker.cancel()
+                await asyncio.gather(op.worker, return_exceptions=True)
+            with suppress(Exception, asyncio.CancelledError):
+                await op.iterator.aclose()
+            op.tts_terminal_diagnostics = self.tts_diagnostics(op)
             if isinstance(exc, Exception):
                 try:
-                    exc.tts_diagnostics = self.tts_diagnostics(op)
+                    exc.tts_diagnostics = op.tts_terminal_diagnostics
                 except Exception:
                     pass
             self.operations.pop(operation_id, None)
@@ -390,6 +428,9 @@ def speech_tool(handler, kind):
             diagnostics = getattr(exc, "tts_diagnostics", None)
             if kind == "tts" and isinstance(diagnostics, dict):
                 error["tts_diagnostics"] = diagnostics
+            diagnostics = getattr(exc, "asr_diagnostics", None)
+            if kind == "asr" and isinstance(diagnostics, dict):
+                error["asr_diagnostics"] = diagnostics
             return {"speech_error": error}
         except Exception as exc:
             # Avoid MCP's generic is_error text path, which loses both the
@@ -412,31 +453,51 @@ def speech_tool(handler, kind):
     return wrapped
 
 
-def make_server(kind: str, service: SpeechService) -> MCPServer:
-    server = MCPServer(f"me3-{kind}")
-    server.tool(name="cancel")(service.cancel)
-    server.tool(name="speech_capabilities")(service.capabilities)
+def _speech_tool_handlers(kind: str, service: SpeechService):
+    """Single source for actual MCP registration and capability reporting."""
+    handlers = {
+        "cancel": service.cancel,
+        "speech_capabilities": service.capabilities,
+    }
     if kind == "asr":
-
-        @server.tool()
         async def asr_open(session_id: str, turn_id: int) -> dict[str, Any]:
             """Start bounded PCM16/16kHz mono transcription with the configured provider."""
             return await service.open(session_id, turn_id)
 
-        server.tool(name="asr_append")(speech_tool(service.append, kind))
-        server.tool(name="asr_finish")(speech_tool(service.finish, kind))
-        server.tool(name="asr_append_batch")(speech_tool(service.append_batch, kind))
-        server.tool(name="asr_events")(speech_tool(service.events, kind))
+        handlers.update(
+            {
+                "asr_open": asr_open,
+                "asr_append": speech_tool(service.append, kind),
+                "asr_finish": speech_tool(service.finish, kind),
+                "asr_append_batch": speech_tool(service.append_batch, kind),
+                "asr_events": speech_tool(service.events, kind),
+            }
+        )
     elif kind == "tts":
-
-        @server.tool()
         async def tts_open(session_id: str, turn_id: int, text: str) -> dict[str, Any]:
             """Start synthesis through the configured provider; defaults to mock tones."""
             return await service.open(session_id, turn_id, text)
 
-        server.tool(name="tts_next")(speech_tool(service.next, kind))
+        handlers.update(
+            {
+                "tts_open": tts_open,
+                "tts_next": speech_tool(service.next, kind),
+            }
+        )
     else:
         raise ValueError("unsupported server kind")
+    return handlers
+
+
+def speech_tool_names(kind: str):
+    """Names of the tools make_server registers; no service is started."""
+    return tuple(_speech_tool_handlers(kind, SpeechService(None, None)))
+
+
+def make_server(kind: str, service: SpeechService) -> MCPServer:
+    server = MCPServer(f"me3-{kind}")
+    for name, handler in _speech_tool_handlers(kind, service).items():
+        server.tool(name=name)(handler)
     return server
 
 
@@ -446,6 +507,7 @@ def main():
     parser.add_argument("--mock-transcript", default="Mock question")
     parser.add_argument("--mock-delay", type=float, default=0)
     parser.add_argument("--mock-tts-delay", type=float, default=0)
+    parser.add_argument("--client-call-timeout", type=float, default=5.0)
     parser.add_argument("--mock-transcripts-json", help="test-only deterministic ASR script")
     parser.add_argument(
         "--backend-spec-json", help="selected server-side backend descriptor; no credentials"
@@ -462,6 +524,8 @@ def main():
             parser.error("mock script requires 1..100 bounded strings")
     if not 0 <= args.mock_delay <= 30 or not 0 <= args.mock_tts_delay <= 30:
         parser.error("mock delay must be 0..30 seconds")
+    if not 0.1 <= args.client_call_timeout <= 120:
+        parser.error("client call timeout must be 0.1..120 seconds")
     asr, tts = MockASR(transcript, args.mock_delay), MockTTS(args.mock_tts_delay)
     if args.backend_spec_json:
         from .configuration import BackendSpec, ConfigurationError
@@ -485,7 +549,11 @@ def main():
             asr = provider
         else:
             tts = provider
-    service = SpeechService(asr, tts)
+    if hasattr(tts, "mcp_call_timeout"):
+        tts.mcp_call_timeout = min(
+            args.client_call_timeout, getattr(tts.spec, "timeout_seconds", 5)
+        )
+    service = SpeechService(asr, tts, call_timeout=args.client_call_timeout)
     server = make_server(args.kind, service)
 
     async def run():
