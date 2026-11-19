@@ -56,7 +56,7 @@ class Communications:
         if enabled:
             if not self.contacts:
                 raise ValueError("configure at least one private phone contact")
-            validate_number(phone_address)
+            validate_bluetooth_address(phone_address)
             self.caller = BluetoothCallingBackend()
             self.sms = BluetoothMessagingBackend(phone_address, timeout=10, total_timeout=30)
 
@@ -336,6 +336,13 @@ def validate_number(number):
         raise ValueError("Set ME3 configured SMS recipient in international format, e.g. +639...")
 
 
+def validate_bluetooth_address(address):
+    if not isinstance(address, str) or not re.fullmatch(
+        r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", address
+    ):
+        raise ValueError("Set ME3 phone_address to the paired phone's Bluetooth MAC address.")
+
+
 def make_bmessage(number, text=DEMO_MESSAGE):
     """MAP UTF-8 GSM bMessage. LENGTH includes the complete MSG block."""
     validate_number(number)
@@ -349,10 +356,7 @@ class BluetoothMessagingBackend:
     """Keep one user D-Bus connection alive through session and transfer cleanup."""
 
     def __init__(self, address, *, timeout=45, total_timeout=None):
-        if not re.fullmatch("(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", address):
-            raise ValueError(
-                "Set ME3 configured phone Bluetooth address to the paired tablet Bluetooth address."
-            )
+        validate_bluetooth_address(address)
         self.address = address
         self.timeout = timeout
         self.total_timeout = total_timeout

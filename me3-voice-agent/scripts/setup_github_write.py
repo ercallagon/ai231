@@ -153,7 +153,8 @@ def main():
     )
     args = parser.parse_args()
 
-    _provider_status()
+    if os.environ.get("ME3_SETUP_FROM_WIZARD") != "1":
+        _provider_status()
     config = _read_private_json(CONFIG_FILE)
     token = _github_token()
     if args.github_token:

@@ -34,6 +34,15 @@ Open `http://127.0.0.1:8765/`. This dashboard-only command does not start a voic
 
 Provider credentials use model-qualified names in new profiles: `ME3_DEEPGRAM_API_KEY`, `ME3_OPENROUTER_API_KEY`, `ME3_GROQ_API_KEY`, `ME3_QWEN_ASR_API_KEY`, `ME3_QWEN_LLM_API_KEY`, and `ME3_QWEN_TTS_API_KEY`. Enter keys locally with the masked helper, for example `PYTHONPATH=src var/cache/venv/bin/python scripts/configure_provider_keys.py openrouter-gpt-oss-120b --output var/cache/openrouter-gpt-oss-keys.env`. This writes a mode-0600, no-overwrite file under ignored `var/cache/` and sends no request. For the bridge, pass provider credentials in `--secrets-file` and the selected reasoning key in `--llm-secrets-file`. Never paste API keys into chat, source, or command-line arguments. Existing role-generic names remain accepted for older profiles but should not be used for new provider configurations.
 
+Use the guided setup for the active production profile:
+
+```bash
+bash scripts/swift.sh setup --status
+bash scripts/swift.sh setup --interactive
+```
+
+`auto` selects the Pi profile when `var/cache/pi_live-backends.json` exists on a Pi; otherwise it selects `laptop-demo`. Use `--profile pi` or `--profile laptop` to choose explicitly. Status is offline and reports credential presence only. In interactive mode, Enter keeps existing values or skips missing ones; `a`/`u` adds or selectively replaces a hidden secret. Device fields are edited individually, `!` clears supported fields, and private contact/phone prompts are hidden. Secret files and Pi device/contact JSON remain owner-only and are updated atomically without replacing unrelated keys/settings. The wizard preserves model routing, limits and PipeWire defaults. GitHub OAuth/token setup, Spotify OAuth renewal and Soloist key entry run only when selected; network/auth actions are never part of `--status`. Optional Onit worker setup is not included in the active native/LangGraph setup flow; its legacy files are preserved.
+
 The Python package/module remains `me3_voice`; moving the checkout does not rename it. Run commands from the project root. All credentials, models, logs, recordings and outputs stay in ignored `var/`; source code never implicitly reads ME2 or another coursework checkout. Preserve the original recordings on the development machine rather than publishing them.
 
 ## Intended experience

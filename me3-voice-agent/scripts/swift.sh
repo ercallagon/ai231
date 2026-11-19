@@ -17,6 +17,7 @@ command="${1:-help}"
 if [[ $# -gt 0 ]]; then shift; fi
 if [[ "$command" == help || "$command" == --help ]]; then
   echo 'Usage: bash scripts/swift.sh {check|demo|dashboard|bridge|native-bridge|laptop-demo|setup|vpn-setup|vpn|preflight|network|assets|audio|health} [arguments]'
+  echo 'Use "setup --interactive" for the guided production configuration wizard; "setup --status" is offline.'
   echo 'bridge requires explicit backend, secrets and wake configuration; audio requires explicit devices.'
   exit 0
 fi
@@ -186,7 +187,12 @@ case "$command" in
       --kws-assets var/cache/wake/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 \
       --keywords-file var/cache/wake/hey-swift-keywords.txt "$@" ;;
   vpn-setup) exec "$python_bin" -B scripts/configure_vpn.py "$@" ;;
-  setup) exec "$python_bin" -B scripts/setup_github_write.py "$@" ;;
+  setup)
+    case "${1:-}" in
+      --interactive|--status) exec "$python_bin" -B -m me3_voice.setup_wizard "$@" ;;
+      --github-token|--github-repository) exec "$python_bin" -B scripts/setup_github_write.py "$@" ;;
+      *) exec "$python_bin" -B -m me3_voice.setup_wizard --interactive "$@" ;;
+    esac ;;
   vpn) exec bash scripts/swift_vpn.sh "$@" ;;
   preflight) exec "$python_bin" -B -m me3_voice.preflight "$@" ;;
   network) exec "$python_bin" -B scripts/check_network.py "$@" ;;
