@@ -30,27 +30,35 @@ def _is_pi():
 
 
 def select_paths(profile="auto", root=ROOT):
-    """Resolve the same backend/credential files consumed by the bridge."""
+    """Resolve the backend, runtime and private stores for the selected launch."""
     pi_backend = root / "var/cache/pi_live-backends.json"
     if profile == "auto":
         profile = "pi" if _is_pi() or pi_backend.is_file() else "laptop"
-    if profile not in {"pi", "laptop"}:
-        raise ValueError("profile must be auto, pi, or laptop")
+    if profile not in {"pi", "pi-primary", "laptop"}:
+        raise ValueError("profile must be auto, pi, pi-primary, or laptop")
+    pi_target = profile in {"pi", "pi-primary"}
     backend = pi_backend if profile == "pi" else root / "configs/native-demo-backends.json"
-    secrets = root / (
-        "var/cache/demo-models.env"
+    runtime = root / (
+        "var/cache/pi-five-turn-runtime.json"
         if profile == "pi"
-        else "var/cache/selected-provider-credentials.env"
+        else "configs/native-demo-runtime.json"
+    )
+    secrets = root / (
+        "var/cache/demo-models.env" if pi_target else "var/cache/selected-provider-credentials.env"
     )
     override = os.environ.get("ME3_SETUP_SECRETS_FILE")
     if override:
         secrets = Path(override)
         if not secrets.is_absolute():
             secrets = root / secrets
-    device = root / (
-        "var/cache/pi_live-devices.json" if profile == "pi" else "var/cache/devices.json"
-    )
-    return {"profile": profile, "backend": backend, "secrets": secrets, "device": device}
+    device = root / ("var/cache/pi_live-devices.json" if pi_target else "var/cache/devices.json")
+    return {
+        "profile": profile,
+        "backend": backend,
+        "runtime": runtime,
+        "secrets": secrets,
+        "device": device,
+    }
 
 
 def _safe_secrets(path):
@@ -72,19 +80,22 @@ def _status(paths, *, root=ROOT):
         print(
             f"{role}: {spec.model or spec.backend} at {host}; credential {'configured' if configured else 'missing'}; access unverified"
         )
-    runtime_path = root / "configs/native-demo-runtime.json"
+    runtime_path = paths["runtime"]
     runtime = json.loads(runtime_path.read_text()) if runtime_path.is_file() else {}
-    research_enabled = bool(runtime.get("research", {}).get("allow_live"))
+    research_enabled = (
+        bool(runtime.get("research", {}).get("allow_live")) if runtime_path.is_file() else None
+    )
+    research_status = {True: "enabled", False: "disabled", None: "unknown (profile file missing)"}
     print(
         "native research: "
         + ("configured" if secrets.get("ME3_RESEARCH_TAVILY_API_KEY") else "missing key")
-        + ("; runtime enabled" if research_enabled else "; runtime disabled")
+        + f"; runtime {research_status[research_enabled]}"
     )
     for label, path in (
         ("GitHub repository", root / "var/cache/github-write.json"),
         ("GitHub write token", root / "var/cache/github-write-token.env"),
-        ("Spotify OAuth", root / "var/cache/music.json"),
-        ("Spotify token file", root / "var/cache/spotify.env"),
+        ("Swift Spotify voice control config (optional feature)", root / "var/cache/music.json"),
+        ("Swift Spotify voice control OAuth (optional feature)", root / "var/cache/spotify.env"),
     ):
         print(f"{label}: {'configured' if path.is_file() else 'missing'}")
     soloist = (
@@ -491,7 +502,12 @@ def _configure_integrations(*, root=ROOT):
                 env=dict(os.environ, ME3_SETUP_FROM_WIZARD="1"),
                 check=True,
             )
-    if input("Run Spotify OAuth setup/renewal now? [y/N]: ").strip().casefold() == "y":
+    if (
+        input("Set up Spotify OAuth for Swift voice commands? Skip for receiver only. [y/N]: ")
+        .strip()
+        .casefold()
+        == "y"
+    ):
         current_name = ""
         music_path = root / "var/cache/music.json"
         if music_path.is_file():
@@ -535,7 +551,7 @@ def main(argv=None):
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--interactive", action="store_true")
     mode.add_argument("--status", action="store_true")
-    parser.add_argument("--profile", choices=("auto", "laptop", "pi"), default="auto")
+    parser.add_argument("--profile", choices=("auto", "laptop", "pi", "pi-primary"), default="auto")
     args = parser.parse_args(argv)
     try:
         paths = select_paths(args.profile)

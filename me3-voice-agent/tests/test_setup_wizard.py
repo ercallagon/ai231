@@ -55,10 +55,17 @@ def test_select_paths_uses_active_profile_layout(tmp_path):
     assert paths["backend"] == pi
     assert paths["secrets"] == tmp_path / "var/cache/demo-models.env"
     assert paths["device"] == tmp_path / "var/cache/pi_live-devices.json"
+    assert paths["runtime"] == tmp_path / "var/cache/pi-five-turn-runtime.json"
 
     laptop = select_paths("laptop", root=tmp_path)
     assert laptop["backend"] == tmp_path / "configs/native-demo-backends.json"
     assert laptop["secrets"] == tmp_path / "var/cache/selected-provider-credentials.env"
+
+    primary = select_paths("pi-primary", root=tmp_path)
+    assert primary["backend"] == laptop["backend"]
+    assert primary["runtime"] == laptop["runtime"]
+    assert primary["device"] == paths["device"]
+    assert primary["secrets"] == paths["secrets"]
 
 
 def test_device_json_update_is_atomic_private_and_preserves_fields(tmp_path):
