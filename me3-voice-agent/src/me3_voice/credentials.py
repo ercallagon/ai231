@@ -23,17 +23,18 @@ NAMES = {
     "ME3_SPOTIFY_ACCESS_TOKEN",
     "ME3_SPOTIFY_REFRESH_TOKEN",
     "ME3_ONIT_GITHUB_TOKEN",
+    "ME3_GITHUB_WRITE_TOKEN",
     "ME3_ONIT_TAVILY_API_KEY",
     "ME3_ONIT_HF_TOKEN",
 }
 
 
-def private_path(path):
+def private_path(path, *, cache_root=None):
     path = Path(path).absolute()
     if path.is_symlink():
         raise ConfigurationError("secret file must not be a symlink")
     try:
-        path.resolve().relative_to(CACHE_ROOT.resolve())
+        path.resolve().relative_to(Path(cache_root or CACHE_ROOT).resolve())
     except ValueError:
         raise ConfigurationError(
             "secret files must be inside this project's ignored var/cache/"
@@ -65,8 +66,8 @@ def write_secrets(path, values):
         ) from None
 
 
-def load_secrets(path, selected=NAMES):
-    path = private_path(path)
+def load_secrets(path, selected=NAMES, *, cache_root=None):
+    path = private_path(path, cache_root=cache_root)
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd) as stream:

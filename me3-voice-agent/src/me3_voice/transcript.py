@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .artifacts import output_path
+from .artifacts import output_path, public_task_artifact_name
 from .async_utils import await_thread_future
 from .contracts import TurnKey
 from .devices import normalize_rgb_color
@@ -246,17 +246,14 @@ def normalize_transcript(data):
             not isinstance(artifacts, list)
             or len(artifacts) > 8
             or any(
-                not isinstance(name, str)
-                or not re.fullmatch(
-                    r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.(?:html|css|js|md|txt|json)", name
-                )
+                not public_task_artifact_name(name)
                 for name in artifacts
             )
             or len(set(artifacts)) != len(artifacts)
             or artifacts
             and (
                 row["kind"] != "agent"
-                or row["status"] != "reported"
+                or row["status"] not in {"completed", "reported", "failed"}
                 or not isinstance(artifact_id, str)
                 or not re.fullmatch(r"[a-f0-9]{24}", artifact_id)
             )
@@ -739,17 +736,14 @@ class Transcript:
             not isinstance(artifacts, list)
             or len(artifacts) > 8
             or any(
-                not isinstance(name, str)
-                or not re.fullmatch(
-                    r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\.(?:html|css|js|md|txt|json)", name
-                )
+                not public_task_artifact_name(name)
                 for name in artifacts
             )
             or artifacts
             and (
                 not isinstance(artifact_id, str)
                 or not re.fullmatch(r"[a-f0-9]{24}", artifact_id)
-                or status != "reported"
+                or status not in {"completed", "reported"}
             )
             or artifact_id is not None
             and not artifacts

@@ -129,9 +129,9 @@ class McpSTTService(STTService):
         self.last_append = 0
         self.last_audio_at = None
         # Pipecat forwards frames before its VAD start confirmation (160 ms in
-        # native_vad). Keep only a short bounded onset ring until VAD admits a
+        # native_vad). Keep a bounded 640 ms onset ring until VAD admits a
         # turn; it is submitted only after that event, never while asleep.
-        self.onset_buffer_frames = 8  # 256 ms at 32 ms/frame.
+        self.onset_buffer_frames = 20  # 640 ms at 32 ms/frame.
         self.onset_buffer = deque(maxlen=self.onset_buffer_frames)
         self.provider_diagnostics_signature = None
 

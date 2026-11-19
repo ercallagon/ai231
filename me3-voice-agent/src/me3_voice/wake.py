@@ -63,6 +63,11 @@ class OpenWakeWord:
     def detect(self, pcm: bytes) -> WakeDetection:
         return WakeDetection(self.phrase, self.score(pcm))
 
+    def reset(self):
+        reset = getattr(self.model, "reset", None)
+        if callable(reset):
+            reset()
+
 
 class SherpaWakeWord:
     """Explicit local assets/keyword file, CPU only; no downloads or training.
@@ -142,6 +147,9 @@ class SherpaWakeWord:
                 self.model.reset_stream(self.stream)
         return WakeDetection(phrase) if phrase else None
 
+    def reset(self):
+        self.model.reset_stream(self.stream)
+
 
 class WakeGate:
     """One activation per session; cooldown uses stream samples, not wall clock.
@@ -183,3 +191,11 @@ class WakeGate:
     def end_session(self):
         self.active = False
         self.ready_at = self.samples + self.cooldown_samples
+
+    def reset(self):
+        self.samples = 0
+        self.ready_at = 0
+        self.active = False
+        reset = getattr(self.detector, "reset", None)
+        if callable(reset):
+            reset()

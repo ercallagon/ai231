@@ -2,6 +2,7 @@
 
 import asyncio
 from argparse import Namespace
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -16,6 +17,8 @@ from aiohttp.test_utils import TestServer
 import pytest
 from pipecat.frames.frames import (
     InputAudioRawFrame,
+    InterimTranscriptionFrame,
+    TranscriptionFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -34,6 +37,9 @@ def isolated_native_task_storage(tmp_path, monkeypatch):
 
 class Wake:
     frame_samples = 1280
+
+    def reset(self):
+        self.reset_count = getattr(self, "reset_count", 0) + 1
 
     def feed(self, _pcm):
         return {"triggered": True}
@@ -110,11 +116,95 @@ def test_runtime_selection_is_explicit_and_legacy_default(tmp_path):
     path.write_text(json.dumps({"engine": "native", "silence_seconds": 0}))
     assert load_runtime(path).engine == "native"
     assert load_runtime(path, engine="legacy").engine == "legacy"
+    path.write_text(json.dumps({"engine": "native", "task_model": "anthropic/claude-haiku-5.5"}))
+    selected = load_runtime(path)
+    assert selected.task_model == "anthropic/claude-haiku-5.5"
+    assert selected.task_request_limit is None
+    assert selected.task_input_tokens_total is None
+    path.write_text(
+        json.dumps(
+            {
+                "engine": "native",
+                "task_model": "anthropic/claude-haiku-5.5",
+                "task_max_output_tokens": 8192,
+            }
+        )
+    )
+    selected = load_runtime(path)
+    assert selected.task_max_output_tokens == 8192
+    path.write_text(
+        json.dumps(
+            {
+                "engine": "native",
+                "task_model": "anthropic/claude-haiku-5.5",
+                "cost_alert_usd": 0,
+            }
+        )
+    )
+    with pytest.raises(ConfigurationError, match="invalid engine"):
+        load_runtime(path)
     path.write_text('{"engine":"nativ","extra":true}')
     with pytest.raises(ConfigurationError):
         load_runtime(path)
     with pytest.raises(ConfigurationError):
         load_runtime(tmp_path / "missing.json")
+
+
+def test_laptop_demo_profile_uses_provider_managed_volume_and_context_caps():
+    backends = load_backends(Path("configs/native-demo-backends.json"))
+    runtime = load_runtime(Path("configs/native-demo-runtime.json"), engine="native")
+    assert backends["llm"].model == "openai/gpt-oss-120b"
+    assert backends["llm"].request_limit is None
+    assert backends["llm"].max_input_tokens == 65536
+    assert backends["llm"].max_input_tokens_total is None
+    assert backends["asr"].request_limit is None
+    assert backends["tts"].request_limit is None
+    assert runtime.task_model == "anthropic/claude-haiku-5.5"
+    assert runtime.task_request_limit is None
+    assert runtime.task_input_tokens_total is None
+    assert runtime.task_max_output_tokens == 8192
+    assert runtime.cost_alert_usd == 0.5
+    assert runtime.research.request_limit is None
+    assert runtime.max_model_calls_per_turn == 7
+    assert runtime.max_tool_calls_per_turn == 8
+    assert runtime.max_repeated_tool_calls == 2
+
+
+def test_haiku_task_model_has_separate_budget_and_preserves_gpt_oss_conversation():
+    from dataclasses import replace
+    from me3_voice.native_app import NativeState
+    from me3_voice.configuration import RuntimeOptions, load_backends
+
+    backends = load_backends()
+    backends["llm"] = replace(
+        backends["llm"],
+        backend="external",
+        protocol="chat-completions-v1",
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        auth_env="ME3_OPENROUTER_API_KEY",
+        model="openai/gpt-oss-120b",
+        allow_live=True,
+        request_limit=None,
+        max_input_tokens=65536,
+        max_input_tokens_total=None,
+    )
+    state = NativeState(backends=backends, tasks=object())
+    task_spec, task_budget = state.task_model_configuration(
+        RuntimeOptions(engine="native", task_model="anthropic/claude-haiku-5.5")
+    )
+    assert task_spec.model == "anthropic/claude-haiku-5.5"
+    assert task_spec.request_limit is None
+    assert task_spec.max_input_tokens_total is None
+    assert (
+        RuntimeOptions(
+            engine="native", task_model="anthropic/claude-haiku-5.5", task_max_output_tokens=8192
+        ).task_max_output_tokens
+        == 8192
+    )
+    assert task_budget.spec is task_spec
+    assert task_budget is not state.budget
+    assert state.budget.spec.model == "openai/gpt-oss-120b"
+    assert backends["llm"].model == "openai/gpt-oss-120b"
 
 
 @pytest.mark.parametrize("engine", ["legacy", "native"])
@@ -155,7 +245,9 @@ async def test_actual_native_browser_route_continuity_and_reconnect(
     import me3_voice.native_bridge as bridge
     import me3_voice.session as legacy
 
-    monkeypatch.setattr(bridge, "build_wake", lambda _: Wake())
+    wake = Wake()
+    wake_builds = []
+    monkeypatch.setattr(bridge, "build_wake", lambda _: (wake_builds.append(True), wake)[1])
     monkeypatch.setattr(module, "native_vad", FixtureVAD)
     monkeypatch.setenv("ME3_TASK_DATABASE", str(tmp_path / "browser-task-runtime.sqlite"))
     monkeypatch.setenv("ME3_TASK_WORKSPACE", str(tmp_path / "browser-task-workspace"))
@@ -164,15 +256,40 @@ async def test_actual_native_browser_route_continuity_and_reconnect(
         "__init__",
         lambda *_a, **_k: pytest.fail("Session instantiated in native path"),
     )
-    app = build_app(tmp_path, load_backends(), {}, native_args)
+    credentials = {
+        "ME3_DEEPGRAM_API_KEY": "offline-fixture",
+        "ME3_OPENROUTER_API_KEY": "offline-fixture",
+    }
+    app = build_app(tmp_path, load_backends(), credentials, native_args)
     async with TestServer(app) as server, ClientSession() as client:
+        async with client.get(server.make_url("/api/health")) as response:
+            startup = await response.json()
+        assert startup["speech_services"] == "initialized"
+        assert startup["voice_ready"] is True
+        assert startup["task_runtime"] == "ready"
+        assert startup["services"]["tasks"]["status"] == "READY"
+        assert startup["services"]["me2_wake"]["client_state"] == "READY"
+        async with client.post(server.make_url("/api/session/prepare")) as response:
+            prepared = await response.json()
+            assert response.status == 200
+        assert prepared["voice_ready"] is True
+        assert prepared["speech_services"] == "initialized"
+        assert prepared["budget"]["gpt_oss_requests"]["used"] == 0
         async with client.get(server.make_url("/")) as response:
             page = await response.text()
             assert "Last source retrieval" in page
+            assert "Check provider connections" not in page
         session_id = None
         for expected in (1, 2):
             async with client.ws_connect(server.make_url("/api/voice/ws")) as ws:
-                await ws.send_json({"type": "hello", "rate": 16000, "channels": 1})
+                await ws.send_json(
+                    {
+                        "type": "hello",
+                        "rate": 16000,
+                        "channels": 1,
+                        "conversation_mode": "continuous",
+                    }
+                )
                 ready = await next_json(ws, "ready")
                 assert ready["engine"] == "native"
                 if session_id:
@@ -185,6 +302,274 @@ async def test_actual_native_browser_route_continuity_and_reconnect(
             await asyncio.sleep(0.1)
         async with client.get(server.make_url("/api/health")) as response:
             assert (await response.json())["session_resume"]
+        assert len(wake_builds) == 1
+        assert wake.reset_count == 2
+
+
+async def test_native_health_exposes_service_state_and_remaining_profile_quotas(
+    tmp_path, monkeypatch, native_args
+):
+    monkeypatch.delenv("ME3_MUSIC_CONFIG", raising=False)
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "health-profile-test-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "provider-requests.sqlite"))
+    native_args.runtime_options = load_runtime(
+        Path("configs/native-demo-runtime.json"), engine="native"
+    )
+    backends = load_backends(Path("configs/native-demo-backends.json"))
+    credentials = {
+        "ME3_DEEPGRAM_API_KEY": "offline-fixture",
+        "ME3_OPENROUTER_API_KEY": "offline-fixture",
+        "ME3_RESEARCH_TAVILY_API_KEY": "offline-fixture",
+    }
+    app = build_app(tmp_path, backends, credentials, native_args)
+    async with TestServer(app) as server, ClientSession() as client:
+        async with client.get(server.make_url("/api/health")) as response:
+            assert response.status == 200
+            health = await response.json()
+    services = health["services"]
+    assert services["bridge"]["status"] == "READY"
+    assert services["session"]["status"] == "READY"
+    assert services["asr"]["status"] == "DEGRADED"
+    assert services["gpt_oss"]["status"] == "DEGRADED"
+    assert services["haiku"]["status"] == "DEGRADED"
+    assert services["calls_messages"]["status"] == "UNCONFIGURED"
+    assert services["github"]["status"] == "UNCONFIGURED"
+    assert services["gpio"]["status"] == "DEGRADED"
+    budget = health["budget"]
+    assert budget["gpt_oss_requests"] == {
+        "limit": None,
+        "used": 0,
+        "remaining": None,
+        "limit_source": "provider/account",
+    }
+    assert budget["haiku_requests"] == {
+        "limit": None,
+        "used": 0,
+        "remaining": None,
+        "limit_source": "provider/account",
+    }
+    assert budget["asr_requests"]["limit_source"] == "provider/account"
+    assert budget["tts_requests"]["limit_source"] == "provider/account"
+    assert budget["tavily_requests"] == {
+        "limit": None,
+        "used": 0,
+        "remaining": None,
+        "limit_source": "provider/account",
+    }
+    assert budget["cost_alert"]["state"] == "NO_USAGE_DATA"
+    assert budget["cost_alert"]["threshold_usd"] == 0.5
+    assert services["tasks"]["status"] == "READY"
+    assert services["gpt_oss"]["client_state"] == "READY"
+    assert services["gpt_oss"]["provider_state"] == "NOT_PROBED"
+    assert services["haiku"]["client_state"] == "INITIALIZED_UNVERIFIED"
+    assert services["haiku"]["provider_state"] == "NOT_PROBED"
+    assert services["asr"]["client_state"] == "READY"
+    assert services["tts"]["client_state"] == "READY"
+    assert services["tavily"]["client_state"] == "READY"
+    assert budget["vendor_billed_cost_usd"] is None
+
+
+async def test_production_session_prepare_warms_local_pipeline_without_model_calls(
+    tmp_path, monkeypatch, native_args
+):
+    import me3_voice.native_app as native_app
+    import me3_voice.native_bridge as bridge
+    import me3_voice.task_runtime as task_runtime
+
+    class Speech:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class TaskRuntime:
+        provider_client_state = "INITIALIZED_UNVERIFIED"
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def start_runtime(self):
+            return None
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(native_app, "SpeechClient", Speech)
+    monkeypatch.setattr(task_runtime, "TaskRuntime", TaskRuntime)
+    monkeypatch.setattr(bridge, "build_wake", lambda _args: None)
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "session-prepare-offline-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "session-prepare-ledger.sqlite"))
+    native_args.runtime_options = load_runtime(
+        Path("configs/native-demo-runtime.json"), engine="native"
+    )
+    credentials = {
+        "ME3_DEEPGRAM_API_KEY": "offline-fixture",
+        "ME3_OPENROUTER_API_KEY": "offline-fixture",
+    }
+    app = build_app(tmp_path, load_backends(), credentials, native_args)
+    async with TestServer(app) as server, ClientSession() as client:
+        async with client.get(server.make_url("/api/health")) as response:
+            before = await response.json()
+        async with client.post(server.make_url("/api/session/prepare")) as response:
+            assert response.status == 200
+            prepared = await response.json()
+        async with client.get(server.make_url("/")) as response:
+            page = await response.text()
+    assert before["voice_ready"] is True
+    assert prepared["voice_ready"] is True
+    assert prepared["speech_services"] == "initialized"
+    assert prepared["budget"]["gpt_oss_requests"]["used"] == 0
+    assert "Check provider connections" not in page
+
+
+def test_voice_readiness_separates_configuration_from_provider_reachability():
+    from me3_voice.native_bridge import _voice_readiness
+
+    services = {
+        key: {"status": "DEGRADED", "client_state": "READY", "provider_state": "NOT_PROBED"}
+        for key in ("asr", "gpt_oss", "tts")
+    }
+    assert _voice_readiness(True, services) == (True, True)
+    services["gpt_oss"].update(status="DISCONNECTED", provider_state="AUTH_REJECTED")
+    assert _voice_readiness(True, services) == (True, False)
+    services["gpt_oss"].update(status="UNCONFIGURED", provider_state="NOT_CONFIGURED")
+    assert _voice_readiness(True, services) == (False, False)
+
+
+async def test_start_retries_a_failed_local_speech_owner_without_resetting_transport(tmp_path, monkeypatch):
+    from me3_voice.native_app import NativeState
+
+    class Tasks:
+        async def close(self):
+            return None
+
+    class FailedSpeech:
+        async def __aenter__(self):
+            raise RuntimeError("fixture startup failure")
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class ReadySpeech:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    created = 0
+
+    def speech_factory():
+        nonlocal created
+        created += 1
+        return FailedSpeech() if created == 1 else ReadySpeech()
+
+    monkeypatch.setenv("ME3_TASK_DATABASE", str(tmp_path / "recovery-tasks.sqlite"))
+    monkeypatch.setenv("ME3_TASK_WORKSPACE", str(tmp_path / "recovery-workspace"))
+    state = NativeState(speech_factory=speech_factory, tasks=Tasks())
+    transport = state.budget
+    try:
+        with pytest.raises(RuntimeError, match="fixture startup failure"):
+            await state.start()
+        recovered = await state.start()
+        assert isinstance(recovered, ReadySpeech)
+        assert created == 2
+        assert state.budget is transport
+    finally:
+        await state.close()
+
+
+async def test_nonbillable_provider_check_updates_health_without_claiming_inference(
+    tmp_path, monkeypatch, native_args
+):
+    import me3_voice.native_bridge as bridge
+
+    calls = []
+
+    class Response:
+        def __init__(self, status):
+            self.status = status
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["trust_env"] is False
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def get(self, url, *, headers, allow_redirects):
+            assert allow_redirects is False
+            calls.append((url, headers["Authorization"]))
+            status = 200 if "openrouter.ai" in url else 403
+            return Response(status)
+
+    monkeypatch.setattr(bridge, "ClientSession", Client)
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "health-probe-offline-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "probe-ledger.sqlite"))
+    native_args.runtime_options = load_runtime(
+        Path("configs/native-demo-runtime.json"), engine="native"
+    )
+    backends = load_backends(Path("configs/native-demo-backends.json"))
+    credentials = {
+        "ME3_DEEPGRAM_API_KEY": "deepgram-fixture-key",
+        "ME3_OPENROUTER_API_KEY": "openrouter-fixture-key",
+    }
+    app = build_app(tmp_path, backends, credentials, native_args)
+    import me3_voice.remote as remote
+
+    async with TestServer(app) as server, ClientSession() as client:
+        async with client.post(server.make_url("/api/health/provider-check")) as response:
+            assert response.status == 200
+            checked = await response.json()
+        async with client.get(server.make_url("/api/health")) as response:
+            health = await response.json()
+        monkeypatch.setattr(
+            remote,
+            "request_ledger_summary",
+            lambda *_args: {
+                "run_id": "health-probe-offline-01",
+                "requests": [
+                    {
+                        "provider": "openrouter.ai",
+                        "model": backends["llm"].model,
+                        "status": "success",
+                        "updated_at": __import__("time").time() + 10,
+                        "actual_input_tokens": 100,
+                        "actual_output_tokens": 12,
+                        "estimated_input_tokens_reserved": 120,
+                        "error_code": None,
+                    }
+                ],
+                "usage": {"actual_input_tokens": 100, "actual_output_tokens": 12},
+            },
+        )
+        async with client.get(server.make_url("/api/health")) as response:
+            inferred = await response.json()
+
+    assert checked["checks"]["openrouter"]["provider_state"] == "AUTHENTICATED_REACHABLE"
+    assert checked["checks"]["deepgram"]["provider_state"] == "AUTH_REJECTED"
+    assert checked["inference"] == "NOT_PROBED"
+    assert checked["tavily"] == "NOT_PROBED_COSTED_SEARCH_SKIPPED"
+    services = health["services"]
+    assert services["gpt_oss"]["provider_state"] == "AUTHENTICATED_REACHABLE"
+    assert services["gpt_oss"]["inference_state"] == "NOT_PROBED"
+    assert services["haiku"]["provider_state"] == "AUTHENTICATED_REACHABLE"
+    assert services["asr"]["provider_state"] == "AUTH_REJECTED"
+    assert services["asr"]["inference_state"] == "NOT_PROBED"
+    assert services["tavily"]["provider_state"] == "NOT_PROBED"
+    assert len(calls) == 2
+    assert inferred["services"]["gpt_oss"]["provider_state"] == "INFERENCE_READY"
+    assert inferred["services"]["gpt_oss"]["inference_state"] == "READY"
 
 
 async def test_native_browser_writes_private_sanitized_session_events(
@@ -335,12 +720,54 @@ def test_native_event_projection_excludes_secrets_and_free_text():
             "event": "llm_citation_check",
             "citation_ids": ["S1", "S12"],
             "retained_source_ids": ["S0", "S1", "S12"],
+            "evidence_valid": True,
+            "citation_sources": [
+                {
+                    "source_id": "S1",
+                    "title": "Search result title",
+                    "url": "https://source.example/result",
+                    "evidence_status": "search_result_snippet",
+                    "source_type": "untrusted_search_result",
+                    "fetched": False,
+                    "truncated": True,
+                },
+                {
+                    "source_id": "S12",
+                    "title": "Missing URL",
+                    "evidence_status": "retrieved_unverified",
+                },
+            ],
             "raw_response": "private answer",
         }
     )
     assert citation["citation_ids"] == ["S1", "S12"]
     assert citation["retained_source_ids"] == ["S0", "S1", "S12"]
+    assert citation["citation_sources"] == [
+        {
+            "source_id": "S1",
+            "url": "https://source.example/result",
+            "title": "Search result title",
+            "evidence_status": "search_result_snippet",
+            "source_type": "untrusted_search_result",
+            "fetched": False,
+            "truncated": True,
+        }
+    ]
+    assert citation["citation_source_mapping_complete"] is False
     assert "raw_response" not in citation
+    rejected_mapping = _safe_event(
+        {
+            "event": "llm_citation_check",
+            "citation_ids": ["S1"],
+            "evidence_valid": True,
+            "citation_sources": [
+                {"source_id": "S9", "url": "https://source.example/not-cited"},
+                {"source_id": "S1", "url": "https://source.example/?token=hidden"},
+            ],
+        }
+    )
+    assert rejected_mapping["citation_sources"] == []
+    assert rejected_mapping["citation_source_mapping_complete"] is False
     malformed = _safe_event(
         {
             "event": "llm_citation_check",
@@ -381,7 +808,9 @@ def test_native_interrupted_pending_answer_has_one_owned_terminal_outcome():
     from me3_voice.native_app import NativeApplication
 
     context = LLMContext([{"role": "user", "content": "Who is the prime minister of Japan?"}])
-    app = NativeApplication(SimpleNamespace(session_id="interrupt-terminal", context=context), object())
+    app = NativeApplication(
+        SimpleNamespace(session_id="interrupt-terminal", context=context), object()
+    )
     app.turn_id = 1
     app.event("tts_response_started", response_id="japan-final-response")
 
@@ -398,9 +827,114 @@ def test_native_interrupted_pending_answer_has_one_owned_terminal_outcome():
     app.event("turn_failed", owner_turn_id=1, error_code="provider_incomplete_response")
     app.event("turn_completed", owner_turn_id=1)
     assert [event["event"] for event in app.events].count("turn_interrupted") == 1
-    assert [event for event in app.events if event["event"] in {
-        "turn_completed", "turn_failed", "turn_error", "turn_interrupted"
-    }] == interrupted
+    assert [
+        event
+        for event in app.events
+        if event["event"] in {"turn_completed", "turn_failed", "turn_error", "turn_interrupted"}
+    ] == interrupted
+
+
+async def test_unclear_vad_does_not_start_or_interrupt_until_asr_text_exists():
+    from me3_voice.native_pipeline import ASRConfirmedUserTurnStartStrategy
+    from pipecat.turns.types import ProcessFrameResult
+
+    strategy = ASRConfirmedUserTurnStartStrategy()
+    starts = []
+
+    async def record_start(**kwargs):
+        starts.append(kwargs)
+
+    strategy.trigger_user_turn_started = record_start
+    assert (
+        await strategy.process_frame(VADUserStartedSpeakingFrame()) is ProcessFrameResult.CONTINUE
+    )
+    assert (
+        await strategy.process_frame(InterimTranscriptionFrame("  ", "user", ""))
+        is ProcessFrameResult.CONTINUE
+    )
+    assert starts == []
+
+    assert (
+        await strategy.process_frame(InterimTranscriptionFrame("Michigan", "user", ""))
+        is ProcessFrameResult.STOP
+    )
+    assert starts == [{"enable_interruptions": False}]
+
+    # A provider that emits no interim but returns a final transcript must
+    # retain that already-aggregated text instead of broadcasting a reset.
+    starts.clear()
+    assert (
+        await strategy.process_frame(TranscriptionFrame("follow up", "user", "", finalized=True))
+        is ProcessFrameResult.STOP
+    )
+    assert starts == [{"enable_interruptions": False}]
+
+
+def test_native_pipeline_uses_asr_confirmed_turn_start():
+    from me3_voice.native_pipeline import ASRConfirmedUserTurnStartStrategy, make_native_pipeline
+
+    class Processor(FrameProcessor):
+        pass
+
+    parts = make_native_pipeline(Processor(), Processor(), Processor())
+    start_strategies = parts.aggregators.user()._params.user_turn_strategies.start
+    assert len(start_strategies) == 1
+    assert isinstance(start_strategies[0], ASRConfirmedUserTurnStartStrategy)
+
+
+async def test_final_only_asr_turn_stops_stale_audio_without_replaying_it():
+    from types import SimpleNamespace
+    from me3_voice.native_app import NativeOutput
+
+    class Sink:
+        def __init__(self):
+            self.stopped = 0
+            self.sent = []
+
+        async def stop(self):
+            self.stopped += 1
+
+        async def send_audio(self, audio, *, response_id):
+            self.sent.append((audio, response_id))
+            return len(self.sent)
+
+    sink = Sink()
+    events = []
+    output = NativeOutput(sink, lambda name, **fields: events.append((name, fields)))
+    await output.stop_response("old-response")
+    assert sink.stopped == 1
+    assert not await output.write_audio_frame(
+        SimpleNamespace(audio=b"stale", context_id="old-response")
+    )
+    assert await output.write_audio_frame(SimpleNamespace(audio=b"new", context_id="new-response"))
+    assert sink.sent == [(b"new", "new-response")]
+    assert events[0] == ("playback_stopped_browser", {"response_id": "old-response"})
+
+
+def test_tool_error_code_preserves_only_safe_symbolic_provider_codes():
+    from me3_voice.native_app import _safe_tool_error_code
+
+    class MusicFailure(Exception):
+        code = "music_device_unavailable"
+
+    class UnsafeFailure(Exception):
+        code = "token leaked / https://private.example"
+
+    assert _safe_tool_error_code(MusicFailure()) == "music_device_unavailable"
+    assert _safe_tool_error_code(UnsafeFailure()) == "tool_service_unavailable"
+
+
+def test_live_service_health_uses_plain_labels_and_live_timestamp():
+    from me3_voice.dashboard import render
+
+    html = render(
+        {"schema_version": 1, "reports": [], "warnings": [], "generated_utc": ""},
+        live=True,
+    )
+    assert "Bridge live ·" in html
+    assert "updated ${stamp.toLocaleTimeString()}" in html
+    assert "Configured · not checked" in html
+    assert "Set up needed" in html
 
 
 def test_browser_playback_ack_reports_scheduling_gaps_and_queued_audio():
@@ -607,6 +1141,44 @@ async def test_native_bridge_serves_the_existing_local_aec_probe(tmp_path, nativ
             assert response.headers["Permissions-Policy"] == "microphone=(self)"
 
 
+async def test_native_bridge_binds_spotify_status_and_token_routes_without_live_auth(
+    tmp_path, native_args
+):
+    app = build_app(tmp_path, load_backends(), {}, native_args)
+
+    class Request:
+        headers = {"Host": "127.0.0.1:8765"}
+        content_type = "application/json"
+
+        async def json(self):
+            return {}
+
+    def handler(path, method):
+        routes = list(app.router.routes())
+        return next(
+            route.handler
+            for route in routes
+            if route.resource.canonical == path and route.method == method
+        )
+
+    try:
+        status_response = await handler("/api/voice/music/status", "GET")(Request())
+        assert status_response.status == 200
+        assert json.loads(status_response.body) == {
+            "configured": False,
+            "status": "unavailable",
+            "output_backend": "mock",
+            "audible": None,
+        }
+        token_response = await handler("/api/voice/music/token", "GET")(Request())
+        token = json.loads(token_response.body)
+        assert token_response.status == 409
+        assert token["available"] is False
+        assert token["code"] == "music_streaming_scope_required"
+    finally:
+        await app.cleanup()
+
+
 async def test_native_browser_opt_in_saves_bounded_received_audio(
     tmp_path, monkeypatch, native_args
 ):
@@ -675,6 +1247,98 @@ def test_native_replay_event_ring_retains_turn_lifecycle_through_streamed_playba
     names = [event["event"] for event in app.events]
     assert names[:3] == ["asr_final", "llm_usage", "tts_start"]
     assert len(app.events) == 2893 < NATIVE_REPLAY_EVENT_HISTORY_LIMIT
+
+
+def test_native_voice_latency_is_turn_correlated_and_separates_ack_audio():
+    from collections import deque
+    from types import SimpleNamespace
+
+    from me3_voice.native_app import NativeApplication, _voice_latency_for_turn
+
+    rows = [
+        {"event": "vad_speech_stopped", "at": 1.0, "sequence": 1, "turn_id": 0, "utterance_id": 7},
+        {"event": "asr_final", "at": 1.3, "sequence": 2, "turn_id": 0, "utterance_id": 7},
+        {"event": "turn_started", "at": 1.31, "sequence": 3, "turn_id": 1},
+        {"event": "tts_progress_started", "at": 1.5, "sequence": 4, "turn_id": 1, "response_id": "ack-1"},
+        {"event": "tts_progress_start", "at": 1.51, "sequence": 5, "turn_id": 1},
+        {"event": "tts_progress_pcm", "at": 1.6, "sequence": 6, "turn_id": 1},
+        {"event": "playback_packet", "at": 1.62, "sequence": 7, "turn_id": 1, "response_id": "ack-1"},
+        {"event": "llm_request", "at": 1.7, "sequence": 8, "turn_id": 1, "request_id": "llm-1"},
+        {"event": "llm_provider_request_started", "at": 1.75, "sequence": 9, "turn_id": 1, "request_id": "provider-1"},
+        {"event": "llm_first_token", "at": 2.0, "sequence": 10, "turn_id": 1, "request_id": "provider-1"},
+        {"event": "tts_response_started", "at": 2.1, "sequence": 11, "turn_id": 1, "response_id": "answer-1"},
+        {"event": "tts_start", "at": 2.2, "sequence": 12, "turn_id": 1, "response_id": "answer-1", "segment_id": 1},
+        {"event": "tts_pcm", "at": 2.4, "sequence": 13, "turn_id": 1, "response_id": "answer-1", "segment_id": 1},
+        {"event": "playback_packet", "at": 2.45, "sequence": 14, "turn_id": 1, "response_id": "answer-1"},
+    ]
+    metrics = _voice_latency_for_turn(
+        rows + [{"event": "turn_completed", "at": 3.0, "sequence": 15, "turn_id": 1}],
+        1,
+    )
+    assert metrics == {
+        "turn_id": 1,
+        "asr_utterance_id": 7,
+        "response_kind": "final_answer",
+        "vad_speech_end_to_asr_final_ms": 300.0,
+        "llm_provider_request_to_first_token_ms": 250.0,
+        "tts_start_to_first_pcm_ms": 200.0,
+        "first_pcm_to_client_delivery_ms": 50.0,
+        "acknowledgement_audio": [
+            {
+                "response_kind": "acknowledgement",
+                "tts_start_to_first_pcm_ms": 90.0,
+                "first_pcm_to_client_delivery_ms": 20.0,
+            }
+        ],
+    }
+    # The same summary is emitted by the real turn-completion event path.
+    emitted = []
+    state = SimpleNamespace(
+        session_id="latency-test",
+        context=SimpleNamespace(get_messages=lambda: []),
+    )
+    app = NativeApplication(state, object(), annotated=True, on_event=emitted.append)
+    app.events = deque(rows, maxlen=64)
+    app.event_count = rows[-1]["sequence"]
+    app.turn_id = 1
+    app.event("turn_completed", owner_turn_id=1)
+    assert emitted[-1]["event"] == "voice_latency"
+    assert emitted[-1]["response_kind"] == "final_answer"
+    assert emitted[-1]["first_pcm_to_client_delivery_ms"] == 50.0
+    app.event("tts_response_started", response_id="final-context")
+    app.event("tts_start")
+    app.event("tts_pcm")
+    app.event("playback_packet", response_id=None)
+    app.event("tts_progress_started", response_id="ack-context", owner_id="task-1")
+    app.event("tts_progress_pcm", owner_id="task-1")
+    app.event("playback_packet", response_id="ack-context")
+    audio_events = [
+        row
+        for row in app.events
+        if row.get("event") in {"tts_start", "tts_pcm", "tts_progress_pcm", "playback_packet"}
+    ][-5:]
+    assert all(row.get("response_id") == "final-context" for row in audio_events[:3])
+    assert all(row.get("response_kind") == "final_answer" for row in audio_events[:3])
+    assert audio_events[3]["response_id"] == "ack-context"
+    assert audio_events[3]["response_kind"] == "acknowledgement"
+    assert audio_events[4]["response_kind"] == "acknowledgement"
+
+
+def test_native_voice_latency_leaves_missing_or_reversed_marks_unavailable():
+    from me3_voice.native_app import _elapsed_ms, _voice_latency_for_turn
+
+    assert _elapsed_ms({"at": 2.0}, {"at": 1.0}) is None
+    assert _elapsed_ms({"at": 1.0}, {}) is None
+    stale = [
+        {"event": "asr_final", "at": 1.0, "sequence": 1, "turn_id": 0, "utterance_id": 3},
+        {"event": "turn_started", "at": 1.1, "sequence": 2, "turn_id": 1},
+        {"event": "turn_completed", "at": 1.2, "sequence": 3, "turn_id": 1},
+        {"event": "turn_started", "at": 2.0, "sequence": 4, "turn_id": 2},
+        {"event": "turn_completed", "at": 2.5, "sequence": 5, "turn_id": 2},
+    ]
+    metrics = _voice_latency_for_turn(stale, 2)
+    assert metrics["asr_utterance_id"] is None
+    assert metrics["vad_speech_end_to_asr_final_ms"] is None
 
 
 def test_native_transcript_projection_shows_live_asr_partial_without_context_insertion():
@@ -926,6 +1590,7 @@ async def test_native_followup_window_starts_after_response_and_resets_on_follow
         SimpleNamespace(session_id="followup-test"),
         object(),
         wake=SimpleNamespace(frame_samples=320),
+        conversation_mode="followup",
         followup_seconds=0.06,
     )
     app.parts = SimpleNamespace(stt=SimpleNamespace(speaking=False))
@@ -949,6 +1614,30 @@ async def test_native_followup_window_starts_after_response_and_resets_on_follow
     assert any(row["event"] == "engagement_expired" for row in app.events)
 
 
+async def test_native_continuous_conversation_survives_idle_without_wake_standby():
+    from types import SimpleNamespace
+
+    from me3_voice.native_app import NativeApplication
+
+    app = NativeApplication(
+        SimpleNamespace(session_id="continuous-conversation-test"),
+        object(),
+        wake=SimpleNamespace(frame_samples=320),
+        conversation_mode="continuous",
+        followup_seconds=0.02,
+    )
+    app.parts = SimpleNamespace(stt=SimpleNamespace(speaking=False))
+    app.gate.active = True
+    app.projection = "listening"
+    app.settled.set()
+    app._arm_followup_timer()
+    assert app.followup_timer is None
+    await app._handle_user_idle()
+    await asyncio.sleep(0.04)
+    assert app.gate.active
+    assert app.projection == "listening"
+
+
 async def test_native_wake_without_speech_expires_but_processing_stays_active():
     from types import SimpleNamespace
     from me3_voice.native_app import NativeApplication
@@ -957,6 +1646,7 @@ async def test_native_wake_without_speech_expires_but_processing_stays_active():
         SimpleNamespace(session_id="wake-lease-test"),
         object(),
         wake=SimpleNamespace(frame_samples=320),
+        conversation_mode="followup",
         followup_seconds=0.04,
     )
     app.parts = SimpleNamespace(stt=SimpleNamespace(speaking=False))
@@ -983,6 +1673,7 @@ async def test_native_followup_expiry_waits_for_browser_scheduled_playback():
         SimpleNamespace(session_id="playback-lease-test"),
         object(),
         wake=SimpleNamespace(frame_samples=320),
+        conversation_mode="followup",
         followup_seconds=0.04,
     )
     app.parts = SimpleNamespace(stt=SimpleNamespace(speaking=False))
@@ -1152,7 +1843,7 @@ async def test_native_known_device_command_uses_shared_fast_route_without_llm():
         app = NativeApplication(state, object(), annotated=True)
         app.turn_id = 1
         context = LLMContext()
-        context.add_message({"role": "user", "content": "Can you turn on the light?"})
+        context.add_message({"role": "user", "content": "Hey Swift, turn on the light."})
         llm = NativeLLM(state.backends["llm"], upstream=NoLLM(), fast_action=app.fast_action)
         llm.new_turn()
         chunks = [chunk async for chunk in await llm.get_chat_completions(context)]
@@ -1306,6 +1997,593 @@ async def test_interrupted_fast_action_is_recorded_before_later_unrelated_turn()
         assert state.tasks.actions.effects == 1
     finally:
         await state.close()
+
+
+@pytest.mark.parametrize(
+    ("utterance", "action", "decision"),
+    [
+        ("Yes, push it.", "github_publish", "approve"),
+        ("Approve", "github_pages_deploy", "approve"),
+        ("Cancel", "github_publish", "reject"),
+    ],
+)
+async def test_spoken_github_confirmation_targets_exact_current_session_approval(
+    utterance, action, decision
+):
+    from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    state.session_id = "current-approval-session"
+    task_id = "task_" + "a" * 24
+    call_id = "website-task-call"
+    request_id = _voice_task_request_id(state.session_id, call_id)
+    approval = {
+        "approval_id": "approval_" + "b" * 32,
+        "action": action,
+        "status": "pending",
+        "expires": __import__("time").time() + 60,
+        "revision": 7,
+    }
+    task = {
+        "task_id": task_id,
+        "call_id": call_id,
+        "request_id": request_id,
+        "status": "waiting_approval",
+        "revision": 7,
+    }
+    controls = []
+
+    class Runtime:
+        store = type("Store", (), {"rows": {task_id: task}, "pending_approvals": {task_id: approval}})()
+        github_writer = object()
+
+        async def control(self, command, payload):
+            controls.append((command, payload))
+            return {"status": "approved" if payload["decision"] == "approve" else "rejected"}
+
+        async def close(self):
+            return None
+
+    state.task_runtime = Runtime()
+    app = NativeApplication(state, object(), annotated=True)
+    context = LLMContext()
+    context.add_message({"role": "user", "content": utterance})
+    try:
+        answer = await app.fast_action(context)
+        assert "approval" in answer.casefold() or "cancelled" in answer.casefold()
+        assert controls == [
+            (
+                "approve",
+                {
+                    "task_id": task_id,
+                    "approval_id": approval["approval_id"],
+                    "expected_revision": 7,
+                    "decision": decision,
+                },
+            )
+        ]
+        event = next(event for event in app.events if event["event"] == "github_voice_approval_decided")
+        assert event["task_id"] == task_id
+        assert event["approval_id"] == approval["approval_id"]
+        assert event["action"] == action
+    finally:
+        await state.close()
+
+
+@pytest.mark.parametrize(
+    ("utterance", "pages_request"),
+    [
+        ("create a new website on GitHub", False),
+        ("edit the existing website on GitHub", False),
+        ("push this file to GitHub", False),
+        ("push this to GitHub", False),
+        ("publish this on GitHub Pages", True),
+        ("approve that one", None),
+        ("yes push it", None),
+    ],
+)
+async def test_voice_github_request_prepares_but_never_approves(
+    utterance, pages_request
+):
+    from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    state.session_id = "approval-session"
+    task_id = "task_" + "c" * 24
+    call_id = "active-website-task"
+    task = {
+        "task_id": task_id,
+        "call_id": call_id,
+        "request_id": _voice_task_request_id(state.session_id, call_id),
+        "status": "running",
+        "revision": 3,
+    }
+    controls = []
+    steers = []
+
+    class Runtime:
+        store = type("Store", (), {"rows": {task_id: task}, "pending_approvals": {}})()
+        github_writer = object()
+
+        async def control(self, command, payload):
+            controls.append((command, payload))
+
+        async def steer(self, *args):
+            steers.append(args)
+            return {"status": "running"}
+
+        async def close(self):
+            return None
+
+    state.task_runtime = Runtime()
+    app = NativeApplication(state, object(), annotated=True)
+    context = LLMContext()
+    context.add_message({"role": "user", "content": utterance})
+    try:
+        answer = await app.fast_action(context)
+        assert controls == []
+        if pages_request is not None:
+            assert len(steers) == 1
+            expected_response = (
+                "nothing is published" if pages_request else "before any repository change"
+            )
+            assert expected_response in answer.casefold()
+            assert ("public GitHub Pages deployment" in steers[0][2]) is pages_request
+            assert "ask separately" in steers[0][2]
+        else:
+            assert steers == []
+            assert "no pending github approval" in answer.casefold()
+    finally:
+        await state.close()
+
+
+@pytest.mark.parametrize(
+    "utterance",
+    [
+        "Create a new website on GitHub Pages",
+        "Edit the existing README file on GitHub",
+    ],
+)
+async def test_first_github_request_starts_background_task_without_remote_write(utterance):
+    from me3_voice.native_app import NativeApplication, NativeState
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    state.session_id = "new-github-session"
+    state.task_runtime = type(
+        "Runtime",
+        (),
+        {
+            "store": type("Store", (), {"rows": {}, "pending_approvals": {}})(),
+            "github_writer": object(),
+            "close": lambda self: asyncio.sleep(0),
+        },
+    )()
+    app = NativeApplication(state, object(), annotated=True)
+    requests = []
+
+    async def start_task(call, arguments):
+        requests.append((call.name, arguments))
+        return {"status": "queued", "task_id": "task_" + "f" * 24}
+
+    app.dispatch_task_tool = start_task
+    context = LLMContext()
+    context.add_message({"role": "user", "content": utterance})
+    try:
+        response = await app.fast_action(context)
+        assert "nothing will be pushed until you approve" in response
+        assert len(requests) == 1
+        assert requests[0][0] == "start_task"
+        assert requests[0][1]["goal"] == utterance
+        assert not any(
+            event.get("event") in {"github_voice_approval_decided", "github_write_dispatched"}
+            for event in app.events
+        )
+    finally:
+        await state.close()
+
+
+def test_private_demo_owner_profile_persists_only_approved_facts(tmp_path):
+    from me3_voice.native_bridge import _load_private_demo_owner_profile
+
+    profile_path = tmp_path / "demo-owner.json"
+    stored = {
+        "display_name": "Edgardo Callagon Jr.",
+        "aliases": ["Approved Alias"],
+        "permissions": {"public_publish": False},
+        "other_fact": "preserved",
+    }
+    profile_path.write_text(json.dumps(stored))
+    profile_path.chmod(0o600)
+    assert _load_private_demo_owner_profile(profile_path) == stored
+
+    # A corrected fact is read from the same private file on the next load.
+    stored["current_role"] = "Senior Data Platform Engineer"
+    profile_path.write_text(json.dumps(stored))
+    profile_path.chmod(0o600)
+    assert _load_private_demo_owner_profile(profile_path) == stored
+    assert profile_path.stat().st_mode & 0o777 == 0o600
+
+
+async def test_owner_pronoun_questions_use_private_profile_without_model_call():
+    from me3_voice.native_app import NativeApplication, NativeState
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    state.owner_profile = {
+        "display_name": "Edgardo Callagon Jr.",
+        "current_role": "Senior Data Platform Engineer",
+    }
+    state.owner_name = "Edgardo Callagon Jr."
+    app = NativeApplication(state, object(), annotated=True)
+    try:
+        for utterance in ("What's my name?", "What is my current role?", "What do I do?"):
+            context = LLMContext()
+            context.add_message({"role": "user", "content": utterance})
+            response = await app.fast_action(context)
+            assert response is not None
+            assert "Edgardo Callagon Jr." in response
+            assert "Senior Data Platform Engineer" in response
+        state.owner_profile = {"display_name": "Edgardo Callagon Jr."}
+        context = LLMContext()
+        context.add_message({"role": "user", "content": "What is my current role?"})
+        assert "not confirmed" in await app.fast_action(context)
+        assert all(
+            event.get("route") == "local_demo_owner_identity"
+            for event in app.events
+            if event.get("event") == "route_selected"
+        )
+    finally:
+        await state.close()
+
+
+async def test_personal_site_task_gets_only_scoped_profile_context():
+    from me3_voice.native_app import NativeApplication, NativeState
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    state.owner_profile = {
+        "display_name": "Edgardo Callagon Jr.",
+        "current_role": "Senior Data Platform Engineer",
+        "aliases": ["Fixture Alias"],
+        "permissions": {"public_publish": False},
+    }
+    state.task_runtime = type("Runtime", (), {"close": lambda self: asyncio.sleep(0)})()
+    app = NativeApplication(state, object(), annotated=True)
+    requests = []
+
+    async def start_task(call, arguments):
+        requests.append(arguments["goal"])
+        return {"status": "queued", "task_id": "task_" + "a" * 24}
+
+    app.dispatch_task_tool = start_task
+    try:
+        for utterance in ("Create my personal website", "Create a website for my bakery"):
+            context = LLMContext()
+            context.add_message({"role": "user", "content": utterance})
+            await app.fast_action(context)
+        assert len(requests) == 2
+        assert "Edgardo Callagon Jr." in requests[0]
+        assert "Senior Data Platform Engineer" in requests[0]
+        assert "Fixture Alias" not in requests[0]
+        assert "public_publish" not in requests[0]
+        assert "do not infer employer, contact details" in requests[0]
+        assert "public publication still requires separate explicit approval" in requests[0]
+        assert "Edgardo Callagon Jr." not in requests[1]
+        assert "Approved private profile facts" not in requests[1]
+    finally:
+        await state.close()
+
+
+async def test_spoken_github_approval_is_session_scoped_and_action_mismatch_rejected():
+    from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    state.session_id = "session-a"
+    task_id = "task_" + "d" * 24
+    call_id = "another-session-task"
+    approval = {
+        "approval_id": "approval_" + "e" * 32,
+        "action": "github_pages_deploy",
+        "status": "pending",
+        "expires": __import__("time").time() + 60,
+        "revision": 2,
+    }
+    task = {
+        "task_id": task_id,
+        "call_id": call_id,
+        "request_id": _voice_task_request_id("session-b", call_id),
+        "status": "waiting_approval",
+        "revision": 2,
+    }
+    controls = []
+
+    class Runtime:
+        store = type("Store", (), {"rows": {task_id: task}, "pending_approvals": {task_id: approval}})()
+
+        async def control(self, *args):
+            controls.append(args)
+
+        async def close(self):
+            return None
+
+    state.task_runtime = Runtime()
+    app = NativeApplication(state, object(), annotated=True)
+    context = LLMContext()
+    context.add_message({"role": "user", "content": "Yes, push it"})
+    try:
+        answer = await app.fast_action(context)
+        assert "no pending github approval" in answer.casefold()
+        assert controls == []
+
+        task["request_id"] = _voice_task_request_id(state.session_id, call_id)
+        context.add_message({"role": "user", "content": "Yes, push it"})
+        answer = await app.fast_action(context)
+        assert "does not match" in answer.casefold()
+        assert controls == []
+
+        context.set_messages([])
+        context.add_message({"role": "user", "content": "Approve that one"})
+        answer = await app.fast_action(context)
+        assert "did not clearly approve or cancel" in answer.casefold()
+        assert controls == []
+
+        approval["expires"] = __import__("time").time() - 1
+        context.set_messages([])
+        context.add_message({"role": "user", "content": "Approve"})
+        answer = await app.fast_action(context)
+        assert "no pending github approval" in answer.casefold()
+        assert controls == []
+    finally:
+        await state.close()
+
+
+async def test_native_websocket_test_text_routes_approval_without_provider_calls(
+    tmp_path, monkeypatch, native_args
+):
+    import me3_voice.native_bridge as bridge
+    from me3_voice.native_app import NativeState, _voice_task_request_id
+
+    monkeypatch.setenv("ME3_TEST_TEXT_INGRESS", "1")
+    monkeypatch.setenv("ME3_TASK_DATABASE", str(tmp_path / "voice-approval.sqlite"))
+    monkeypatch.setenv("ME3_TASK_WORKSPACE", str(tmp_path / "voice-approval-workspace"))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "voice-approval-offline")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "voice-approval-ledger.sqlite"))
+    monkeypatch.setattr(bridge, "build_wake", lambda _args: Wake())
+    captured = []
+
+    class CapturedState(NativeState):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured.append(self)
+
+    monkeypatch.setattr(bridge, "NativeState", CapturedState)
+    app = build_app(tmp_path, load_backends(), {}, native_args)
+    async with TestServer(app) as server, ClientSession() as client:
+        async with client.ws_connect(server.make_url("/api/voice/ws")) as ws:
+            await ws.send_json({"type": "hello", "rate": 16000, "channels": 1})
+            ready = await next_json(ws, "ready")
+            state = captured[-1]
+            runtime = state.task_runtime
+            assert runtime is not None
+            task_call_id = "websocket-site-task"
+            task, _ = await runtime.store.create(
+                "Publish my verified website",
+                _voice_task_request_id(ready["session_id"], task_call_id),
+                1,
+                task_call_id,
+            )
+            await runtime.store.update(task["task_id"], status="running")
+            approval = await runtime.store.prepare_approval(
+                task["task_id"],
+                1,
+                task["task_id"] + ":github-branch",
+                "github_publish",
+                "Push the approved artifact to owner/repo on the shown branch.",
+                spoken_summary="GitHub approval: push index.html to owner/repo, branch swift/site. The repository is public.",
+            )
+            controls = []
+
+            async def capture_control(command, payload):
+                controls.append((command, payload))
+                return {"task_id": payload["task_id"], "approval_id": payload["approval_id"], "status": "approved"}
+
+            runtime.control = capture_control
+            await ws.send_json({"type": "test_text", "text": "Yes, push it."})
+            asr_bypassed = False
+            async with asyncio.timeout(8):
+                while True:
+                    message = await ws.receive()
+                    if message.type == WSMsgType.BINARY:
+                        await ws.send_json(
+                            {"type": "audio_ack", "id": struct.unpack("<I", message.data[:4])[0]}
+                        )
+                    elif message.type == WSMsgType.TEXT:
+                        value = message.json()
+                        event = value.get("data", {})
+                        if (
+                            value.get("type") == "runtime_event"
+                            and event.get("event") == "test_text_injected"
+                        ):
+                            asr_bypassed = event.get("asr_bypassed") is True
+                        if (
+                            value.get("type") == "runtime_event"
+                            and event.get("event") == "github_voice_approval_decided"
+                        ):
+                            break
+            assert asr_bypassed is True
+            assert controls == [
+                (
+                    "approve",
+                    {
+                        "task_id": task["task_id"],
+                        "approval_id": approval["approval_id"],
+                        "expected_revision": approval["revision"],
+                        "decision": "approve",
+                    },
+                )
+            ]
+            assert runtime.budget.requests == 0
+            assert state._task_budget is None or state._task_budget.requests == 0
+            response_seen = False
+            turn_completed = False
+            async with asyncio.timeout(5):
+                while not (response_seen and turn_completed):
+                    message = await ws.receive()
+                    if message.type == WSMsgType.BINARY:
+                        await ws.send_json(
+                            {"type": "audio_ack", "id": struct.unpack("<I", message.data[:4])[0]}
+                        )
+                    elif message.type == WSMsgType.TEXT:
+                        value = message.json()
+                        if value.get("type") == "transcript":
+                            assistants = [
+                                item
+                                for item in value["data"]["messages"]
+                                if item.get("role") == "assistant"
+                            ]
+                            response_seen = any(
+                                "Approval recorded for that exact GitHub action" in str(
+                                    item.get("text", item.get("content", ""))
+                                )
+                                for item in assistants
+                            )
+                        elif value.get("type") == "runtime_event":
+                            turn_completed = (
+                                value.get("data", {}).get("event") == "turn_completed"
+                            )
+            assert response_seen is True
+            await ws.close()
+
+
+async def test_outgoing_call_and_text_require_explicit_followup_confirmation():
+    from me3_voice.communications import Communications
+    from me3_voice.native_app import NativeApplication, NativeState
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    try:
+        app = NativeApplication(state, object(), annotated=True)
+        calls = []
+        state.tasks.actions.communications = Communications(
+            contacts=[
+                {"name": "Alice Rivera", "aliases": ["Ally"], "phone_number": "+15551234567"},
+                {"name": "Alex Home", "aliases": ["Alex"], "phone_number": "+15551234568"},
+                {"name": "Alex Work", "aliases": ["Alex"], "phone_number": "+15551234569"},
+            ]
+        )
+
+        async def count_execute(*args, **kwargs):
+            call = args[1]
+            calls.append(
+                (
+                    call.arguments.get("action"),
+                    call.arguments.get("value"),
+                    call.arguments.get("message"),
+                )
+            )
+            return {"summary": "Offline confirmation intercepted; no phone action executed."}
+
+        state.tasks.execute = count_execute
+        context = LLMContext()
+        context.add_message({"role": "user", "content": "Call the demo contact"})
+        app.turn_id = 1
+        prompt = await app.fast_action(context)
+        assert "who would you like me to call" in prompt.casefold()
+        assert calls == []
+
+        context.add_message({"role": "user", "content": "Ally"})
+        app.turn_id = 2
+        prompt = await app.fast_action(context)
+        assert "call alice rivera" in prompt.casefold()
+        assert "repeat call to alice rivera" in prompt.casefold()
+        assert calls == []
+
+        context.add_message({"role": "user", "content": "repeat call to Alice Rivera"})
+        app.turn_id = 3
+        answer = await app.fast_action(context)
+        assert calls == [("call_demo", "Alice Rivera", None)], answer
+        assert any(event["event"] == "outgoing_action_confirmed" for event in app.events)
+
+        context.set_messages([])
+        original_body = "I'm running 10 minutes late."
+        context.add_message(
+            {"role": "user", "content": f"Draft a text to Alex saying {original_body}"}
+        )
+        app.turn_id = 4
+        prompt = await app.fast_action(context)
+        assert "more than one matching contact" in prompt.casefold()
+        assert "Alex Home" in prompt and "Alex Work" in prompt
+        assert calls == [("call_demo", "Alice Rivera", None)]
+
+        context.add_message({"role": "user", "content": "Alex Work"})
+        app.turn_id = 5
+        prompt = await app.fast_action(context)
+        assert "repeat message to alex work" in prompt.casefold()
+        assert original_body in prompt
+        assert calls == [("call_demo", "Alice Rivera", None)]
+
+        edited_body = "I'll be there in fifteen minutes."
+        context.add_message(
+            {"role": "user", "content": f"Actually, change the message to {edited_body}"}
+        )
+        app.turn_id = 6
+        prompt = await app.fast_action(context)
+        assert edited_body in prompt and original_body not in prompt
+        assert calls == [("call_demo", "Alice Rivera", None)]
+
+        context.add_message({"role": "user", "content": "repeat message to Alex Work"})
+        app.turn_id = 7
+        answer = await app.fast_action(context)
+        assert "offline confirmation intercepted" in answer.casefold()
+        assert calls == [
+            ("call_demo", "Alice Rivera", None),
+            ("message_demo", "Alex Work", edited_body),
+        ]
+
+        context.set_messages([])
+        context.add_message({"role": "user", "content": "Send a message to Unknown Person"})
+        app.turn_id = 8
+        answer = await app.fast_action(context)
+        assert "couldn't find" in answer.casefold()
+        assert len(calls) == 2
+
+        context.set_messages([])
+        context.add_message({"role": "user", "content": "Call Ally"})
+        app.turn_id = 9
+        prompt = await app.fast_action(context)
+        assert "repeat call to alice rivera" in prompt.casefold()
+        context.add_message({"role": "user", "content": "cancel"})
+        app.turn_id = 10
+        answer = await app.fast_action(context)
+        assert "cancelled" in answer.casefold()
+        assert len(calls) == 2
+        assert any(
+            event["event"] == "outgoing_action_confirmation_cancelled" for event in app.events
+        )
+    finally:
+        await state.close()
+
+
+def test_configurable_contact_lookup_handles_aliases_ambiguity_and_missing_names():
+    from me3_voice.communications import Communications
+
+    contacts = Communications(
+        contacts=[
+            {"name": "Alice Rivera", "aliases": ["Ally", "A. Rivera"], "phone_number": "+15551234567"},
+            {"name": "Alex Home", "aliases": ["Alex"], "phone_number": "+15551234568"},
+            {"name": "Alex Work", "aliases": ["Alex"], "phone_number": "+15551234569"},
+        ]
+    )
+    assert contacts.match_contact("ALLY") == {"status": "matched", "name": "Alice Rivera"}
+    assert contacts.match_contact("Alex") == {
+        "status": "ambiguous",
+        "matches": ["Alex Home", "Alex Work"],
+    }
+    assert contacts.match_contact("Unknown Person") == {"status": "missing", "matches": []}
 
 
 async def test_native_fast_music_route_clarifies_missing_track_without_llm_or_tool_call():
@@ -1934,7 +3212,7 @@ async def test_labeled_nine_second_native_replay_with_delayed_mcp_appends(
         assert saturation["queue_limit"] == 40
         assert saturation["depth"] == 40
         speech_start = next(e for e in trace_rows if e["event"] == "vad_speech_started")
-        assert speech_start["onset_buffer_frames"] == 8
+        assert speech_start["onset_buffer_frames"] == 20
         assert sum(e["event"] == "vad_speech_started" for e in trace_rows) == 1
         speech_stop = next(e for e in trace_rows if e["event"] == "vad_speech_stopped")
         aborted = next(e for e in trace_rows if e["event"] == "asr_turn_aborted")
@@ -2243,6 +3521,52 @@ async def test_native_stream_failure_and_cancellation_update_ledger_conservative
         )
     assert rows[0] == [("failure", "provider_timeout")]
     assert rows[1] == [("failure", "provider_timeout"), ("dispatched_unknown", None)]
+
+
+async def test_native_successful_stream_records_provider_usage_in_ledger(tmp_path, monkeypatch):
+    import sqlite3
+    from types import SimpleNamespace
+    from me3_voice.native_llm import NativeLLM
+    from me3_voice.remote import LiveTransport
+    from me3_voice.configuration import BackendSpec
+
+    ledger = tmp_path / "provider.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(ledger))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "native-actual-usage-01")
+    spec = BackendSpec(
+        backend="external",
+        protocol="chat-completions-v1",
+        endpoint="https://llm.test/v1/chat/completions",
+        model="test-model",
+        auth_env="TEST_KEY",
+        allow_live=True,
+        request_limit=2,
+        max_input_tokens=1000,
+        max_input_tokens_total=2000,
+    )
+    budget = LiveTransport(spec, {"TEST_KEY": "offline-test-key"})
+    _, request_id = budget.authorize(
+        input_tokens=400, input_token_limit=1000, input_tokens_total_limit=2000
+    )
+
+    class Tracker:
+        safe_error = staticmethod(NativeLLM.safe_error)
+
+    tracker = Tracker()
+    tracker.budget = budget
+    usage = SimpleNamespace(model_dump=lambda: {"prompt_tokens": 123, "completion_tokens": 17})
+
+    async def completed():
+        yield SimpleNamespace(usage=usage)
+
+    rows = [
+        chunk async for chunk in NativeLLM._track_ledger_stream(tracker, completed(), request_id)
+    ]
+    assert len(rows) == 1
+    with sqlite3.connect(ledger) as db:
+        assert db.execute(
+            "SELECT status,input_tokens_reserved,input_tokens_actual,output_tokens_actual FROM provider_requests"
+        ).fetchone() == ("success", 400, 123, 17)
 
 
 async def test_native_llm_serialized_input_budget_rejects_before_reservation_or_sdk_dispatch(
@@ -2586,6 +3910,81 @@ async def test_native_capability_reports_engine_and_shared_contract_fields(
             "secret_value" not in row and "credential_value" not in row
             for row in report["capabilities"]
         )
+
+
+async def test_native_bridge_downloads_only_registered_task_artifacts(
+    tmp_path, monkeypatch, native_args
+):
+    from types import SimpleNamespace
+
+    import me3_voice.native_bridge as bridge
+    from me3_voice.configuration import RuntimeOptions
+
+    artifact_id = "a" * 24
+    task_id = "task_" + artifact_id
+    content = "<!doctype html><title>Game</title>"
+
+    class ArtifactStore:
+        async def artifact_metadata(self, requested_task, name):
+            if requested_task == task_id and name in {"index.html", "todo/index.html"}:
+                content_for_name = content if name == "index.html" else "<h1>Nested artifact</h1>"
+                return {
+                    "path": name,
+                    "sha256": hashlib.sha256(content_for_name.encode()).hexdigest(),
+                    "size": len(content_for_name),
+                }
+            return None
+
+        async def read_artifact(self, requested_task, name):
+            if requested_task != task_id or name not in {"index.html", "todo/index.html"}:
+                raise FileNotFoundError
+            content_for_name = content if name == "index.html" else "<h1>Nested artifact</h1>"
+            return {
+                "path": name,
+                "content": content_for_name,
+                "sha256": hashlib.sha256(content_for_name.encode()).hexdigest(),
+            }
+
+    class FakeState:
+        def __init__(self):
+            self.task_runtime = SimpleNamespace(store=ArtifactStore())
+            self.tasks = SimpleNamespace(
+                actions=SimpleNamespace(capabilities=lambda: {}),
+                music=SimpleNamespace(capabilities=lambda: {}),
+            )
+            self.credentials = {}
+            self.speech = None
+            self.owner = None
+
+        async def close(self):
+            pass
+
+    state = FakeState()
+    monkeypatch.setattr(bridge, "NativeState", lambda *args, **kwargs: state)
+    app = bridge.build_native_app(
+        tmp_path,
+        load_backends(),
+        {},
+        native_args,
+        RuntimeOptions(engine="native"),
+    )
+    async with TestServer(app) as server, ClientSession() as client:
+        url = server.make_url(f"/api/voice/tasks/{artifact_id}/artifacts/index.html")
+        response = await client.get(url)
+        assert response.status == 200
+        assert await response.text() == content
+        assert response.headers["Content-Disposition"] == 'attachment; filename="index.html"'
+        assert response.headers["Content-Security-Policy"] == "default-src 'none'"
+        nested = await client.get(
+            server.make_url(f"/api/voice/tasks/{artifact_id}/artifacts/todo/index.html")
+        )
+        assert nested.status == 200
+        assert await nested.text() == "<h1>Nested artifact</h1>"
+        assert nested.headers["Content-Disposition"] == 'attachment; filename="index.html"'
+        missing = await client.get(
+            server.make_url(f"/api/voice/tasks/{artifact_id}/artifacts/missing.html")
+        )
+        assert missing.status == 404
 
 
 def test_asr_browser_failure_trace_keeps_role_state_and_connection_stages():

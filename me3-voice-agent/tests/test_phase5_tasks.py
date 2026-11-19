@@ -19,11 +19,385 @@ from me3_voice.task_runtime import (
     TaskError,
     TaskRuntime,
     TaskStore,
+    validate_interactive_artifact,
 )
 from me3_voice.research import ResearchClient
 
 
 TERMINAL = {"succeeded", "completed_unverified", "failed", "cancelled"}
+
+
+def test_interactive_html_rejects_swallowed_script_and_accepts_active_code():
+    with pytest.raises(TaskError, match="interactive_script_missing_or_disabled"):
+        validate_interactive_artifact(
+            "game.html", "<script>// Game state const board = [];</script>"
+        )
+    validate_interactive_artifact(
+        "game.html", "<button onclick=\"play()\">Play</button><script>\n// Game state\nplay();\n</script>"
+    )
+    with pytest.raises(TaskError, match="interactive_html_attribute_quoting_invalid"):
+        validate_interactive_artifact(
+            "game.html",
+            "<div id=&#34;board&#34;></div><script>document.getElementById('board');</script>",
+        )
+    with pytest.raises(TaskError, match="interactive_html_attribute_quoting_invalid"):
+        validate_interactive_artifact(
+            "game.html", "<button onclick=&#34;play()&#34;>Play</button>"
+        )
+    with pytest.raises(TaskError, match="interactive_script_missing_or_disabled"):
+        validate_interactive_artifact("game.js", "// Game state function init() { start(); }")
+    validate_interactive_artifact("game.js", "// Game state\nfunction init() { start(); }")
+    with pytest.raises(TaskError, match="interactive_dom_reference_missing"):
+        validate_interactive_artifact(
+            "game.html",
+            "<div id='message'></div><script>document.getElementById('board');</script>",
+        )
+
+
+async def test_unfinished_task_does_not_project_private_partial_artifact(tmp_path):
+    runtime = await make_runtime(tmp_path, ScriptedModel([]))
+    try:
+        task, created = await runtime.store.create(
+            "Create a playable page",
+            request_id="pending-artifact",
+            turn_id=1,
+            call_id="pending-artifact",
+        )
+        assert created
+        await runtime.store.update(task["task_id"], status="running")
+        await runtime.store.persist_artifact(
+            task["task_id"], 1, "game.html", "<script>play();</script>", "partial-write"
+        )
+        await runtime.store.persist_artifact(
+            task["task_id"], 1, "todo/index.html", "<h1>To-do</h1>", "partial-nested-write"
+        )
+        await runtime.store.update(task["task_id"], status="waiting_approval")
+        projected = runtime.store._project(runtime.store.rows[task["task_id"]])
+        assert projected["status"] == "awaiting_input"
+        assert projected["artifacts"] == []
+        assert "artifact_id" not in projected
+        await runtime.store.update(task["task_id"], status="failed")
+        failed_projection = runtime.store._project(runtime.store.rows[task["task_id"]])
+        assert failed_projection["status"] == "failed"
+        assert failed_projection["artifact_id"] == task["task_id"][5:]
+        assert failed_projection["artifacts"] == ["game.html", "todo/index.html"]
+    finally:
+        await runtime.close()
+
+
+async def test_interactive_task_corrects_disabled_script_after_write_rejection(tmp_path, monkeypatch):
+    import me3_voice.task_runtime as task_runtime_module
+
+    monkeypatch.setattr(task_runtime_module, "_chromium_executable", lambda: None)
+    model = ScriptedModel(
+        [
+            call(
+                "write_artifact",
+                {"path": "game.html", "content": "<script>// state const board = [];</script>"},
+                "bad-write",
+            ),
+            call(
+                "write_artifact",
+                {"path": "game.html", "content": "<script>\nconst board = [];\n</script>"},
+                "good-write",
+            ),
+            call("read_artifact", {"path": "game.html"}, "read-game"),
+            AIMessage(content="I saved the interactive page after correcting its script."),
+        ]
+    )
+    runtime = await make_runtime(tmp_path, model)
+    try:
+        task = await start_task(runtime, "Create a playable interactive page")
+        result = await wait_for_status(runtime, task["task_id"])
+        saved = await runtime.store.read_artifact(task["task_id"], "game.html")
+        assert "const board = [];" in saved["content"]
+        assert result["status"] == "completed_unverified"
+        assert result["verification"]["interactive_runtime_check_required"] is True
+        assert result["verification"]["interactive_runtime_check_verified"] is False
+        assert result["model_calls"] == 4
+        assert result["verification"]["interactive_repair_attempts"] == 1
+    finally:
+        await runtime.close()
+
+
+async def test_task_write_tool_rejects_entity_quoted_dom_attributes(tmp_path, monkeypatch):
+    import me3_voice.task_runtime as task_runtime_module
+
+    monkeypatch.setattr(task_runtime_module, "_chromium_executable", lambda: None)
+    malformed = (
+        "<div id=&#34;board&#34;></div>"
+        "<script>document.getElementById('board').addEventListener('click', play);</script>"
+    )
+    model = ScriptedModel(
+        [
+            call("write_artifact", {"path": "game.html", "content": malformed}, "bad-entity"),
+            call("write_artifact", {"path": "game.html", "content": TIC_TAC_TOE_HTML}, "good-html"),
+            call("read_artifact", {"path": "game.html"}, "read-good-html"),
+            AIMessage(content="I corrected the malformed HTML attributes."),
+        ]
+    )
+    runtime = await make_runtime(tmp_path, model)
+    try:
+        task = await start_task(runtime, "Create a playable interactive page")
+        result = await wait_for_status(runtime, task["task_id"])
+        assert result["status"] == "completed_unverified"
+        assert result["verification"]["interactive_repair_attempts"] == 1
+        saved = await runtime.store.read_artifact(task["task_id"], "game.html")
+        assert "id=&#34;board&#34;" not in saved["content"]
+        assert 'id="board"' in saved["content"]
+        async with runtime.store.lock:
+            async with runtime.store.conn.execute(
+                "SELECT payload FROM me3_task_events WHERE task_id=? AND kind='progress'",
+                (task["task_id"],),
+            ) as cursor:
+                events = [json.loads(row[0]) for row in await cursor.fetchall()]
+        assert any(event.get("stage") == "browser_repair_reserved" for event in events)
+    finally:
+        await runtime.close()
+
+
+TIC_TAC_TOE_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Tic-Tac-Toe</title></head>
+<body><h1>Tic-Tac-Toe</h1><div id="board"></div><p id="message"></p>
+<button id="reset">Reset Game</button><script>
+const boardElement = document.getElementById('board');
+const messageElement = document.getElementById('message');
+const resetButton = document.getElementById('reset');
+let board = Array(9).fill(null);
+let currentPlayer = 'X';
+let active = true;
+const wins = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+function init() {
+  board = Array(9).fill(null); currentPlayer = 'X'; active = true;
+  boardElement.replaceChildren();
+  for (let i = 0; i < 9; i++) {
+    const cell = document.createElement('button'); cell.className = 'cell';
+    cell.dataset.index = String(i); cell.addEventListener('click', () => play(i));
+    boardElement.appendChild(cell);
+  }
+  messageElement.textContent = "Player X's turn";
+}
+function play(i) {
+  if (!active || board[i] !== null) return;
+  board[i] = currentPlayer; boardElement.children[i].textContent = currentPlayer;
+  if (wins.some(([a,b,c]) => board[a] && board[a] === board[b] && board[b] === board[c])) {
+    messageElement.textContent = `Player ${currentPlayer} wins!`; active = false; return;
+  }
+  if (board.every(value => value !== null)) { messageElement.textContent = 'Draw!'; active = false; return; }
+  currentPlayer = currentPlayer === 'X' ? 'O' : 'X';
+  messageElement.textContent = `Player ${currentPlayer}'s turn`;
+}
+resetButton.addEventListener('click', init); init();
+</script></body></html>"""
+
+
+async def test_playable_artifact_is_chromium_verified_before_success(tmp_path, monkeypatch):
+    import me3_voice.task_runtime as task_runtime_module
+
+    executable = task_runtime_module._chromium_executable()
+    if not executable:
+        pytest.skip("Chromium is unavailable")
+    monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
+    model = ScriptedModel(
+        [
+            call("write_artifact", {"path": "game.html", "content": TIC_TAC_TOE_HTML}, "write-game"),
+            call("read_artifact", {"path": "game.html"}, "read-game"),
+            AIMessage(content="I created and browser-verified the playable game."),
+        ]
+    )
+    runtime = await make_runtime(tmp_path, model)
+    try:
+        task = await start_task(runtime, "Create a playable Tic-Tac-Toe game")
+        result = await wait_for_status(runtime, task["task_id"], timeout=25)
+        assert result["status"] == "succeeded"
+        assert result["verification"]["interactive_runtime_check_verified"] is True
+        assert result["verification"]["interactive_repair_attempts"] == 0
+        async with runtime.store.lock:
+            async with runtime.store.conn.execute(
+                "SELECT detail FROM me3_task_evidence WHERE task_id=? AND kind='browser_runtime_test' AND verified=1",
+                (task["task_id"],),
+            ) as cursor:
+                evidence = json.loads((await cursor.fetchone())[0])
+        checks = evidence["result"]["runtime_checks"]
+        assert all(
+            checks[name]
+            for name in (
+                "nine_cells",
+                "alternating_moves",
+                "occupied_cell_rejected",
+                "win",
+                "draw",
+                "terminal_move_rejected",
+                "reset_after_win",
+                "reset_starts_x",
+                "reset_after_draw",
+            )
+        )
+        assert evidence["workspace_manifest"] == {"game.html": evidence["sha256"]}
+        projected = runtime.store._project(runtime.store.rows[task["task_id"]])
+        assert projected["status"] == "completed"
+        assert projected["artifacts"] == ["game.html"]
+        async with runtime.store.lock:
+            await runtime.store.conn.execute(
+                "UPDATE me3_artifacts SET sha256=? WHERE task_id=? AND path='game.html'",
+                ("0" * 64, task["task_id"]),
+            )
+            await runtime.store.conn.commit()
+        stale = await runtime.store.verify(task["task_id"])
+        assert stale["verified"] is False
+        assert stale["interactive_runtime_check_verified"] is False
+    finally:
+        await runtime.close()
+
+
+async def test_chromium_failure_reports_runtime_dom_errors(tmp_path, monkeypatch):
+    import me3_voice.task_runtime as task_runtime_module
+
+    executable = task_runtime_module._chromium_executable()
+    if not executable:
+        pytest.skip("Chromium is unavailable")
+    monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
+    artifact = tmp_path / "dom-error.html"
+    artifact.write_text(
+        '<!doctype html><div id="board"></div><script>'
+        'document.querySelector("#missing").addEventListener("click", () => {});'
+        "</script>",
+        encoding="utf-8",
+    )
+    result = await task_runtime_module.validate_in_chromium(artifact)
+    assert result["available"] is True
+    assert result["verified"] is False
+    assert any("Cannot read properties of null" in error for error in result["errors"])
+
+
+async def test_chromium_loads_registered_module_assets_and_blocks_external_requests(
+    tmp_path, monkeypatch
+):
+    import me3_voice.task_runtime as task_runtime_module
+
+    executable = task_runtime_module._chromium_executable()
+    if not executable:
+        pytest.skip("Chromium is unavailable")
+    monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
+    html_path = tmp_path / "index.html"
+    html = (
+        '<!doctype html><p id="state"></p>'
+        '<script type="module" src="app.mjs"></script>'
+    )
+    module = 'document.getElementById("state").textContent = "module loaded";'
+    html_path.write_text(html, encoding="utf-8")
+    result = await task_runtime_module.validate_in_chromium(
+        html_path,
+        artifact_path="index.html",
+        artifact_files={"index.html": html, "app.mjs": module},
+    )
+    assert result["verified"] is True
+
+    external_html = (
+        '<!doctype html><p>offline page</p><script>'
+        'fetch("https://example.invalid/private?token=not-logged").catch(() => {});'
+        "</script>"
+    )
+    result = await task_runtime_module.validate_in_chromium(
+        html_path,
+        artifact_path="index.html",
+        artifact_files={"index.html": external_html},
+    )
+    assert result["verified"] is False
+    assert any(error == "external_resource_blocked:https://example.invalid" for error in result["errors"])
+
+
+async def test_chromium_failure_allows_exactly_one_repair_pass(tmp_path, monkeypatch):
+    import me3_voice.task_runtime as task_runtime_module
+
+    executable = task_runtime_module._chromium_executable()
+    if not executable:
+        pytest.skip("Chromium is unavailable")
+    monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
+    broken = TIC_TAC_TOE_HTML.replace(
+        "resetButton.addEventListener('click', init); init();",
+        "resetButton.addEventListener('click', init); // init disabled on one line",
+    )
+    model = ScriptedModel(
+        [
+            call("write_artifact", {"path": "game.html", "content": broken}, "write-broken"),
+            AIMessage(content="I created the game."),
+            call("write_artifact", {"path": "game.html", "content": TIC_TAC_TOE_HTML}, "repair-game"),
+            call("read_artifact", {"path": "game.html"}, "read-repaired-game"),
+            AIMessage(content="I repaired and verified the playable game."),
+        ]
+    )
+    runtime = await make_runtime(tmp_path, model)
+    try:
+        task = await start_task(runtime, "Create a playable Tic-Tac-Toe game")
+        result = await wait_for_status(runtime, task["task_id"], timeout=25)
+        assert result["status"] == "succeeded"
+        assert result["model_calls"] == 5
+        assert result["verification"]["interactive_repair_attempts"] == 1
+        events = runtime.store.rows[task["task_id"]]["_recent_events"]
+        assert any(event["kind"] == "browser_runtime_test" for event in events)
+        assert any(
+            event["kind"] == "progress"
+            and json.loads(event["payload"]).get("stage") == "browser_repair_reserved"
+            for event in events
+        )
+    finally:
+        await runtime.close()
+
+
+async def test_second_chromium_failure_stays_unverified_without_second_repair(tmp_path, monkeypatch):
+    import me3_voice.task_runtime as task_runtime_module
+
+    executable = task_runtime_module._chromium_executable()
+    if not executable:
+        pytest.skip("Chromium is unavailable")
+    monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
+    broken = TIC_TAC_TOE_HTML.replace(
+        "resetButton.addEventListener('click', init); init();",
+        "resetButton.addEventListener('click', init); // init disabled on one line",
+    )
+    model = ScriptedModel(
+        [
+            call("write_artifact", {"path": "game.html", "content": broken}, "write-broken"),
+            AIMessage(content="I created the game."),
+            AIMessage(content="I could not repair the game."),
+        ]
+    )
+    runtime = await make_runtime(tmp_path, model)
+    try:
+        task = await start_task(runtime, "Create a playable Tic-Tac-Toe game")
+        result = await wait_for_status(runtime, task["task_id"], timeout=25)
+        assert result["status"] == "completed_unverified"
+        assert result["model_calls"] == 3
+        assert result["verification"]["interactive_runtime_check_verified"] is False
+        assert result["verification"]["interactive_repair_attempts"] == 1
+    finally:
+        await runtime.close()
+
+
+async def test_task_repairs_one_malformed_model_tool_call_within_task_budget(tmp_path):
+    model = ScriptedModel(
+        [
+            TaskError("invalid_tool_json"),
+            call(
+                "write_artifact",
+                {"path": "result.txt", "content": "recovered artifact"},
+                "recovered-write",
+            ),
+            call("read_artifact", {"path": "result.txt"}, "recovered-read"),
+            AIMessage(content="I created and read back the recovered artifact."),
+        ]
+    )
+    runtime = await make_runtime(tmp_path, model)
+    try:
+        task = await start_task(runtime, "Create a small result file")
+        result = await wait_for_status(runtime, task["task_id"])
+        assert result["status"] == "succeeded"
+        assert result["model_calls"] == 4
+        projected = runtime.store._project(runtime.store.rows[task["task_id"]])
+        assert "Retrying malformed tool call" in projected["completed_steps"]
+    finally:
+        await runtime.close()
 
 
 class ScriptedModel:
@@ -107,6 +481,277 @@ async def start_task(runtime, goal="an unfamiliar multi-step task", *, request_i
     return await runtime.start(goal, request_id=request_id, turn_id=1, call_id="call-" + request_id)
 
 
+async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tmp_path, monkeypatch):
+    import me3_voice.task_runtime as task_runtime_module
+    from me3_voice.github_publish import GitHubPublisher
+
+    class Writer:
+        client_state = "INITIALIZED_UNVERIFIED"
+        repository_name = "private-owner/demo-repo"
+        base_branch = "main"
+        branch_for = staticmethod(GitHubPublisher.branch_for)
+
+        async def repository_visibility(self):
+            return "public"
+
+        async def existing_paths(self, paths):
+            return []
+
+        async def pages_configuration(self):
+            return {"configured": False, "branch": "gh-pages", "path": "/"}
+
+        def __init__(self):
+            self.calls = 0
+
+        async def publish(self, *_args, **_kwargs):
+            self.calls += 1
+            return {"status": "published"}
+
+    class ApprovalPause(Exception):
+        pass
+
+    def pause_before_approval(_request):
+        raise ApprovalPause
+
+    monkeypatch.setattr(task_runtime_module, "interrupt", pause_before_approval)
+    browser_checks = []
+
+    async def verify_pages_artifact(path, **kwargs):
+        browser_checks.append((path, kwargs["artifact_path"], sorted(kwargs["artifact_files"])))
+        return {"available": True, "verified": True, "browser": "chromium", "errors": []}
+
+    monkeypatch.setattr(task_runtime_module, "validate_in_chromium", verify_pages_artifact)
+    runtime = TaskRuntime(
+        load_backends()["llm"],
+        database=tmp_path / "tasks.sqlite",
+        artifact_root=tmp_path / "artifacts",
+        model=ScriptedModel([]),
+    )
+    writer = Writer()
+    runtime.github_writer = writer
+    try:
+        await runtime.start_runtime()
+        task, _ = await runtime.store.create(
+            "Prepare and publish a website artifact",
+            "github-approval-test",
+            1,
+            "github-approval-test",
+        )
+        await runtime.store.update(task["task_id"], status="running")
+        await runtime.store.persist_artifact(
+            task["task_id"],
+            1,
+            "me3-voice-agent/artifacts/trials/nasa-artemis/index.html",
+            "<h1>Private draft</h1>",
+            "write-html",
+        )
+        await runtime.store.persist_artifact(
+            task["task_id"],
+            1,
+            "me3-voice-agent/artifacts/trials/nasa-artemis/styles.css",
+            "h1 { color: navy; }",
+            "write-css",
+        )
+        tool = next(tool for tool in runtime.registered_tools() if tool.name == "publish_github_branch")
+        state = {
+            "task_id": task["task_id"],
+            "revision": 1,
+            "requirements": "Prepare and publish a website artifact",
+        }
+        token = runtime._tool_context.set((state, "publish-approval-01"))
+        try:
+            with pytest.raises(ApprovalPause):
+                await tool.coroutine(
+                    paths=[
+                        "me3-voice-agent/artifacts/trials/nasa-artemis/index.html",
+                        "me3-voice-agent/artifacts/trials/nasa-artemis/styles.css",
+                    ],
+                    commit_message="Publish website",
+                    deploy_pages=True,
+                )
+        finally:
+            runtime._tool_context.reset(token)
+        assert writer.calls == 0
+        assert browser_checks == [
+            (
+                Path("me3-voice-agent/artifacts/trials/nasa-artemis/index.html"),
+                "me3-voice-agent/artifacts/trials/nasa-artemis/index.html",
+                [
+                    "me3-voice-agent/artifacts/trials/nasa-artemis/index.html",
+                    "me3-voice-agent/artifacts/trials/nasa-artemis/styles.css",
+                ],
+            )
+        ]
+        row = await runtime.status(task["task_id"])
+        assert row["approvals"]
+        assert row["approvals"][0]["status"] == "pending"
+        assert row["approvals"][0]["action"] == "github_publish"
+        assert "does not configure GitHub Pages" in row["approvals"][0]["details"]
+        assert "me3-voice-agent/artifacts/trials/nasa-artemis/" in row["approvals"][0]["details"]
+        approval_events = [event for event in row["progress"] if event["kind"] == "approval_requested"]
+        assert "index.html" in approval_events[-1]["payload"]["spoken_summary"]
+        assert "styles.css" in approval_events[-1]["payload"]["spoken_summary"]
+        assert "public" in approval_events[-1]["payload"]["spoken_summary"]
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.parametrize("pages_decision", ["approve", "reject"])
+async def test_github_branch_and_pages_require_distinct_approvals(
+    tmp_path, monkeypatch, pages_decision
+):
+    import me3_voice.task_runtime as task_runtime_module
+    from me3_voice.github_publish import GitHubPublisher
+
+    class Writer:
+        repository_name = "public-owner/demo-repo"
+        base_branch = "main"
+        branch_for = staticmethod(GitHubPublisher.branch_for)
+
+        def __init__(self):
+            self.published = []
+            self.pages = []
+
+        async def repository_visibility(self):
+            return "public"
+
+        async def existing_paths(self, paths):
+            return []
+
+        async def pages_configuration(self):
+            return {"configured": False, "branch": "gh-pages", "path": "/"}
+
+        async def publish(self, task_id, tool_call_id, artifacts, message, **kwargs):
+            self.published.append((task_id, tool_call_id, tuple(artifacts), message, kwargs))
+            return {"status": "published", "commit": "a" * 40}
+
+        async def enable_pages_for_published_branch(self, branch, commit, site_path, **kwargs):
+            self.pages.append((branch, commit, site_path, kwargs))
+            return {"status": "deployed", "deployment_url": "https://public-owner.github.io/demo-repo/site/"}
+
+        def expected_pages_url(self, site_path):
+            return "https://public-owner.github.io/demo-repo/" + site_path + "/"
+
+    async def verify_pages_artifact(_path, **_kwargs):
+        return {"available": True, "verified": True, "browser": "chromium", "errors": []}
+
+    monkeypatch.setattr(task_runtime_module, "validate_in_chromium", verify_pages_artifact)
+    tool_id = "two-step-publish"
+    model = ScriptedModel(
+        [
+            call(
+                "publish_github_branch",
+                {
+                    "paths": ["site/index.html", "site/styles.css"],
+                    "commit_message": "Publish site",
+                    "deploy_pages": True,
+                },
+                tool_id,
+            ),
+            AIMessage(content="The approved branch and Pages site are ready."),
+        ]
+    )
+    runtime = TaskRuntime(
+        load_backends()["llm"],
+        database=tmp_path / "tasks.sqlite",
+        artifact_root=tmp_path / "artifacts",
+        model=model,
+    )
+    writer = Writer()
+    runtime.github_writer = writer
+    try:
+        await runtime.start_runtime()
+        task, _ = await runtime.store.create("Publish a website", "two-step-approval", 1, "two-step-approval")
+        await runtime.store.update(task["task_id"], status="running")
+        await runtime.store.persist_artifact(task["task_id"], 1, "site/index.html", "<h1>Site</h1>", "html")
+        await runtime.store.persist_artifact(task["task_id"], 1, "site/styles.css", "h1 { color: navy; }", "css")
+        runtime._spawn(task["task_id"], initial=True)
+
+        branch_wait = await wait_for_status(runtime, task["task_id"], {"waiting_approval"})
+        branch_approval = branch_wait["approvals"][0]
+        assert branch_approval["action"] == "github_publish"
+        assert "site/index.html" in branch_approval["details"]
+        assert "public" in branch_approval["details"]
+        assert writer.published == []
+        assert writer.pages == []
+
+        await runtime.approve(
+            task["task_id"], branch_approval["approval_id"], branch_approval["revision"], "approve"
+        )
+        pages_wait = await wait_for_status(runtime, task["task_id"], {"waiting_approval"})
+        pages_approval = pages_wait["approvals"][0]
+        assert pages_approval["action"] == "github_pages_deploy"
+        assert "publicly accessible" in pages_approval["details"]
+        assert "gh-pages:/" in pages_approval["details"]
+        assert "stable" in pages_approval["details"]
+        assert "https://public-owner.github.io/demo-repo/site/" in pages_approval["details"]
+        assert len(writer.published) == 1
+        assert writer.pages == []
+
+        await runtime.approve(
+            task["task_id"],
+            pages_approval["approval_id"],
+            pages_approval["revision"],
+            pages_decision,
+        )
+        result = await wait_for_status(runtime, task["task_id"])
+        assert result["status"] == (
+            "succeeded" if pages_decision == "approve" else "completed_unverified"
+        )
+        assert len(writer.published) == 1
+        assert len(writer.pages) == (1 if pages_decision == "approve" else 0)
+        assert result["verification"]["effects_checked"] == 2
+    finally:
+        await runtime.close()
+
+
+async def test_github_publish_rejects_artifact_when_readback_no_longer_matches_record(
+    tmp_path, monkeypatch
+):
+    class Writer:
+        repository_name = "private-owner/demo-repo"
+        base_branch = "main"
+
+        async def publish(self, *_args, **_kwargs):
+            raise AssertionError("unverified files must not reach the publisher")
+
+    runtime = TaskRuntime(
+        load_backends()["llm"],
+        database=tmp_path / "tasks.sqlite",
+        artifact_root=tmp_path / "artifacts",
+        model=ScriptedModel([]),
+    )
+    runtime.github_writer = Writer()
+    try:
+        await runtime.start_runtime()
+        task, _ = await runtime.store.create(
+            "Publish a task artifact", "github-readback-check", 1, "github-readback-check"
+        )
+        await runtime.store.update(task["task_id"], status="running")
+        await runtime.store.persist_artifact(
+            task["task_id"], 1, "notes.txt", "saved text", "write-notes"
+        )
+
+        async def mismatched_metadata(_task_id, _path):
+            return {"sha256": "0" * 64, "size": len("saved text"), "revision": 1}
+
+        monkeypatch.setattr(runtime.store, "artifact_metadata", mismatched_metadata)
+        tool = next(tool for tool in runtime.registered_tools() if tool.name == "publish_github_branch")
+        state = {"task_id": task["task_id"], "revision": 1, "requirements": "Publish a task artifact"}
+        token = runtime._tool_context.set((state, "github-readback-mismatch"))
+        try:
+            with pytest.raises(TaskError, match="github_artifact_not_verified"):
+                await tool.ainvoke(
+                    {"paths": ["notes.txt"], "commit_message": "Publish notes"}
+                )
+        finally:
+            runtime._tool_context.reset(token)
+        row = await runtime.status(task["task_id"])
+        assert row["approvals"] == []
+    finally:
+        await runtime.close()
+
+
 async def test_native_task_snapshot_surfaces_real_progress_without_fake_percent(tmp_path):
     runtime = await make_runtime(tmp_path, ScriptedModel([]))
     try:
@@ -157,7 +802,13 @@ async def test_graph_researches_writes_reads_and_independently_verifies_artifact
         assert result["verification"]["artifacts_checked"] == 1
         assert result["model_calls"] == 4
         assert result["tool_calls"] == 3
-        assert runtime.store._project(runtime.store.rows[task["task_id"]])["kind"] == "agent"
+        projected = runtime.store._project(runtime.store.rows[task["task_id"]])
+        assert projected["kind"] == "agent"
+        assert projected["artifact_id"] == task["task_id"][5:]
+        assert projected["artifacts"] == ["notes.md"]
+        metadata = await runtime.store.artifact_metadata(task["task_id"], "notes.md")
+        assert metadata["sha256"] == hashlib.sha256(b"Fixture source statement.").hexdigest()
+        assert metadata["size"] == len(b"Fixture source statement.")
         assert (
             Path(tmp_path / "artifacts" / task["task_id"] / "notes.md").read_text()
             == "Fixture source statement."
@@ -923,6 +1574,15 @@ async def test_cancel_revokes_pending_approval_without_resuming_effect(tmp_path)
         await runtime.close()
 
 
+async def test_cancel_missing_task_returns_actionable_not_found(tmp_path):
+    runtime = await make_runtime(tmp_path, ScriptedModel([]))
+    try:
+        with pytest.raises(TaskError, match="task_not_found"):
+            await runtime.control("cancel", {"task_id": "task_" + "f" * 24})
+    finally:
+        await runtime.close()
+
+
 async def test_model_tool_schemas_hide_runtime_context_and_forbid_unregistered_operations(tmp_path):
     runtime = await make_runtime(tmp_path, ScriptedModel([AIMessage(content="unused")]))
     try:
@@ -1002,14 +1662,15 @@ async def test_relative_artifact_root_is_normalized_before_readback(tmp_path, mo
 
 
 @pytest.mark.parametrize(
-    "endpoint,expect_groq_parameters",
+    "endpoint,expect_groq_parameters,model",
     [
-        ("https://api.groq.com/openai/v1/chat/completions", True),
-        ("https://openrouter.ai/api/v1/chat/completions", False),
+        ("https://api.groq.com/openai/v1/chat/completions", True, "openai/gpt-oss-120b"),
+        ("https://openrouter.ai/api/v1/chat/completions", False, "openai/gpt-oss-120b"),
+        ("https://openrouter.ai/api/v1/chat/completions", False, "anthropic/claude-haiku-5.5"),
     ],
 )
 async def test_openai_compatible_streamed_tool_fragments_are_reassembled_offline(
-    tmp_path, monkeypatch, endpoint, expect_groq_parameters
+    tmp_path, monkeypatch, endpoint, expect_groq_parameters, model
 ):
     import me3_voice.task_runtime as module
     from langchain_core.messages import HumanMessage
@@ -1019,7 +1680,7 @@ async def test_openai_compatible_streamed_tool_fragments_are_reassembled_offline
         protocol="chat-completions-v1",
         endpoint=endpoint,
         auth_env="ME3_GROQ_TEST_KEY" if expect_groq_parameters else "ME3_OPENROUTER_TEST_KEY",
-        model="openai/gpt-oss-120b",
+        model=model,
         allow_live=True,
         request_limit=1,
         max_input_tokens=32000,
@@ -1030,7 +1691,7 @@ async def test_openai_compatible_streamed_tool_fragments_are_reassembled_offline
         "ME3_REQUEST_RUN_ID",
         "offline-groq-fragments-01"
         if expect_groq_parameters
-        else "offline-openrouter-fragments-01",
+        else ("offline-haiku-fragments-01" if "haiku" in model else "offline-openrouter-fragments-01"),
     )
     monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "provider-requests.sqlite"))
     calls = []
@@ -1093,6 +1754,7 @@ async def test_openai_compatible_streamed_tool_fragments_are_reassembled_offline
         budget=LiveTransport(spec, credentials),
         database=tmp_path / "stream.sqlite",
         artifact_root=tmp_path / "artifacts",
+        max_completion_tokens=8192 if "haiku" in model else 1024,
     )
     # This contract test exercises the provider/request adapter only; leave
     # SQLite graph startup to the task-runtime integration tests.
@@ -1109,7 +1771,10 @@ async def test_openai_compatible_streamed_tool_fragments_are_reassembled_offline
         ]
         assert calls[0]["stream"] is True
         assert calls[0]["parallel_tool_calls"] is False
-        assert calls[0]["model"] == "openai/gpt-oss-120b"
+        assert calls[0]["model"] == model
+        if model == "anthropic/claude-haiku-5.5":
+            assert "max_tokens" in calls[0] and calls[0]["max_tokens"] == 8192
+            assert "max_completion_tokens" not in calls[0]
         if expect_groq_parameters:
             assert calls[0]["reasoning_effort"] == "low"
             assert calls[0]["extra_body"] == {"include_reasoning": False}
@@ -1117,6 +1782,197 @@ async def test_openai_compatible_streamed_tool_fragments_are_reassembled_offline
             assert "reasoning_effort" not in calls[0]
             assert "extra_body" not in calls[0]
         assert runtime.budget.requests == 1
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.parametrize(
+    "content,expected_error",
+    [
+        (
+            "<script>// Game state const board = [];</script>",
+            "interactive_script_missing_or_disabled",
+        ),
+        (
+            "<div id=&#34;board&#34;></div><script>document.getElementById('board');</script>",
+            "interactive_html_attribute_quoting_invalid",
+        ),
+    ],
+)
+async def test_streamed_html_tool_json_preserves_source_then_write_guard_rejects(
+    tmp_path, monkeypatch, content, expected_error
+):
+    import me3_voice.task_runtime as module
+    from langchain_core.messages import HumanMessage
+
+    spec = BackendSpec(
+        backend="external",
+        protocol="chat-completions-v1",
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        auth_env="ME3_OPENROUTER_OFFLINE_FIXTURE",
+        model="openai/gpt-oss-120b",
+        allow_live=True,
+        request_limit=1,
+        max_input_tokens=32000,
+        max_input_tokens_total=64000,
+    )
+    credentials = {spec.auth_env: "offline-fixture-not-a-real-key"}
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "offline-html-tool-arguments")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "provider-requests.sqlite"))
+    arguments = json.dumps(
+        {"path": "game.html", "content": content}, ensure_ascii=False, separators=(",", ":")
+    )
+    pieces = [arguments[:17], arguments[17:41], arguments[41:]]
+
+    class Client:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=self)
+
+        async def create(self, **kwargs):
+            assert kwargs["stream"] is True
+
+            async def chunks():
+                for index, piece in enumerate(pieces):
+                    yield SimpleNamespace(
+                        choices=[
+                            SimpleNamespace(
+                                finish_reason="tool_calls" if index == len(pieces) - 1 else None,
+                                delta=SimpleNamespace(
+                                    content=None,
+                                    tool_calls=[
+                                        SimpleNamespace(
+                                            index=0,
+                                            id="offline-html-write" if index == 0 else None,
+                                            function=SimpleNamespace(
+                                                name="write_artifact" if index == 0 else None,
+                                                arguments=piece,
+                                            ),
+                                        )
+                                    ],
+                                ),
+                            )
+                        ],
+                        usage=None,
+                    )
+
+            return chunks()
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(module, "AsyncOpenAI", Client)
+    runtime = TaskRuntime(
+        spec,
+        credentials,
+        budget=LiveTransport(spec, credentials),
+        database=tmp_path / "streamed-html.sqlite",
+        artifact_root=tmp_path / "artifacts",
+    )
+    runtime._openai_tools = []
+    try:
+        parsed = await runtime._call_model([HumanMessage(content="Create a playable page")])
+        assert parsed.tool_calls[0]["name"] == "write_artifact"
+        assert parsed.tool_calls[0]["args"]["content"] == content
+        with pytest.raises(TaskError, match=expected_error):
+            validate_interactive_artifact("game.html", parsed.tool_calls[0]["args"]["content"])
+        assert runtime.budget.requests == 1  # SDK client is a local fixture; no HTTP call occurs.
+    finally:
+        await runtime.close()
+
+
+async def test_task_request_usage_and_budgets_are_durable_and_observable(tmp_path, monkeypatch):
+    import sqlite3
+    import me3_voice.task_runtime as module
+    from langchain_core.messages import HumanMessage
+
+    spec = BackendSpec(
+        backend="external",
+        protocol="chat-completions-v1",
+        endpoint="https://openrouter.ai/api/v1/chat/completions",
+        auth_env="ME3_TASK_USAGE_FIXTURE_KEY",
+        model="openai/gpt-oss-120b",
+        allow_live=True,
+        request_limit=4,
+        max_input_tokens=32000,
+        max_input_tokens_total=64000,
+    )
+    ledger = tmp_path / "provider-requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "offline-task-usage-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(ledger))
+    class Client:
+        def __init__(self, **_kwargs):
+            self.chat = SimpleNamespace(completions=self)
+
+        async def create(self, **_kwargs):
+            async def chunks():
+                yield SimpleNamespace(
+                    usage=SimpleNamespace(
+                        model_dump=lambda: {
+                            "prompt_tokens": 321,
+                            "completion_tokens": 18,
+                        }
+                    ),
+                    choices=[
+                        SimpleNamespace(
+                            finish_reason="stop",
+                            delta=SimpleNamespace(content="Task is complete.", tool_calls=[]),
+                        )
+                    ],
+                )
+
+            return chunks()
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(module, "AsyncOpenAI", Client)
+    runtime = TaskRuntime(
+        spec,
+        {"ME3_TASK_USAGE_FIXTURE_KEY": "offline-fixture-not-a-real-key"},
+        database=tmp_path / "tasks.sqlite",
+        artifact_root=tmp_path / "artifacts",
+        max_model_calls=4,
+    )
+    runtime._openai_tools = []
+    try:
+        await runtime.start_runtime()
+        task, created = await runtime.store.create(
+            "Create a small page",
+            request_id="usage-fixture-task",
+            turn_id=1,
+            call_id="usage-fixture-task",
+        )
+        assert created
+        await runtime.store.update(task["task_id"], status="running", model_calls=1)
+        answer = await runtime._call_model(
+            [HumanMessage(content="Create a small page")],
+            task_id=task["task_id"],
+            model_call_number=1,
+        )
+        assert answer.content == "Task is complete."
+
+        status = await runtime.status(task["task_id"])
+        budgets = status["task_budgets"]
+        assert budgets["model_calls"] == {"used": 1, "limit": 4}
+        assert budgets["provider_requests_reserved"] == 1
+        assert budgets["estimated_input_tokens_reserved"] > 321
+        assert budgets["actual_input_tokens"] == 321
+        assert budgets["actual_output_tokens"] == 18
+        assert budgets["actual_usage_requests"] == 1
+        usage_event = next(
+            row for row in status["progress"] if row["kind"] == "model_request_usage"
+        )
+        assert usage_event["payload"]["serialized_request_bytes"] > 0
+        assert usage_event["payload"]["actual_input_tokens"] == 321
+        with sqlite3.connect(ledger) as db:
+            assert db.execute(
+                "SELECT status,input_tokens_reserved,input_tokens_actual,output_tokens_actual FROM provider_requests"
+            ).fetchone() == (
+                "success",
+                budgets["estimated_input_tokens_reserved"],
+                321,
+                18,
+            )
     finally:
         await runtime.close()
 

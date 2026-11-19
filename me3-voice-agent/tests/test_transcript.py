@@ -273,13 +273,25 @@ def test_agent_task_artifact_receipt_is_bounded_and_displayable():
         "Created a draft file.",
         "index.html",
         artifact_id="a" * 24,
-        artifacts=["index.html", "README.md"],
+        artifacts=["index.html", "todo/index.html", "todo/styles.css", "README.md"],
     )
     task = book.snapshot()["tasks"][0]
     assert task["artifact_id"] == "a" * 24
-    assert task["artifacts"] == ["index.html", "README.md"]
+    assert task["artifacts"] == ["index.html", "todo/index.html", "todo/styles.css", "README.md"]
+    completed_payload = book.snapshot()
+    completed_payload["tasks"][0]["status"] = "completed"
+    assert normalize_transcript(completed_payload)["tasks"][0]["artifacts"] == task["artifacts"]
+    failed_payload = book.snapshot()
+    failed_payload["tasks"][0]["status"] = "failed"
+    failed = normalize_transcript(failed_payload)["tasks"][0]
+    assert failed["status"] == "failed"
+    assert failed["artifacts"] == ["index.html", "todo/index.html", "todo/styles.css", "README.md"]
     payload = book.snapshot()
     payload["tasks"][0]["artifact_id"] = "../outside"
+    with pytest.raises(ValueError, match="artifact"):
+        normalize_transcript(payload)
+    payload = book.snapshot()
+    payload["tasks"][0]["artifacts"] = ["../outside.html"]
     with pytest.raises(ValueError, match="artifact"):
         normalize_transcript(payload)
 

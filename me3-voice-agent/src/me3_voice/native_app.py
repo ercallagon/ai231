@@ -6,9 +6,10 @@ No Session, ConversationInput, AudioApplication or nested ingress pipeline.
 
 import asyncio
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import hashlib
+import re
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -18,6 +19,7 @@ from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     InputAudioRawFrame,
+    TranscriptionFrame,
     InterruptionFrame,
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
@@ -53,6 +55,79 @@ NATIVE_REPLAY_SETTLE_TIMEOUT_SECONDS = 60
 NATIVE_REPLAY_EVENT_HISTORY_LIMIT = 4096
 RESEARCH_ACK_DELAY_SECONDS = 0.65
 _TERMINAL_TURN_EVENTS = {"turn_completed", "turn_failed", "turn_error", "turn_interrupted"}
+
+
+def _safe_tool_error_code(exc):
+    code = getattr(exc, "code", None)
+    if (
+        isinstance(code, str)
+        and 1 <= len(code) <= 64
+        and all(char.isascii() and (char.isalnum() or char == "_") for char in code)
+    ):
+        return code
+    return "tool_service_unavailable"
+
+
+def _normalize_command_phrase(text):
+    if not isinstance(text, str):
+        return ""
+    return " ".join(re.findall(r"\w+", text.casefold(), flags=re.UNICODE))
+
+
+def _normalize_approval_utterance(text):
+    if not isinstance(text, str):
+        return ""
+    return " ".join(re.sub(r"[^a-z0-9']+", " ", text.casefold()).split())
+
+
+def _github_approval_intent(text):
+    phrase = _normalize_approval_utterance(text)
+    generic_approve = {"approve", "approve it", "yes approve", "yes approve it", "confirm"}
+    reject = {"cancel", "cancel it", "no", "no thanks", "reject", "decline"}
+    branch_approve = {"yes push it", "yes push this", "yes publish it", "yes publish this"}
+    pages_approve = {
+        "yes enable pages",
+        "yes publish on pages",
+        "yes publish on github pages",
+        "yes deploy pages",
+        "yes deploy on github pages",
+    }
+    if phrase in generic_approve:
+        return "approve", None
+    if phrase in reject:
+        return "reject", None
+    if phrase in branch_approve:
+        return "approve", "github_publish"
+    if phrase in pages_approve:
+        return "approve", "github_pages_deploy"
+    return None
+
+
+def _looks_like_github_approval_or_request(text):
+    phrase = _normalize_approval_utterance(text)
+    if phrase in {"approve", "approve it", "confirm", "cancel", "cancel it", "reject", "decline"}:
+        return True
+    return bool(
+        re.match(r"^(?:yes|yeah|yep|no|approve|approved|confirm|cancel|reject|decline)\b", phrase)
+        or (
+            re.search(r"\b(?:push|publish|upload|put)\b", phrase)
+            and re.search(r"\bgithub(?: pages)?\b", phrase)
+        )
+    )
+
+
+def _voice_task_request_id(session_id, call_id):
+    if not isinstance(session_id, str) or not isinstance(call_id, str):
+        return None
+    return "voice_" + hashlib.sha256((session_id + call_id).encode()).hexdigest()[:40]
+
+
+def _requests_remaining(limit, used):
+    return None if limit is None else max(0, limit - used)
+
+
+def _request_limit_reached(limit, used):
+    return limit is not None and used >= limit
 
 
 class NativeState:
@@ -99,6 +174,9 @@ class NativeState:
         self.task_runtime = None
         self.task_runtime_factory = task_runtime_factory
         self.budget = LiveTransport(self.backends["llm"], self.credentials)
+        self._task_budget = None
+        self.startup_errors = {}
+        self.provider_probes = {}
         self.speech_factory = speech_factory or (
             lambda: SpeechClient(
                 backends=self.backends,
@@ -112,15 +190,69 @@ class NativeState:
         self.ready = None
         self.closed = asyncio.Event()
 
+    def task_model_configuration(self, options):
+        task_spec = self.backends["llm"]
+        if not options.task_model:
+            return task_spec, self.budget
+        task_spec = replace(
+            task_spec,
+            model=options.task_model,
+            request_limit=options.task_request_limit,
+            max_input_tokens_total=options.task_input_tokens_total,
+        )
+        if self._task_budget is None or self._task_budget.spec != task_spec:
+            self._task_budget = LiveTransport(task_spec, self.credentials)
+        return task_spec, self._task_budget
+
+    async def warm_runtime(self, options):
+        """Start reusable local clients/stores before the browser opens its mic."""
+        self.startup_errors.clear()
+        try:
+            await self.start()
+        except Exception as exc:
+            self.startup_errors["speech"] = type(exc).__name__
+
+        try:
+            if self.research is None:
+                self.research = ResearchClient(options.research, self.credentials)
+            self.research.session()
+        except Exception as exc:
+            self.startup_errors["research"] = type(exc).__name__
+
+        try:
+            # Create reusable HTTP pools without opening provider sockets or
+            # making billable warm-up requests.
+            self.budget.session()
+            task_spec, task_budget = self.task_model_configuration(options)
+            if task_budget is not self.budget:
+                task_budget.session()
+            if self.task_runtime is None:
+                from .task_runtime import TaskRuntime
+
+                factory = self.task_runtime_factory or TaskRuntime
+                runtime_args = {"budget": task_budget, "research": self.research}
+                if options.task_model:
+                    runtime_args["max_completion_tokens"] = options.task_max_output_tokens
+                candidate = factory(task_spec, self.credentials, **runtime_args)
+                try:
+                    await candidate.start_runtime()
+                except BaseException:
+                    await candidate.close()
+                    raise
+                self.task_runtime = candidate
+        except Exception as exc:
+            self.startup_errors["tasks"] = type(exc).__name__
+
     async def start(self):
         async with self.lock:
-            if self.owner is not None and self.owner.done() and self.speech is not None:
-                raise RuntimeError(
-                    "speech owner stopped; restart bridge rather than reset provider budgets"
-                )
-            if self.owner is not None and self.owner.done() and self.speech is None:
+            if self.closed.is_set():
+                raise RuntimeError("speech runtime is closing")
+            if self.owner is not None and self.owner.done():
                 await asyncio.gather(self.owner, return_exceptions=True)
                 self.owner = None
+                self.speech = None
+                self.ready = None
+                self.closed = asyncio.Event()
             if self.owner is None:
                 self.ready = asyncio.get_running_loop().create_future()
                 self.owner = asyncio.create_task(self.own())
@@ -153,6 +285,9 @@ class NativeState:
         finally:
             if self.research:
                 await self.research.close()
+            if self._task_budget and self._task_budget is not self.budget:
+                await self._task_budget.aclose()
+            await self.budget.aclose()
 
 
 @dataclass
@@ -198,7 +333,7 @@ class WakeGate(FrameProcessor):
 def native_vad():
     return VADProcessor(
         vad_analyzer=SileroVADAnalyzer(
-            sample_rate=16000, params=VADParams(confidence=0.7, start_secs=0.16, stop_secs=0.2)
+            sample_rate=16000, params=VADParams(confidence=0.7, start_secs=0.16, stop_secs=0.4)
         )
     )
 
@@ -214,6 +349,7 @@ class NativeOutput(BaseOutputTransport):
         )
         self.sink, self.event = sink, event
         self.generation = 0
+        self.suppressed_response_ids = set()
 
     async def start(self, frame):
         await super().start(frame)
@@ -222,6 +358,8 @@ class NativeOutput(BaseOutputTransport):
     async def write_audio_frame(self, frame):
         generation = self.generation
         response_id = getattr(frame, "context_id", None)
+        if response_id in self.suppressed_response_ids:
+            return False
         try:
             send_audio = getattr(self.sink, "send_audio", None)
             delivered = (
@@ -265,11 +403,208 @@ class NativeOutput(BaseOutputTransport):
         if hasattr(self.sink, "stop"):
             await self.sink.stop()
 
+    async def stop_response(self, response_id):
+        self.suppress_response(response_id)
+        await self.stop_delivery()
+        self.event("playback_stopped_browser", response_id=response_id)
+
+    def suppress_response(self, response_id):
+        if isinstance(response_id, str):
+            self.suppressed_response_ids.add(response_id)
+            if len(self.suppressed_response_ids) > 64:
+                self.suppressed_response_ids.pop()
+
     async def process_frame(self, frame, direction):
         if isinstance(frame, InterruptionFrame):
             await self.stop_delivery()
             self.event("playback_stopped_browser")
         await super().process_frame(frame, direction)
+
+
+def _elapsed_ms(start, end):
+    """Return an ordered monotonic span, or None when either mark is absent."""
+    if (
+        not isinstance(start, dict)
+        or not isinstance(end, dict)
+        or not isinstance(start.get("at"), (int, float))
+        or not isinstance(end.get("at"), (int, float))
+        or end["at"] < start["at"]
+    ):
+        return None
+    return round((end["at"] - start["at"]) * 1000, 3)
+
+
+def _voice_latency_for_turn(events, turn_id):
+    """Correlate software latency marks without crossing turns or audio kinds."""
+    rows = list(events)
+    turn_start = next(
+        (
+            row
+            for row in reversed(rows)
+            if row.get("event") == "turn_started" and row.get("turn_id") == turn_id
+        ),
+        None,
+    )
+    turn_end = next(
+        (
+            row
+            for row in reversed(rows)
+            if row.get("event") == "turn_completed" and row.get("turn_id") == turn_id
+        ),
+        None,
+    )
+    if turn_start is None or turn_end is None:
+        return None
+    start_sequence = turn_start.get("sequence", -1)
+    end_sequence = turn_end.get("sequence", float("inf"))
+    turn_rows = [
+        row
+        for row in rows
+        if row.get("turn_id") == turn_id
+        and start_sequence <= row.get("sequence", -1) <= end_sequence
+    ]
+
+    # ASR/VAD use the stream's utterance ID and precede the conversation turn.
+    previous_turn_start = next(
+        (
+            row
+            for row in reversed(rows)
+            if row.get("event") == "turn_started"
+            and row.get("turn_id", turn_id) < turn_id
+            and row.get("sequence", -1) < start_sequence
+        ),
+        None,
+    )
+    previous_start_sequence = (
+        previous_turn_start.get("sequence", -1) if previous_turn_start else -1
+    )
+    prior_finals = [
+        row
+        for row in rows
+        if row.get("event") == "asr_final"
+        and previous_start_sequence < row.get("sequence", -1) < start_sequence
+        and row.get("utterance_id") is not None
+    ]
+    asr_final = prior_finals[-1] if prior_finals else None
+    utterance_id = asr_final.get("utterance_id") if asr_final else None
+    speech_end = (
+        next(
+            (
+                row
+                for row in reversed(rows)
+                if row.get("event") == "vad_speech_stopped"
+                and row.get("utterance_id") == utterance_id
+                and previous_start_sequence < row.get("sequence", -1) < start_sequence
+            ),
+            None,
+        )
+        if utterance_id is not None
+        else None
+    )
+
+    llm_request = next(
+        (row for row in turn_rows if row.get("event") == "llm_provider_request_started"), None
+    )
+    request_id = llm_request.get("request_id") if llm_request else None
+    first_token = next(
+        (
+            row
+            for row in turn_rows
+            if row.get("event") == "llm_first_token"
+            and request_id is not None
+            and row.get("request_id") == request_id
+        ),
+        None,
+    )
+    final_response = next(
+        (row for row in turn_rows if row.get("event") == "tts_response_started"), None
+    )
+    final_response_id = final_response.get("response_id") if final_response else None
+    final_tts_start = next(
+        (
+            row
+            for row in turn_rows
+            if row.get("event") == "tts_start"
+            and row.get("sequence", -1) > (final_response or {}).get("sequence", -1)
+            and row.get("response_id", final_response_id) == final_response_id
+        ),
+        None,
+    )
+    final_pcm = next(
+        (
+            row
+            for row in turn_rows
+            if row.get("event") == "tts_pcm"
+            and row.get("sequence", -1) >= (final_tts_start or {}).get("sequence", float("inf"))
+            and row.get("response_id", final_response_id) == final_response_id
+        ),
+        None,
+    )
+    final_packet = next(
+        (
+            row
+            for row in turn_rows
+            if row.get("event") == "playback_packet"
+            and row.get("sequence", -1) >= (final_pcm or {}).get("sequence", float("inf"))
+            and row.get("response_id", final_response_id) == final_response_id
+        ),
+        None,
+    )
+
+    acknowledgements = []
+    progress_starts = [
+        (index, row)
+        for index, row in enumerate(turn_rows)
+        if row.get("event") == "tts_progress_started"
+    ]
+    for progress_index, (row_index, progress_start) in enumerate(progress_starts):
+        response_id = progress_start.get("response_id")
+        stop_index = (
+            progress_starts[progress_index + 1][0]
+            if progress_index + 1 < len(progress_starts)
+            else len(turn_rows)
+        )
+        progress_rows = turn_rows[row_index + 1 : stop_index]
+        progress_tts_start = next(
+            (item for item in progress_rows if item.get("event") == "tts_progress_start"),
+            None,
+        )
+        progress_pcm = next(
+            (item for item in progress_rows if item.get("event") == "tts_progress_pcm"),
+            None,
+        )
+        progress_packet = next(
+            (
+                item
+                for item in turn_rows
+                if item.get("event") == "playback_packet"
+                and response_id is not None
+                and item.get("response_id") == response_id
+            ),
+            None,
+        )
+        acknowledgements.append(
+            {
+                "response_kind": "acknowledgement",
+                "tts_start_to_first_pcm_ms": _elapsed_ms(
+                    progress_tts_start, progress_pcm
+                ),
+                "first_pcm_to_client_delivery_ms": _elapsed_ms(
+                    progress_pcm, progress_packet
+                ),
+            }
+        )
+
+    return {
+        "turn_id": turn_id,
+        "asr_utterance_id": utterance_id,
+        "response_kind": "final_answer",
+        "vad_speech_end_to_asr_final_ms": _elapsed_ms(speech_end, asr_final),
+        "llm_provider_request_to_first_token_ms": _elapsed_ms(llm_request, first_token),
+        "tts_start_to_first_pcm_ms": _elapsed_ms(final_tts_start, final_pcm),
+        "first_pcm_to_client_delivery_ms": _elapsed_ms(final_pcm, final_packet),
+        "acknowledgement_audio": acknowledgements,
+    }
 
 
 class NativeApplication:
@@ -288,7 +623,7 @@ class NativeApplication:
         on_event=None,
         upstream=None,
         clock=None,
-        conversation_mode="followup",
+        conversation_mode="continuous",
         followup_seconds=20,
         extended_seconds=20,
     ):
@@ -314,10 +649,15 @@ class NativeApplication:
         self.event_count = 0
         self.turn_terminal_outcomes = {}
         self.fast_action_rows = []
+        self.pending_communication_confirmation = None
+        self.pending_communication_request = None
+        self._approval_announcement_ids = set()
+        self._approval_announcement_jobs = set()
         self.response_records = {}
         self.response_order = deque(maxlen=64)
         self.response_by_conversation_turn = {}
         self.active_response_id = None
+        self.progress_response_ids = deque(maxlen=64)
         self.last_llm_request_id = None
         self.last_vad_started_at = None
         self.playback_busy_until = 0.0
@@ -325,6 +665,8 @@ class NativeApplication:
         self.research_recovery_active = False
         self.action_revision = 0
         self.turn_id = 0  # Telemetry projection of native user-turn events only.
+        self.tavily_quick_research_designated = False
+        self.tavily_quick_research_turns = set()
         self.run_id = uuid.uuid4().hex
         self.projection = "listening" if annotated else "wake_listening"
         self.gate = WakeGate(
@@ -343,6 +685,7 @@ class NativeApplication:
         self.ready = asyncio.Event()
         self.worker = self.runner = self.job = self.llm = self.parts = None
         self.error = None
+        self.startup_stage = "not_started"
         self.terminal_failure_code = None
         # Interim ASR is a live UI projection only, never model history or journal text.
         self.partial_transcript = None
@@ -356,6 +699,16 @@ class NativeApplication:
     def event(self, name, **fields):
         if name == "turn_started":
             previous_turn_id = self.turn_id
+            if (
+                previous_turn_id in self.tavily_quick_research_turns
+                and previous_turn_id not in self.turn_terminal_outcomes
+            ):
+                self.tavily_quick_research_turns.discard(previous_turn_id)
+                self.event(
+                    "turn_interrupted",
+                    owner_turn_id=previous_turn_id,
+                    reason="recognized_user_transcript",
+                )
             previous = self.response_records.get(self.active_response_id)
             if (
                 previous_turn_id > 0
@@ -365,14 +718,14 @@ class NativeApplication:
                 and previous_turn_id not in self.turn_terminal_outcomes
             ):
                 previous["response_state"] = "interrupted"
-                previous["interruption_reason"] = "new_user_turn"
+                previous["interruption_reason"] = "recognized_user_transcript"
                 if previous.get("generated_state") == "streaming":
                     previous["generated_state"] = "partial"
                 self.event(
                     "turn_interrupted",
                     owner_turn_id=previous_turn_id,
                     response_id=previous["response_id"],
-                    reason="new_user_turn",
+                    reason="recognized_user_transcript",
                 )
             self.turn_id += 1
             self.playback_busy_until = 0.0
@@ -380,6 +733,13 @@ class NativeApplication:
             previous = self.response_records.get(self.active_response_id)
             if previous and previous.get("response_state") in {"interrupted", "superseded"}:
                 previous["superseded_by_turn_id"] = self.turn_id
+        elif name == "interrupt_requested" and self.turn_id in self.tavily_quick_research_turns:
+            self.tavily_quick_research_turns.discard(self.turn_id)
+            self.event(
+                "turn_interrupted",
+                owner_turn_id=self.turn_id,
+                reason=fields.get("reason", "user_requested"),
+            )
         owner_turn_id = fields.pop("owner_turn_id", None)
         event_turn_id = self.turn_id
         if type(owner_turn_id) is int and owner_turn_id >= 0:
@@ -388,6 +748,9 @@ class NativeApplication:
             if event_turn_id in self.turn_terminal_outcomes:
                 return None
             self.turn_terminal_outcomes[event_turn_id] = name
+            self.tavily_quick_research_turns.discard(event_turn_id)
+        if name == "tavily_quick_research_started":
+            self.tavily_quick_research_turns.add(event_turn_id)
         if name == "vad_speech_started":
             self.last_vad_started_at = time.monotonic()
         if name == "tts_response_started":
@@ -422,11 +785,19 @@ class NativeApplication:
                 self.response_order.append(response_id)
                 self.response_by_conversation_turn[conversation_turn] = response_id
                 self.active_response_id = response_id
+        elif name == "tts_progress_started":
+            response_id = fields.get("response_id") or fields.get("context_id")
+            if isinstance(response_id, str) and response_id not in self.progress_response_ids:
+                self.progress_response_ids.append(response_id)
         elif name == "llm_request":
             self.last_llm_request_id = fields.get("request_id")
         progress_event = name.startswith("tts_progress_")
         response_id = fields.get("response_id") or (
-            None if progress_event else self.active_response_id
+            self.progress_response_ids[-1]
+            if progress_event and self.progress_response_ids
+            else None
+            if progress_event
+            else self.active_response_id
         )
         record = None if progress_event else self.response_records.get(response_id)
         submitted_text = fields.pop("submitted_text", None) if name == "tts_start" else None
@@ -521,9 +892,7 @@ class NativeApplication:
                 )
                 record["completed_at"] = time.monotonic()
             elif name in {"turn_failed", "turn_error", "turn_interrupted"}:
-                record["response_state"] = (
-                    "interrupted" if name == "turn_interrupted" else "failed"
-                )
+                record["response_state"] = "interrupted" if name == "turn_interrupted" else "failed"
                 if name == "turn_interrupted":
                     record["interruption_reason"] = fields.get("reason", "interrupted")
         if name == "interrupt_requested":
@@ -544,6 +913,26 @@ class NativeApplication:
         if name in {"tool_started", "tool_completed", "tool_operation_blocked"}:
             fields.setdefault("operation_id", fields.get("tool_call_id"))
             fields.setdefault("llm_request_id", self.last_llm_request_id)
+        audio_event = name in {
+            "tts_start",
+            "tts_pcm",
+            "tts_segment_summary",
+            "tts_progress_start",
+            "tts_progress_pcm",
+            "tts_progress_segment_summary",
+            "playback_packet",
+        }
+        if audio_event and isinstance(response_id, str):
+            if not isinstance(fields.get("response_id"), str):
+                fields["response_id"] = response_id
+            if not isinstance(fields.get("response_kind"), str):
+                fields["response_kind"] = (
+                    "acknowledgement"
+                    if response_id in self.progress_response_ids
+                    else "final_answer"
+                    if response_id in self.response_records
+                    else "unclassified"
+                )
         value = {
             "event": name,
             "at": time.monotonic(),
@@ -557,6 +946,10 @@ class NativeApplication:
         self.events.append(value)
         if self.on_event:
             self.on_event(value)
+        if name == "turn_completed":
+            summary = _voice_latency_for_turn(self.events, event_turn_id)
+            if summary is not None:
+                self.event("voice_latency", **summary)
         return value
 
     def task_event(self, payload):
@@ -566,7 +959,249 @@ class NativeApplication:
             return
         name = payload.get("event")
         fields = {key: value for key, value in payload.items() if key != "event"}
+        if name == "task_update" and fields.get("kind") == "approval_requested":
+            self._queue_github_approval_announcement(fields)
         self.event(name if isinstance(name, str) else "task_update", **fields)
+
+    def _voice_owned_task(self, task_id):
+        runtime = self.resources.task_runtime
+        if runtime is None or runtime.store is None:
+            return None
+        row = runtime.store.rows.get(task_id)
+        if not isinstance(row, dict):
+            return None
+        expected = _voice_task_request_id(self.resources.session_id, row.get("call_id"))
+        return row if expected and row.get("request_id") == expected else None
+
+    def _pending_voice_github_approvals(self):
+        runtime = self.resources.task_runtime
+        store = getattr(runtime, "store", None) if runtime else None
+        if store is None:
+            return []
+        rows = []
+        for task_id, approval in store.pending_approvals.items():
+            task = self._voice_owned_task(task_id)
+            if (
+                task is None
+                or task.get("status") != "waiting_approval"
+                or not isinstance(approval, dict)
+                or approval.get("status") != "pending"
+                or approval.get("action") not in {"github_publish", "github_pages_deploy"}
+                or type(approval.get("expires")) not in (int, float)
+                or approval["expires"] <= time.time()
+            ):
+                continue
+            rows.append((task, approval))
+        return rows
+
+    def _queue_github_approval_announcement(self, fields):
+        task_id = fields.get("task_id")
+        payload = fields.get("payload")
+        if not isinstance(task_id, str) or not self._voice_owned_task(task_id):
+            return
+        if not isinstance(payload, dict) or payload.get("action") not in {
+            "github_publish",
+            "github_pages_deploy",
+        }:
+            return
+        approval_id = payload.get("approval_id")
+        summary = payload.get("spoken_summary")
+        if (
+            not isinstance(approval_id, str)
+            or not re.fullmatch(r"approval_[a-f0-9]{32}", approval_id)
+            or approval_id in self._approval_announcement_ids
+            or not isinstance(summary, str)
+            or not 1 <= len(summary) <= 500
+        ):
+            return
+        self._approval_announcement_ids.add(approval_id)
+        try:
+            job = asyncio.get_running_loop().create_task(
+                self._speak_github_approval_summary(approval_id, summary),
+                name="swift-github-approval-" + approval_id[-8:],
+            )
+        except RuntimeError:
+            return
+        self._approval_announcement_jobs.add(job)
+        job.add_done_callback(self._approval_announcement_jobs.discard)
+
+    async def _speak_github_approval_summary(self, approval_id, summary):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15
+        while loop.time() < deadline:
+            parts = self.parts
+            if (
+                parts is not None
+                and self.error is None
+                and self.settled.is_set()
+                and self.projection in {"listening", "wake_listening"}
+                and not parts.stt.speaking
+            ):
+                self.event("github_approval_summary_queued", approval_id=approval_id)
+                await parts.tts.queue_frame(
+                    ProgressTTSSpeakFrame(
+                        summary,
+                        owner_id="github-approval:" + approval_id,
+                        owner_turn_id=max(1, self.turn_id),
+                    )
+                )
+                return
+            await asyncio.sleep(0.1)
+        self.event("github_approval_summary_deferred", approval_id=approval_id)
+
+    async def _handle_github_voice_control(self, text):
+        if not _looks_like_github_approval_or_request(text):
+            return None
+        runtime = self.resources.task_runtime
+        pending = self._pending_voice_github_approvals()
+        intent = _github_approval_intent(text)
+        if not pending:
+            phrase = _normalize_approval_utterance(text)
+            if (intent is not None and intent[0] == "approve") or re.match(
+                r"^(?:yes|yeah|yep|approve|approved|confirm)\b", phrase
+            ):
+                self.event("github_voice_approval_rejected", reason="no_pending_approval")
+                return "There is no pending GitHub approval in this conversation. Nothing was changed."
+            return None
+        if len(pending) != 1:
+            self.event("github_voice_approval_rejected", reason="multiple_pending_approvals")
+            return "I found more than one pending GitHub approval. Use the approval buttons in the task card."
+        task, approval = pending[0]
+        if intent is None:
+            self.event(
+                "github_voice_approval_rejected",
+                reason="ambiguous_or_unrelated_utterance",
+                task_id=task["task_id"],
+                approval_id=approval["approval_id"],
+            )
+            return "That did not clearly approve or cancel the pending GitHub action. Say approve or cancel."
+        decision, required_action = intent
+        if required_action is not None and required_action != approval["action"]:
+            self.event(
+                "github_voice_approval_rejected",
+                reason="approval_action_mismatch",
+                task_id=task["task_id"],
+                approval_id=approval["approval_id"],
+            )
+            return "That confirmation does not match the pending GitHub action. Say approve or cancel."
+        try:
+            await runtime.control(
+                "approve",
+                {
+                    "task_id": task["task_id"],
+                    "approval_id": approval["approval_id"],
+                    "expected_revision": approval["revision"],
+                    "decision": decision,
+                },
+            )
+        except Exception as exc:
+            code = _safe_tool_error_code(exc)
+            self.event(
+                "github_voice_approval_rejected",
+                reason=code,
+                task_id=task["task_id"],
+                approval_id=approval["approval_id"],
+            )
+            return "That GitHub approval is stale or expired. No action was approved; review the task card."
+        self.event(
+            "github_voice_approval_decided",
+            decision=decision,
+            task_id=task["task_id"],
+            approval_id=approval["approval_id"],
+            action=approval["action"],
+        )
+        if decision == "reject":
+            if approval["action"] == "github_pages_deploy":
+                return "Cancelled the Pages deployment. The previously approved branch is unchanged."
+            return "Cancelled the GitHub branch push. No branch was pushed."
+        return "Approval recorded for that exact GitHub action. Swift is proceeding and will report the result."
+
+    async def _handle_github_publish_request(self, text):
+        import re
+
+        if not (
+            re.search(r"\b(?:create|edit|update|modify|push|publish|upload|put)\b", text, re.I)
+            and re.search(r"\bgithub(?:\s+pages)?\b", text, re.I)
+        ):
+            return None
+        runtime = self.resources.task_runtime
+        if runtime is None or runtime.store is None or runtime.github_writer is None:
+            return "GitHub publishing is not configured in this bridge. Nothing was changed."
+        if self._pending_voice_github_approvals():
+            return "That sounds like a new publishing request, not approval. Say approve or cancel for the pending action."
+        active = [
+            row
+            for row in runtime.store.rows.values()
+            if row.get("status") in {"queued", "running"}
+            and self._voice_owned_task(row.get("task_id")) is not None
+        ]
+        if len(active) == 0:
+            call = ToolCall(
+                "voice-github-task-" + uuid.uuid4().hex,
+                "start_task",
+                {"goal": text.strip()},
+            )
+            self.event("route_selected", route="fast_task_handoff", task_kind="github")
+            try:
+                result = await self.dispatch_task_tool(call, call.arguments)
+            except Exception as exc:
+                self.event(
+                    "github_publish_request_not_prepared",
+                    reason=_safe_tool_error_code(exc),
+                )
+                return "I couldn't start the GitHub task. No repository or Pages changes were made."
+            if not isinstance(result, dict) or result.get("status") not in {"queued", "running"}:
+                return "The GitHub task was not accepted, so no repository changes were made."
+            self.event(
+                "github_publish_task_started",
+                task_id=result.get("task_id"),
+                pages=bool(re.search(r"\bpages\b", text, re.I)),
+            )
+            return (
+                "I've started the GitHub task. It will inspect the configured repository and prepare the requested files; "
+                "nothing will be pushed until you approve the exact change."
+            )
+        if len(active) != 1:
+            self.event(
+                "github_publish_request_not_prepared",
+                reason="no_unique_active_voice_task",
+                active_tasks=len(active),
+            )
+            return "I need one active website task to prepare that publication. Include GitHub in the original website request or try again while its task is running."
+        task = active[0]
+        pages = bool(re.search(r"\bpages\b", text, re.I))
+        instruction = (
+            "Prepare the requested GitHub file operation for this task's saved and verified artifacts. "
+            "Use github_list_files and github_read_file to discover the configured repository paths and read existing files before edits. "
+            "For a new site, use a new nested directory under me3-voice-agent/artifacts/ and operation=create. "
+            "For an existing site, preserve its directory and unrelated files, read the current files, then use operation=update. "
+            "For an ordinary file push, select only the requested artifact paths and explain whether paths are new or updates. "
+            "Use the persistent swift-artifacts branch for generated files; keep each non-website project under "
+            "projects/<stable-project-slug>/ and reuse that slug for a deliberate update. Never write to main. "
+            "Do not perform any remote write until the existing approval control is explicitly "
+            "approved. If GitHub Pages was requested, ask separately for branch push and public "
+            "Pages deployment approval. The Pages source must remain stable and separate from swift-artifacts."
+        )
+        if pages:
+            instruction += " The user requested a public GitHub Pages deployment."
+        try:
+            result = await runtime.steer(task["task_id"], task["revision"], instruction)
+        except Exception as exc:
+            self.event(
+                "github_publish_request_not_prepared",
+                reason=_safe_tool_error_code(exc),
+                task_id=task["task_id"],
+            )
+            return "I couldn't prepare the GitHub request. No repository or Pages changes were made."
+        self.event(
+            "github_publish_request_prepared",
+            task_id=task["task_id"],
+            deploy_pages=pages,
+            status=result.get("status") if isinstance(result, dict) else None,
+        )
+        if pages:
+            return "I asked the website task to prepare a branch push and a separate public Pages approval. Nothing is published yet."
+        return "I asked the website task to prepare a branch push. It will pause for your approval before any repository change."
 
     def _fast_action_row(self, call, turn):
         action = call.arguments.get("action") if isinstance(call.arguments, dict) else None
@@ -607,6 +1242,8 @@ class NativeApplication:
             "list_reminders",
             "get_time",
             "get_weather",
+            "call_demo",
+            "message_demo",
         }:
             kind = "agent"
         title = {
@@ -624,6 +1261,8 @@ class NativeApplication:
             "music_volume_set": "Set music volume",
             "music_volume_up": "Increase music volume",
             "music_volume_down": "Decrease music volume",
+            "call_demo": f"Call {call.arguments.get('value') or 'contact'}",
+            "message_demo": f"Message {call.arguments.get('value') or 'contact'}",
         }.get(kind, kind.replace("_", " ").capitalize())
         mode = "reported"
         executor = self.resources.tasks
@@ -687,6 +1326,7 @@ class NativeApplication:
     async def fast_action(self, context):
         """Use shared exact-command parsers inside the native turn lifecycle."""
         import json
+        import re
 
         from .fast_commands import (
             direct_clock_query,
@@ -697,6 +1337,8 @@ class NativeApplication:
             direct_native_music_control,
             direct_light_followup,
             direct_clarification,
+            direct_sms_edit,
+            demo_owner_identity_query,
         )
 
         messages = context.get_messages()
@@ -750,16 +1392,270 @@ class NativeApplication:
         )
         if not text:
             return None
-        turn = max(1, self.turn_id)
-        call = (
-            direct_music_control(text, turn, history)
-            or direct_native_music_control(text, turn)
-            or direct_music_request(text, turn, history)
-            or direct_clock_query(text, turn)
-            or direct_light_command(text, turn)
-            or direct_light_followup(text, turn, history, history_turn=history_turn)
-            or direct_me2_command(text, turn)
+        github_control = await self._handle_github_voice_control(text)
+        if github_control is not None:
+            return github_control
+        github_publish_request = await self._handle_github_publish_request(text)
+        if github_publish_request is not None:
+            return github_publish_request
+        # A clear website creation request belongs to the durable coding
+        # runtime. Sending the same composite request through foreground
+        # research first can consume the citation/evidence turn budget before
+        # the model ever hands work to LangGraph. Let the task own both source
+        # retrieval and artifact generation, while this voice turn only
+        # confirms durable acceptance.
+        website_creation = re.search(
+            r"(?is)\b(?:create|build|make|develop|generate)\b.*\b(?:website|web\s*page|webpage|web\s*site)\b",
+            text,
         )
+        if website_creation and self.resources.task_runtime is not None:
+            self.event("route_selected", route="fast_task_handoff", task_kind="website")
+            goal = text.strip()
+            personal_site = bool(
+                re.search(
+                    r"\bmy (?:personal )?(?:website|web\s*page|webpage|web\s*site|portfolio|bio)\b"
+                    r"|\bpersonal (?:website|web\s*page|webpage|web\s*site|portfolio|bio)\b"
+                    r"|\b(?:website|web\s*page|webpage|web\s*site|portfolio|bio)\s+(?:about|for) me\b"
+                    r"|\b(?:create|build|make|develop|generate) me (?:a )?(?:personal )?"
+                    r"(?:website|web\s*page|webpage|web\s*site|portfolio|bio)\b",
+                    text,
+                    re.I,
+                )
+            )
+            profile = getattr(self.resources, "owner_profile", {})
+            if personal_site and isinstance(profile, dict) and profile.get("display_name"):
+                facts = ["Name: " + profile["display_name"]]
+                if profile.get("current_role"):
+                    facts.append("Current role: " + profile["current_role"])
+                goal += (
+                    "\n\nApproved private profile facts for this requested personal website: "
+                    + "; ".join(facts)
+                    + ". Use only these confirmed facts; do not infer employer, contact details, "
+                    "location, or other personal information. Generate the local artifact only; "
+                    "public publication still requires separate explicit approval."
+                )
+            call = ToolCall(
+                "voice-fast-task-" + uuid.uuid4().hex,
+                "start_task",
+                {"goal": goal},
+            )
+            self.event(
+                "tool_started",
+                tool_call_id=call.call_id,
+                tool_name=call.name,
+                handoff="background_task",
+            )
+            try:
+                result = await self.dispatch_task_tool(call, call.arguments)
+            except Exception as exc:
+                code = _safe_tool_error_code(exc)
+                self.event(
+                    "tool_completed",
+                    tool_call_id=call.call_id,
+                    tool_name=call.name,
+                    ok=False,
+                    error_code=code,
+                )
+                self.event("task_handoff_failed", error_code=code)
+                return "I couldn't start the website task, so no background work was accepted."
+            accepted = (
+                isinstance(result, dict)
+                and result.get("status") in {"queued", "running"}
+                and isinstance(result.get("task_id"), str)
+            )
+            self.event(
+                "tool_completed",
+                tool_call_id=call.call_id,
+                tool_name=call.name,
+                ok=accepted,
+                task_id=result.get("task_id") if isinstance(result, dict) else None,
+                task_status=result.get("status") if isinstance(result, dict) else None,
+            )
+            if not accepted:
+                self.event("task_handoff_failed", error_code="task_not_accepted")
+                return "The website task was not accepted, so I haven't claimed it is running."
+            self.event("task_handoff_accepted", task_id=result["task_id"])
+            return "I've started the research and website task in the background. You can keep talking to me."
+        if demo_owner_identity_query(text):
+            profile = getattr(self.resources, "owner_profile", {})
+            name = (profile.get("display_name") if isinstance(profile, dict) else None) or getattr(
+                self.resources, "owner_name", ""
+            )
+            role = profile.get("current_role") if isinstance(profile, dict) else None
+            self.event("route_selected", route="local_demo_owner_identity")
+            if name:
+                detail = f"Your private demo profile lists {name}."
+                detail += (
+                    f" Your current role is {role}."
+                    if role
+                    else " Your current role is not confirmed in the profile."
+                )
+                return detail + " A spoken name does not authenticate anyone."
+            return (
+                "No private demo owner is configured. A spoken name does not authenticate anyone."
+            )
+        progress_question = re.fullmatch(
+            r"(?i)(?:what(?:'s| is) the progress(?: on (?:the )?(?:website|task))?|"
+            r"how(?:'s| is) (?:the )?(?:website )?task going|status of (?:the )?(?:website )?task)[?.! ]*",
+            text.strip(),
+        )
+        if progress_question and self.resources.task_runtime is not None:
+            runtime = self.resources.task_runtime
+            rows = list(runtime.store.rows.values())
+            active = [
+                row
+                for row in rows
+                if row["status"]
+                in {
+                    "queued",
+                    "running",
+                    "pausing",
+                    "paused",
+                    "waiting_approval",
+                    "cancel_requested",
+                }
+            ]
+            if len(active) > 1:
+                self.event("route_selected", route="fast_task_progress")
+                return "More than one background task is active. Which task do you mean?"
+            selected = (
+                active[0] if active else max(rows, key=lambda row: row["updated"], default=None)
+            )
+            if selected is None:
+                self.event("route_selected", route="fast_task_progress")
+                return "There isn't a background task to report on."
+            snapshot = await runtime.status(selected["task_id"])
+            stage_row = next(
+                (
+                    event
+                    for event in snapshot["progress"]
+                    if event["kind"] == "stage_update" and isinstance(event.get("payload"), dict)
+                ),
+                None,
+            )
+            stage = stage_row["payload"].get("stage") if stage_row else None
+            message = stage_row["payload"].get("message") if stage_row else None
+            if not isinstance(message, str) or not message.strip():
+                message = {
+                    "succeeded": "The task is complete.",
+                    "completed_unverified": "The task finished, but its result needs review.",
+                    "failed": "The task failed.",
+                    "cancelled": "The task was cancelled.",
+                    "paused": "The task is paused.",
+                    "waiting_approval": "The task is waiting for approval.",
+                    "cancel_requested": "The task is stopping.",
+                }.get(snapshot["status"], "The task is in progress.")
+            self.event("route_selected", route="fast_task_progress", stage=stage)
+            self.event(
+                "task_progress_read",
+                task_id=selected["task_id"],
+                task_status=snapshot["status"],
+                stage=stage,
+            )
+            return message
+        # Exact explicit task control shares the existing local fast-action
+        # boundary; no provider round trip is needed just to request cancellation.
+        cancel = re.fullmatch(
+            r"(?i)cancel (?:the |my )?(?:current |running )?(?:background )?task(?: (task_[a-f0-9]{24}))?(?: now)?[.!]?",
+            text.strip(),
+        )
+        if cancel and self.resources.task_runtime is not None:
+            runtime = self.resources.task_runtime
+            task_id = cancel.group(1)
+            if task_id is None:
+                active = [
+                    row
+                    for row in runtime.store.rows.values()
+                    if row["status"]
+                    in {"queued", "running", "paused", "waiting_approval", "cancel_requested"}
+                ]
+                if len(active) != 1:
+                    return "Which background task would you like me to cancel?"
+                task_id = active[0]["task_id"]
+            if task_id not in runtime.store.rows:
+                return "I couldn't find that background task."
+            result = await runtime.cancel(task_id)
+            self.event("route_selected", route="fast_task_cancel")
+            self.event("task_cancel_ack", status=result["status"], task_id=task_id)
+            if result["status"] == "cancelled":
+                return "The background task is cancelled."
+            return "Cancellation requested for the background task."
+        turn = max(1, self.turn_id)
+        call = None
+        pending_confirmation = self.pending_communication_confirmation
+        confirmed_communication = False
+        if pending_confirmation is not None:
+            phrase = _normalize_command_phrase(text)
+            phrase = re.sub(r"^hey swift\s+", "", phrase)
+            pending_call = pending_confirmation["call"]
+            if pending_call.arguments.get("action") == "message_demo":
+                replacement = direct_sms_edit(text)
+                if replacement is not None:
+                    from .communications import validate_message_text
+
+                    try:
+                        pending_call.arguments["message"] = validate_message_text(replacement)
+                    except ValueError:
+                        return "That draft must be a single-line text of at most 1000 characters. The existing draft is unchanged and no message was sent."
+                    self.pending_communication_confirmation = pending_confirmation
+                    body = pending_call.arguments.get("message")
+                    recipient = pending_call.arguments.get("value")
+                    confirmation = pending_confirmation["confirmation"]
+                    return f"I updated the text for {recipient}. Draft: ‘{body}’ Say ‘{confirmation}’ to send, or ‘cancel’ to stop."
+            if phrase == pending_confirmation["confirmation"]:
+                self.pending_communication_confirmation = None
+                call = pending_confirmation["call"]
+                confirmed_communication = True
+                self.event(
+                    "outgoing_action_confirmed",
+                    action=call.arguments.get("action"),
+                    contact=call.arguments.get("value"),
+                    confirmation_turn=history_turn,
+                )
+            elif phrase in {"cancel", "cancel it", "never mind", "nevermind"}:
+                self.pending_communication_confirmation = None
+                self.event("outgoing_action_confirmation_cancelled")
+                return "Cancelled. No call was placed and no message was sent."
+            else:
+                self.pending_communication_confirmation = None
+                self.event("outgoing_action_confirmation_expired")
+        pending_request = self.pending_communication_request
+        if call is None and pending_request is not None:
+            self.pending_communication_request = None
+            phrase = _normalize_command_phrase(text)
+            phrase = re.sub(r"^hey swift\s+", "", phrase)
+            if phrase in {"cancel", "cancel it", "never mind", "nevermind"}:
+                self.event("outgoing_action_confirmation_cancelled")
+                return "Cancelled. No call was placed and no message was sent."
+            followup = direct_me2_command(text, turn)
+            action = pending_request["action"]
+            if (
+                followup is not None
+                and followup.name == "run_device_action"
+                and followup.arguments.get("action") == action
+                and followup.arguments.get("value")
+            ):
+                call = followup
+            elif followup is not None and followup.arguments.get("action") != action:
+                self.event("outgoing_action_confirmation_expired")
+            else:
+                call = ToolCall(
+                    f"local-contact-{turn}",
+                    "run_device_action",
+                    {"action": action, "value": text.strip()},
+                )
+            if call is not None and pending_request.get("message") is not None:
+                call.arguments["message"] = pending_request["message"]
+        if call is None:
+            call = (
+                direct_music_control(text, turn, history)
+                or direct_native_music_control(text, turn)
+                or direct_music_request(text, turn, history)
+                or direct_clock_query(text, turn)
+                or direct_light_command(text, turn)
+                or direct_light_followup(text, turn, history, history_turn=history_turn)
+                or direct_me2_command(text, turn)
+            )
         if call is None:
             clarification = direct_clarification(text)
             if clarification:
@@ -769,6 +1665,64 @@ class NativeApplication:
                 self.event("clarification_requested", reason="missing_command_detail")
                 return clarification
             return None
+        action = call.arguments.get("action")
+        if (
+            not confirmed_communication
+            and call.name == "run_device_action"
+            and action in {"call_demo", "message_demo"}
+        ):
+            task_actions = getattr(self.resources.tasks, "actions", None)
+            communication = getattr(task_actions, "communications", None)
+            query = call.arguments.get("value")
+            if not query:
+                self.pending_communication_request = {
+                    "action": action,
+                    "message": call.arguments.get("message"),
+                }
+                question = "call" if action == "call_demo" else "message"
+                return f"Who would you like me to {question}?"
+            if communication is None or not communication.contacts:
+                return "The private phone contact list is not configured. No call was placed and no message was sent."
+            if action == "message_demo" and call.arguments.get("message") is not None:
+                from .communications import validate_message_text
+
+                try:
+                    call.arguments["message"] = validate_message_text(call.arguments["message"])
+                except ValueError:
+                    return "That draft must be a single-line text of at most 1000 characters. No message was sent."
+            match = communication.match_contact(query)
+            if match["status"] == "missing":
+                return "I couldn't find that name or alias in the private contact list. No phone action was taken."
+            if match["status"] == "ambiguous":
+                self.pending_communication_request = {
+                    "action": action,
+                    "message": call.arguments.get("message"),
+                }
+                names = ", ".join(match["matches"])
+                return f"I found more than one matching contact: {names}. Which one should I use?"
+            contact_name = match["name"]
+            call.arguments["value"] = contact_name
+            action_word = "call" if action == "call_demo" else "text"
+            confirmation = _normalize_command_phrase(
+                f"repeat call to {contact_name.casefold()}"
+                if action == "call_demo"
+                else f"repeat message to {contact_name.casefold()}"
+            )
+            self.pending_communication_confirmation = {
+                "call": call,
+                "confirmation": confirmation,
+            }
+            self.event(
+                "outgoing_action_confirmation_requested",
+                action=action,
+                contact=contact_name,
+            )
+            if action == "message_demo":
+                from .communications import DEMO_MESSAGE
+
+                body = call.arguments.get("message", DEMO_MESSAGE)
+                return f"I can text {contact_name}. Draft: ‘{body}’ Say ‘{confirmation}’ to send, or ‘cancel’ to stop."
+            return f"I can {action_word} {contact_name}. Say ‘{confirmation}’ to proceed, or ‘cancel’ to stop."
         self.event(
             "route_selected",
             route="fast_command",
@@ -886,6 +1840,7 @@ class NativeApplication:
             raise
 
     async def _start(self):
+        self.startup_stage = "speech_startup"
         speech = await self.resources.start()
         for startup in getattr(speech, "startup_diagnostics", ()):
             self.event("speech_mcp_ready", **startup)
@@ -894,17 +1849,23 @@ class NativeApplication:
                 self.options.research, self.resources.credentials
             )
         if self.resources.task_runtime is None:
+            self.startup_stage = "task_runtime_startup"
             from .task_runtime import TaskRuntime
 
             factory = self.resources.task_runtime_factory or TaskRuntime
+            task_spec, task_budget = self.resources.task_model_configuration(self.options)
+            runtime_args = {
+                "budget": task_budget,
+                "research": self.resources.research,
+            }
+            if self.options.task_model:
+                runtime_args["max_completion_tokens"] = self.options.task_max_output_tokens
             self.resources.task_runtime = factory(
-                self.resources.backends["llm"],
-                self.resources.credentials,
-                budget=self.resources.budget,
-                research=self.resources.research,
+                task_spec, self.resources.credentials, **runtime_args
             )
             await self.resources.task_runtime.start_runtime()
         self.resources.task_runtime.on_event = self.task_event
+        self.startup_stage = "model_and_tool_setup"
         self.llm = NativeLLM(
             self.resources.backends["llm"],
             credentials=self.resources.credentials,
@@ -916,10 +1877,9 @@ class NativeApplication:
             evidence_passage_ids=self.resources.research.evidence_passage_ids,
             evidence_passage_lookup=self.resources.research.lookup_evidence_passage,
             research_remaining=lambda: (
-                max(
-                    0,
-                    self.resources.research.options.request_limit
-                    - self.resources.research.requests,
+                _requests_remaining(
+                    self.resources.research.options.request_limit,
+                    self.resources.research.requests,
                 )
                 if self.resources.research.options.allow_live
                 else None
@@ -930,6 +1890,7 @@ class NativeApplication:
             max_tool_calls_per_turn=self.options.max_tool_calls_per_turn,
             max_repeated_tool_calls=self.options.max_repeated_tool_calls,
             fast_action=self.fast_action,
+            tavily_quick_research=self.tavily_quick_research,
         )
         self.register_tools()
         ingress = [self.gate] + ([] if self.annotated else [native_vad()])
@@ -948,6 +1909,13 @@ class NativeApplication:
         )
 
         def progress_allowed(frame):
+            if frame.owner_id.startswith("github-approval:"):
+                return (
+                    self.settled.is_set()
+                    and self.projection in {"listening", "wake_listening"}
+                    and not self.parts.stt.speaking
+                    and self.error is None
+                )
             response_id = self.response_by_conversation_turn.get(self.turn_id)
             response = self.response_records.get(response_id) if response_id else None
             # A tool-call response record exists before the task has spoken.
@@ -964,6 +1932,7 @@ class NativeApplication:
             )
 
         self.parts.tts.progress_allowed = progress_allowed
+        self.startup_stage = "pipeline_initialization"
         self.worker = PipelineWorker(
             self.parts.pipeline,
             params=PipelineParams(audio_in_sample_rate=16000, audio_out_sample_rate=16000),
@@ -984,6 +1953,10 @@ class NativeApplication:
                 if isinstance(exception, Exception)
                 else RuntimeError("native pipeline failure")
             )
+            # A pipeline error before on_pipeline_started must wake the
+            # session initializer so it can report the real failure instead
+            # of waiting for the generic readiness timeout.
+            self.ready.set()
             # Native interruption owns stopping the failed stream and queued output.
             # Invalidate asynchronous deliveries immediately before forwarding it.
             self.llm.epoch += 1
@@ -1014,14 +1987,29 @@ class NativeApplication:
                 frame.completion.set_result(None)
 
         @self.parts.aggregators.user().event_handler("on_user_turn_started")
-        async def user_started(*_):
+        async def user_started(_aggregator, strategy):
             self._cancel_followup_timer()
             self.research_recovery_active = False
+            start_evidence = getattr(strategy, "start_evidence", "asr_interim")
+            previous = self.response_records.get(self.active_response_id)
+            supersedes_pending = bool(previous and previous.get("response_state") == "pending")
             self.llm.new_turn()
+            if supersedes_pending:
+                self.output.suppress_response(previous.get("response_id"))
+                # Stop only the old assistant branch. A framework broadcast
+                # would travel upstream and abort the ASR stream carrying the
+                # newly recognized user turn.
+                await self.llm.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
+            if self.tavily_quick_research_designated:
+                self.tavily_quick_research_designated = False
+                self.llm.designate_tavily_quick_research()
             self.terminal_failure_code = None
             self.settled.clear()
             self.projection = "listening"
-            self.event("turn_started")
+            self.event(
+                "turn_started",
+                start_evidence=start_evidence,
+            )
 
         @self.parts.aggregators.user().event_handler("on_user_turn_stopped")
         async def user_stopped(*_):
@@ -1096,17 +2084,56 @@ class NativeApplication:
 
         @self.parts.aggregators.user().event_handler("on_user_turn_idle")
         async def user_idle(*_):
-            # Pipecat's input-idle callback can arrive while the assistant is
-            # still thinking or speaking. The response-owned timer starts only
-            # after the completed spoken turn.
-            if self.settled.is_set() and self.projection == "listening" and not self.followup_timer:
-                self.standby()
+            await self._handle_user_idle()
 
         self.runner = WorkerRunner(handle_sigint=False)
         await self.runner.add_workers(self.worker)
         self.job = asyncio.create_task(self.runner.run())
-        await asyncio.wait_for(self.ready.wait(), 15)
+        self.startup_stage = "pipeline_readiness"
+        await self._wait_for_pipeline_ready()
+        self.startup_stage = "ready"
         return self
+
+    async def _handle_user_idle(self):
+        """Apply legacy wake-standby behavior only to timed conversation modes."""
+        # Pipecat's input-idle callback can arrive while the assistant is
+        # still thinking or speaking. The response-owned timer starts only
+        # after the completed spoken turn.
+        if (
+            self.conversation_mode != "continuous"
+            and self.settled.is_set()
+            and self.projection == "listening"
+            and not self.followup_timer
+        ):
+            self.standby()
+
+    async def _wait_for_pipeline_ready(self, timeout=15):
+        ready_wait = asyncio.create_task(self.ready.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {ready_wait, self.job},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                error = TimeoutError("native pipeline did not signal readiness")
+                error.error_stage = "pipeline_startup"
+                error.worker_state = "running" if not self.job.done() else "stopped"
+                raise error
+            if self.error is not None:
+                raise self.error
+            if self.job in done and not self.ready.is_set():
+                if not self.job.cancelled():
+                    exception = self.job.exception()
+                    if exception is not None:
+                        raise RuntimeError(
+                            "native pipeline runner failed before readiness"
+                        ) from exception
+                raise RuntimeError("native pipeline runner stopped before readiness")
+        finally:
+            if not ready_wait.done():
+                ready_wait.cancel()
+                await asyncio.gather(ready_wait, return_exceptions=True)
 
     @staticmethod
     def registered_tool_schemas():
@@ -1129,9 +2156,8 @@ class NativeApplication:
             }:
                 continue
             if schema.name in {"web_search", "retrieve_source"}:
-                if (
-                    not research_options.allow_live
-                    or research_requests >= research_options.request_limit
+                if not research_options.allow_live or _request_limit_reached(
+                    research_options.request_limit, research_requests
                 ):
                     continue
             elif schema.name == "verify_evidence" and not research_sources:
@@ -1142,7 +2168,7 @@ class NativeApplication:
     def register_tools(self):
         from .task_runtime import validate_control_arguments
 
-        task_tool_names = {"start_task", "task_status", "steer_task"}
+        task_tool_names = {"start_task", "task_status", "steer_task", "cancel_task"}
         research = self.resources.research
         all_schemas = self.registered_tool_schemas()
 
@@ -1227,6 +2253,17 @@ class NativeApplication:
                             pass
                         elif call.name in task_tool_names:
                             pass
+                        elif call.name == "run_device_action" and args.get("action") in {
+                            "call_demo",
+                            "message_demo",
+                        }:
+                            result = {"ok": False, "error": "explicit_confirmation_required"}
+                            self.event(
+                                "outgoing_action_blocked",
+                                tool_call_id=call.call_id,
+                                action=args["action"],
+                                error_code="explicit_confirmation_required",
+                            )
                         elif call.name == "get_runtime_time":
                             result = runtime_time(args.get("timezone", "UTC"))
                         elif call.name == "web_search":
@@ -1251,9 +2288,15 @@ class NativeApplication:
                                         args["query"], args.get("max_results", 5)
                                     ),
                                 )
-                            result = self.llm.project_search_snippets(
-                                self.resources.research, result, args["query"], limit=1
-                            )
+                            if self.resources.research.options.answer_mode == "tavily":
+                                # Keep the provider answer as a ranking hint only.
+                                # GPT-OSS must compose from retained snippets so
+                                # the normal citation/support validator runs.
+                                result, _, _ = self.project_tavily_answer(args["query"], result)
+                            else:
+                                result = self.llm.project_search_snippets(
+                                    self.resources.research, result, args["query"], limit=1
+                                )
                             # Offer only the best-ranked snippet as answer evidence;
                             # keep other leads discoverable for retrieval. This avoids
                             # competing, partial snippets while preserving a fetch path.
@@ -1274,13 +2317,15 @@ class NativeApplication:
                             existing_alternatives = research.alternative_leads(
                                 exclude_url=safe_url, limit=1
                             )
-                            remaining_http = max(
-                                0, research.options.request_limit - research.requests
+                            remaining_http = _requests_remaining(
+                                research.options.request_limit, research.requests
                             )
                             # When only the direct fetch plus one alternate fit,
                             # leave the remaining HTTP allowance for the alternate.
                             allow_extract_fallback = not (
-                                existing_alternatives and remaining_http <= 2
+                                existing_alternatives
+                                and remaining_http is not None
+                                and remaining_http <= 2
                             )
                             try:
                                 source = await self.research_operation_with_ack(
@@ -1306,7 +2351,9 @@ class NativeApplication:
                                 if (
                                     not alternate_eligible
                                     or not alternatives
-                                    or research.requests >= research.options.request_limit
+                                    or _request_limit_reached(
+                                        research.options.request_limit, research.requests
+                                    )
                                     or not self.llm.reserve_alternate_retrieval()
                                 ):
                                     raise
@@ -1322,9 +2369,8 @@ class NativeApplication:
                                     primary_source_url_hash=source_url_hash,
                                     alternate_source_url_hash=alternate_hash,
                                     primary_error_code=primary_error.code,
-                                    remaining_http_requests=max(
-                                        0,
-                                        research.options.request_limit - research.requests,
+                                    remaining_http_requests=_requests_remaining(
+                                        research.options.request_limit, research.requests
                                     ),
                                 )
                                 try:
@@ -1427,7 +2473,7 @@ class NativeApplication:
                             failure_frame = failure_frame.tb_next
                         result = {
                             "ok": False,
-                            "error": "tool_service_unavailable",
+                            "error": _safe_tool_error_code(exc),
                             "exception_type": type(exc).__name__,
                             "exception_function": (
                                 failure_frame.tb_frame.f_code.co_name if failure_frame else None
@@ -1532,6 +2578,13 @@ class NativeApplication:
                     source_url_hash=source_url_hash,
                     diagnostics=safe_diagnostics or None,
                 )
+                if (
+                    call.name == "start_task"
+                    and isinstance(result, dict)
+                    and result.get("task_id")
+                    and result.get("status") in {"queued", "running"}
+                ):
+                    self.llm.pending_task_acceptance = (self.llm.epoch,)
                 await params.result_callback(result)
                 self.event(
                     "tool_result_callback_returned",
@@ -1553,6 +2606,8 @@ class NativeApplication:
             raise RuntimeError("task_runtime_unavailable")
         if call.name == "start_task":
             import hashlib
+            import os
+            import re
 
             request_id = (
                 "voice_"
@@ -1561,9 +2616,20 @@ class NativeApplication:
                 ]
             )
             call_id = call.call_id if len(call.call_id) <= 80 else "call_" + request_id[-40:]
+            goal = args["goal"]
+            demo_contract = " Swift local website task: materialize_demo is approved with push=false; use build_demo_page."
+            if (
+                os.environ.get("ME3_DEMO_OUTPUT")
+                and re.search(r"\b(?:website|web\s+page|webpage|web\s+site)\b", goal, re.I)
+                and "materialize_demo" not in goal
+                and len(goal) + len(demo_contract) <= 4000
+            ):
+                goal += demo_contract
             return await runtime.start(
-                args["goal"], request_id=request_id, turn_id=max(1, self.turn_id), call_id=call_id
+                goal, request_id=request_id, turn_id=max(1, self.turn_id), call_id=call_id
             )
+        if call.name == "cancel_task":
+            return await runtime.cancel(args["task_id"])
         if call.name == "task_status":
             return await runtime.status(args["task_id"])
         if call.name == "steer_task":
@@ -1633,7 +2699,7 @@ class NativeApplication:
 
     def _arm_followup_timer(self):
         self._cancel_followup_timer()
-        if self.annotated or self.conversation_mode == "single":
+        if self.annotated or self.conversation_mode in {"single", "continuous"}:
             return
 
         async def expire():
@@ -1732,6 +2798,26 @@ class NativeApplication:
             if self.error:
                 raise self.error
 
+    async def inject_test_text(self, text):
+        """Explicit localhost qualification only; ASR is bypassed and labeled."""
+        import os
+
+        if os.environ.get("ME3_TEST_TEXT_INGRESS") != "1":
+            raise ValueError("test_text_disabled")
+        if not isinstance(text, str) or not text.strip() or len(text) > 4000:
+            raise ValueError("invalid_test_text")
+        if self.projection in {"thinking", "speaking"}:
+            await self.interrupt()
+        self.settled.clear()
+        self.event("test_text_injected", asr_bypassed=True)
+        # Enter immediately after the recognizer, retaining the native user
+        # aggregator, model/tool path, TTS and output/terminal lifecycle.
+        await self.parts.stt.push_frame(VADUserStartedSpeakingFrame())
+        await self.parts.stt.push_frame(
+            TranscriptionFrame(text.strip(), "user", "", finalized=True)
+        )
+        await self.parts.stt.push_frame(VADUserStoppedSpeakingFrame())
+
     async def interrupt(self):
         self.event("interrupt_requested", reason="user_requested")
         self.playback_busy_until = 0.0
@@ -1745,9 +2831,65 @@ class NativeApplication:
         self.settled.set()
         self._arm_followup_timer()
 
+    def designate_next_tavily_quick_research(self):
+        """Mark exactly the next user turn for direct Tavily quick research."""
+        if self.options.research.answer_mode != "tavily":
+            raise ValueError("tavily_quick_research_not_enabled")
+        if self.tavily_quick_research_designated:
+            raise ValueError("research_route_already_designated")
+        self.tavily_quick_research_designated = True
+        self.event("research_route_designated", route="tavily_quick_research")
+
+    def project_tavily_answer(self, query, result):
+        """Use the best returned snippet as the single citation for a Tavily answer."""
+        answer = result.pop("answer", None)
+        research = self.resources.research
+        if isinstance(answer, str) and isinstance(result.get("results"), list):
+            result["results"] = research.rank_answer_support(answer, result["results"])
+        projected = self.llm.project_search_snippets(research, result, query, limit=1)
+        source = next(
+            (
+                row
+                for row in projected.get("results", [])
+                if isinstance(row, dict)
+                and row.get("evidence_status") == "search_result_snippet"
+                and isinstance(row.get("source_id"), str)
+            ),
+            None,
+        )
+        return projected, answer, source.get("source_id") if source else None
+
+    async def tavily_quick_research(self, question, epoch):
+        """Run one Tavily answer search for a specifically designated native turn."""
+        try:
+            result = await self.resources.research.search(question)
+        except asyncio.CancelledError:
+            raise
+        except ResearchError as exc:
+            self.event("tavily_quick_research_failed", error_code=exc.code)
+            return None, None
+        except asyncio.TimeoutError:
+            self.event("tavily_quick_research_failed", error_code="research_timeout")
+            return None, None
+        if epoch != self.llm.epoch:
+            return None, None
+        _, answer, source_id = self.project_tavily_answer(question, result)
+        self.event(
+            "tavily_quick_research_result",
+            available=isinstance(answer, str) and bool(answer.strip()) and source_id is not None,
+        )
+        return answer, source_id
+
     async def __aexit__(self, *_):
         self._cancel_followup_timer()
         try:
+            for announcement in tuple(self._approval_announcement_jobs):
+                announcement.cancel()
+            if self._approval_announcement_jobs:
+                await asyncio.gather(
+                    *tuple(self._approval_announcement_jobs), return_exceptions=True
+                )
+            self._approval_announcement_jobs.clear()
             if getattr(self, "output", None):
                 await self.output.stop_delivery()
             if self.runner:
@@ -2074,6 +3216,7 @@ async def replay_native_application(args, options, *, upstream=None):
             in {
                 "asr_final",
                 "llm_request",
+                "llm_provider_request_started",
                 "llm_first_token",
                 "tts_start",
                 "tts_segment_summary",
@@ -2085,6 +3228,7 @@ async def replay_native_application(args, options, *, upstream=None):
                 "assistant_turn_stopped",
                 "playback_packet",
                 "turn_completed",
+                "voice_latency",
                 "turn_failed",
                 "turn_error",
             }
@@ -2130,6 +3274,17 @@ async def replay_native_application(args, options, *, upstream=None):
             "turn_started_to_completed": elapsed("turn_started", "turn_completed"),
             "replay_including_startup": result["replay_elapsed_seconds"],
         }
+        completed_turn_ids = dict.fromkeys(
+            event.get("turn_id")
+            for event in result["events"]
+            if event.get("event") == "turn_completed"
+            and type(event.get("turn_id")) is int
+        )
+        result["voice_latency_by_turn"] = [
+            metrics
+            for turn_id in completed_turn_ids
+            if (metrics := _voice_latency_for_turn(result["events"], turn_id)) is not None
+        ]
         result["errors"] = [
             {"event": event.get("event"), "code": event.get("error_code")}
             for event in result["events"]

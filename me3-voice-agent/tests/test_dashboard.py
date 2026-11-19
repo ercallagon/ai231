@@ -95,6 +95,34 @@ def test_live_dashboard_embeds_the_bounded_native_audio_prebuffer():
     assert "The previous voice session has ended." in html
 
 
+def test_provider_health_check_does_not_block_voice_start():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to execute the browser startup helper")
+    source = (Path(__file__).parents[1] / "src/me3_voice/ui/dashboard.js").read_text()
+    start = source.index("  function launchProviderHealthCheck()")
+    end = source.index("  async function startVoice()", start)
+    helper = source[start:end]
+    start_body = source[end:]
+    assert "launchProviderHealthCheck();" in start_body
+    assert "await launchProviderHealthCheck" not in start_body
+    script = (
+        helper
+        + "\nfetch=()=>new Promise(()=>{});\n"
+        + "launchProviderHealthCheck();\nconsole.log('startup continued');\n"
+    )
+    result = subprocess.run(
+        [node, "-e", script], capture_output=True, text=True, check=True, timeout=3
+    )
+    assert result.stdout.strip() == "startup continued"
+
+
 def save(root, name, data):
     path = root / "var/results" / name
     path.parent.mkdir(parents=True, exist_ok=True)

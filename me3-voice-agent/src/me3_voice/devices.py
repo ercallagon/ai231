@@ -31,8 +31,8 @@ ACTION_TITLES = {
     "list_reminders": "Check reminders",
     "get_time": "Check the time",
     "get_weather": "Check the weather",
-    "call_demo": "Call demo contact",
-    "message_demo": "Send demo message",
+    "call_demo": "Call a contact",
+    "message_demo": "Message a contact",
 }
 COLOR_RGB = {
     "red": (1.0, 0.0, 0.0),
@@ -439,6 +439,7 @@ def _valid_state_path(value):
 def load_device_service(config_path=None):
     """Load explicit device config; absent config always constructs mock output."""
     config = {"schema_version": 1, "backend": "mock"}
+    path = None
     if config_path is not None:
         path = Path(config_path)
         if not path.is_absolute():
@@ -463,14 +464,21 @@ def load_device_service(config_path=None):
     if not isinstance(communication_config, dict) or set(communication_config) - {
         "enabled",
         "phone_address",
+        "contacts",
         "call_number",
         "message_number",
     }:
         raise ValueError("invalid communication configuration")
     if type(communication_config.get("enabled", False)) is not bool:
         raise ValueError("communication enabled must be boolean")
-    if communication_config.get("enabled") and (backend != "pi" or path.stat().st_mode & 0o077):
-        raise ValueError("phone actions require explicit Pi mode and an owner-only configuration")
+    if (
+        communication_config.get("enabled")
+        or communication_config.get("contacts")
+        or communication_config.get("call_number")
+        or communication_config.get("message_number")
+    ):
+        if backend != "pi" or path is None or path.stat().st_mode & 0o077:
+            raise ValueError("phone contacts require an owner-only Pi device configuration")
     communications = Communications(**communication_config)
     weather_config = config.get("weather")
     if weather_config is not None:
@@ -598,9 +606,15 @@ class DeviceActions:
             raise ValueError("expected operation id and boolean light state")
         return await self.run(operation_id, "light_on" if enabled else "light_off", None)
 
-    async def run(self, operation_id, action, value):
+    async def run(self, operation_id, action, value, message=None):
         if not operation_id or action not in ACTION_TITLES:
             raise ValueError("unsupported device action")
+        if message is not None:
+            if action != "message_demo":
+                raise ValueError("message text is only valid for a message action")
+            from .communications import validate_message_text
+
+            message = validate_message_text(message)
         if action == "get_time" and isinstance(value, str):
             value = {"philippines": "Asia/Manila", "japan": "Asia/Tokyo"}.get(
                 value.strip().casefold(), value
@@ -626,9 +640,12 @@ class DeviceActions:
                 or any(ord(c) < 32 for c in value)
             ):
                 raise ValueError("invalid weather location")
+        elif action in {"call_demo", "message_demo"}:
+            if not isinstance(value, str) or not value or len(value) > 80:
+                raise ValueError("a resolved contact name is required")
         elif value is not None:
             raise ValueError("this device action takes no value")
-        arguments = (action, value)
+        arguments = (action, value, message)
         if operation_id in self.operations:
             previous, task = self.operations[operation_id]
             if previous != arguments:
@@ -636,7 +653,7 @@ class DeviceActions:
         else:
             if len(self.operations) >= self.capacity:
                 raise ValueError("device operation ledger full")
-            task = asyncio.create_task(self._run(action, value, operation_id))
+            task = asyncio.create_task(self._run(action, value, operation_id, message))
             self.operations[operation_id] = arguments, task
         return await asyncio.shield(task)
 
@@ -774,7 +791,7 @@ class DeviceActions:
         except asyncio.CancelledError:
             raise
 
-    async def _run(self, action, value, operation_id):
+    async def _run(self, action, value, operation_id, message=None):
         await asyncio.sleep(0)
         if action in {"call_demo", "message_demo"}:
             if self.communications is None:
@@ -784,7 +801,7 @@ class DeviceActions:
                     display="Phone unavailable",
                     action=action,
                 )
-            return await self.communications.execute(action)
+            return await self.communications.execute(action, value, message)
         physical_actions = {
             "light_on",
             "light_off",

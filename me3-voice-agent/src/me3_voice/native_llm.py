@@ -14,7 +14,7 @@ import math
 import os
 import re
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 import uuid
 from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 from openai.types.chat import ChatCompletionChunk
@@ -24,12 +24,32 @@ from .providers import MockLLM, ToolCall
 from .remote import LiveTransport, ProviderError
 from .conversation_context import prepare_context
 from .request_budget import RequestBudgetError, conservative_input_token_estimate
+from .research import public_url
+
+
 from pipecat.frames.frames import (
     InterruptionFrame,
     LLMFullResponseStartFrame,
     LLMFullResponseEndFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
+
+
+_NON_TERMINAL_ABBREVIATIONS = re.compile(
+    r"(?:\b(?:[A-Z]\.){2,}|\b(?:Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|e\.g|i\.e|vs|etc)\.)$",
+    re.IGNORECASE,
+)
+
+
+def _first_complete_sentence(text):
+    """Return the first sentence without splitting at common dotted abbreviations."""
+    for boundary in re.finditer(r"[.!?][\"'”’]?\s+", text):
+        prefix = text[: boundary.end()].rstrip()
+        stem = prefix.rstrip("\"'”’")
+        if stem.endswith(".") and _NON_TERMINAL_ABBREVIATIONS.search(stem):
+            continue
+        return prefix
+    return text.strip()
 
 
 MAX_RESEARCH_SEARCHES_PER_TURN = 3
@@ -183,9 +203,7 @@ def _research_content_terms(text):
 def _relevant_research_sentences(claim, passage):
     """Return the passage sentences most directly tied to a claim's wording."""
     sentences = [
-        value.strip()
-        for value in re.split(r"(?<=[.!?])\s+|\n+", passage)
-        if value.strip()
+        value.strip() for value in re.split(r"(?<=[.!?])\s+|\n+", passage) if value.strip()
     ]
     claim_terms = _research_content_terms(claim)
     claim_entities = _research_entities(claim)
@@ -218,8 +236,24 @@ def _research_claim_conflicts(claim, passage, question=""):
     relevant_text = " ".join(relevant)
     claim_numbers = {value.casefold() for value in _RESEARCH_NUMBER.findall(claim)}
     passage_numbers = {value.casefold() for value in _RESEARCH_NUMBER.findall(relevant_text)}
-    if claim_numbers and passage_numbers and not claim_numbers <= passage_numbers:
-        conflicts.append("numeric_anchor_conflict")
+
+    # Years, ceremony ordinals and quantities are different anchors. A year
+    # absent from an ordinal-only sentence is not a contradictory year.
+    def number_kind(value):
+        if re.fullmatch(r"\d+(?:st|nd|rd|th)", value):
+            return "ordinal"
+        if re.fullmatch(r"(?:19|20)\d{2}", value):
+            return "year"
+        if value.endswith("%"):
+            return "percent"
+        return "quantity"
+
+    for kind in {number_kind(value) for value in claim_numbers}:
+        claimed = {value for value in claim_numbers if number_kind(value) == kind}
+        retained = {value for value in passage_numbers if number_kind(value) == kind}
+        if retained and not claimed <= retained:
+            conflicts.append("numeric_anchor_conflict")
+            break
 
     claim_negated = bool(_RESEARCH_NEGATION.search(claim))
     relevant_polarities = {bool(_RESEARCH_NEGATION.search(value)) for value in relevant}
@@ -270,6 +304,7 @@ class NativeLLM(OpenAILLMService):
         fast_action=None,
         refresh_tools=None,
         research_alternatives=None,
+        tavily_quick_research=None,
     ):
         self.epoch = self.calls = self.tool_calls = 0
         self.turn_number = 0
@@ -290,6 +325,9 @@ class NativeLLM(OpenAILLMService):
         self.research_evidence_tokens = 0
         self.retrieval_failures = 0
         self.response_failure_reason = None
+        self.pending_tavily_answer = None
+        self.tavily_quick_research_epoch = None
+        self.tavily_quick_research = tavily_quick_research
         self.research_format_repair_attempted = False
         self._research_evidence_repair_active = False
         self._research_repair_contexts = set()
@@ -333,10 +371,11 @@ class NativeLLM(OpenAILLMService):
             base_url = spec.endpoint.removesuffix("/chat/completions")
         endpoint_host = urlsplit(spec.endpoint).hostname
         groq = endpoint_host == "api.groq.com"
-        local_qwen = (
-            endpoint_host in {"localhost", "127.0.0.1", "::1"}
-            and spec.model.casefold().startswith("qwen3:")
-        )
+        local_qwen = endpoint_host in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        } and spec.model.casefold().startswith("qwen3:")
         extra = (
             {
                 "reasoning_effort": "low",
@@ -344,7 +383,9 @@ class NativeLLM(OpenAILLMService):
                 "extra_body": {"include_reasoning": False},
             }
             if groq and spec.model == "openai/gpt-oss-120b"
-            else {"extra_body": {"think": False}} if local_qwen else {}
+            else {"extra_body": {"think": False}}
+            if local_qwen
+            else {}
         )
         super().__init__(
             api_key=token,
@@ -378,6 +419,8 @@ class NativeLLM(OpenAILLMService):
         self.epoch += 1
         self.turn_number += 1
         self.calls = self.tool_calls = 0
+        self.pending_tavily_answer = None
+        self.tavily_quick_research_epoch = None
         self.tool_operation_counts.clear()
         self.research_tool_calls = 0
         self.research_searches = 0
@@ -386,6 +429,7 @@ class NativeLLM(OpenAILLMService):
         self.research_evidence_tokens = 0
         self.retrieval_failures = 0
         self.response_failure_reason = None
+        self.pending_tavily_answer = None
         self.research_format_repair_attempted = False
         self._research_evidence_repair_active = False
         self._research_repair_contexts.clear()
@@ -532,17 +576,61 @@ class NativeLLM(OpenAILLMService):
         )
         return candidate
 
+    def citation_sources(self, source_ids):
+        """Resolve accepted citation IDs to retained, validated source records."""
+        resolved = []
+        valid_ids = {
+            value for value in source_ids if isinstance(value, str) and re.fullmatch(r"S\d+", value)
+        }
+        for source_id in sorted(valid_ids, key=lambda value: int(value[1:])):
+            source = self.source_lookup(source_id)
+            if not isinstance(source, dict) or source.get("source_id") != source_id:
+                continue
+            try:
+                url = public_url(source.get("url"))
+            except (TypeError, ValueError):
+                continue
+            # URLs with credential-like query parameters are useful internally
+            # for fetching, but must not be copied into browser-visible traces.
+            try:
+                query_keys = [key for key, _ in parse_qsl(urlsplit(url).query, max_num_fields=50)]
+            except ValueError:
+                continue
+            if any(
+                re.search(
+                    r"(?:key|token|secret|auth|signature|session|password|credential)", key, re.I
+                )
+                for key in query_keys
+            ):
+                continue
+            resolved.append(
+                {
+                    "source_id": source_id,
+                    "title": str(source.get("title", ""))[:250],
+                    "url": url,
+                    "evidence_status": str(source.get("evidence_status", ""))[:48],
+                    "source_type": str(source.get("kind", ""))[:48],
+                    "fetched": source.get("fetched") is True,
+                    "truncated": source.get("truncated") is True,
+                }
+            )
+        return resolved
+
     def project_search_snippets(self, research, result, query, *, limit=2):
         """Project only short, source-owned Tavily snippets under the evidence cap."""
         if not isinstance(result, dict) or result.get("kind") != "untrusted_search_leads":
             return result
         projected = []
+        evidence_count = 0
         for lead in result.get("results", []):
             if not isinstance(lead, dict):
                 continue
-            source = research.retain_search_snippet(lead) if len(projected) < limit else None
+            source = research.retain_search_snippet(lead) if evidence_count < limit else None
             if source is None:
-                projected.append(dict(lead))
+                discovery = dict(lead)
+                if isinstance(discovery.get("snippet"), str):
+                    discovery["snippet"] = discovery["snippet"][:160]
+                projected.append(discovery)
                 continue
             try:
                 evidence = self.evidence_for_model(research, source, query)
@@ -554,6 +642,7 @@ class NativeLLM(OpenAILLMService):
             evidence["source_type"] = "search_result"
             evidence["fetched"] = False
             projected.append(evidence)
+            evidence_count += 1
         return {**result, "results": projected}
 
     async def run_function_calls(self, function_calls):
@@ -591,7 +680,61 @@ class NativeLLM(OpenAILLMService):
             self.epoch += 1
         await super().process_frame(frame, direction)
 
+    def queue_tavily_answer(self, answer, source_id=None):
+        """Schedule one provider-generated answer or a terminal safe abstention."""
+        failure = None
+        if isinstance(answer, str) and answer.strip() and re.fullmatch(r"S\d+", source_id or ""):
+            text = answer.strip()
+            concise = _first_complete_sentence(text)
+            if concise and len(concise.split()) <= 35:
+                answer = f"{concise} [{source_id}]"
+            else:
+                answer = None
+        else:
+            answer = None
+        if answer is None:
+            answer = "I couldn't verify this answer from a retrieved source, so I won't guess."
+            failure = "tavily_answer_unavailable"
+        self.pending_tavily_answer = (self.epoch, answer, failure)
+        return failure is None
+
+    def designate_tavily_quick_research(self):
+        """Route this already-identified user turn directly to Tavily."""
+        self.tavily_quick_research_epoch = self.epoch
+
     async def get_chat_completions(self, context):
+        acceptance = getattr(self, "pending_task_acceptance", None)
+        self.pending_task_acceptance = None
+        if acceptance is not None and acceptance[0] == self.epoch:
+            self.on_event("task_acceptance_answer")
+            return self.observe(
+                self._local_chunks(
+                    "I've started the task in the background. You can keep talking to me."
+                ),
+                self.epoch,
+                time.monotonic(),
+                owner_turn_id=self.turn_number,
+            )
+        pending_tavily = self.pending_tavily_answer
+        if pending_tavily is not None:
+            self.pending_tavily_answer = None
+            epoch, answer, failure = pending_tavily
+            if epoch == self.epoch:
+                self.response_failure_reason = failure
+                started = time.monotonic()
+                self.on_event("route_selected", route="tavily_answer")
+                self.on_event(
+                    "tavily_answer_stream_started",
+                    response_characters=len(answer),
+                    available=failure is None,
+                )
+                return self.observe(
+                    self._local_chunks(answer),
+                    epoch,
+                    started,
+                    owner_turn_id=self.turn_number,
+                    direct_research_answer=True,
+                )
         if self.fast_action is not None and self.fast_action_checked_epoch != self.epoch:
             # One parse attempt per user turn. Tool continuation requests in
             # the same Pipecat turn must never replay an already-run action.
@@ -600,6 +743,7 @@ class NativeLLM(OpenAILLMService):
             started = time.monotonic()
             answer = await self.fast_action(context)
             if answer is not None:
+                self.tavily_quick_research_epoch = None
                 self.on_event("fast_action_answer", response_chars=len(answer))
                 return self.observe(
                     self._local_chunks(answer),
@@ -607,6 +751,83 @@ class NativeLLM(OpenAILLMService):
                     started,
                     owner_turn_id=self.turn_number,
                 )
+        # Experiment opt-in; fast actions retain precedence. Never redirect
+        # task requests, contextual pronouns or multi-source analysis.
+        question = self._latest_user_question(context).strip()
+        if (
+            os.environ.get("ME3_AUTOMATIC_QUICK_RESEARCH") == "1"
+            and self.fast_action_checked_epoch == self.epoch
+            and not self.response_has_tools
+            and self.calls == 0
+            and self.tavily_quick_research is not None
+            and re.match(
+                r"(?i)^(?:(?:please )?(?:look up|search for) )?(?:who won|which movie won|who is|when was)\b",
+                question,
+            )
+            and not re.search(r"(?i)\b(that|it|they|compare|build|create|task|sources)\b", question)
+        ):
+            self.designate_tavily_quick_research()
+        if self.tavily_quick_research_epoch == self.epoch:
+            self.tavily_quick_research_epoch = None
+            if (
+                self.turn_deadline
+                and time.monotonic() >= self.turn_deadline - self.answer_reserve_seconds
+            ):
+                return self._terminal_response("turn_deadline_reached")
+            epoch = self.epoch
+            started = time.monotonic()
+            self.on_event("route_selected", route="tavily_quick_research")
+
+            async def direct_answer_chunks():
+                question = self._latest_user_question(context)
+                answer, source_id = None, None
+                self.on_event(
+                    "tavily_quick_research_started",
+                    question_characters=len(question),
+                )
+                if self.tavily_quick_research is not None:
+                    try:
+                        answer, source_id = await self.tavily_quick_research(question, epoch)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        self.on_event(
+                            "tavily_quick_research_failed",
+                            error_code=getattr(exc, "code", "research_unavailable"),
+                        )
+                if epoch != self.epoch:
+                    return
+                self.queue_tavily_answer(answer, source_id)
+                pending = self.pending_tavily_answer
+                self.pending_tavily_answer = None
+                _, rendered, failure = pending
+                self.response_failure_reason = failure
+                citation_url = None
+                if failure is None and source_id and self.research is not None:
+                    source = self.research.sources.get(source_id, {})
+                    citation_url = source.get("url") if isinstance(source, dict) else None
+                self.on_event(
+                    "tavily_quick_research_finished",
+                    available=failure is None,
+                    response_characters=len(rendered),
+                    source_id=source_id if failure is None else None,
+                    source_url=citation_url,
+                )
+                self.on_event(
+                    "tavily_answer_stream_started",
+                    response_characters=len(rendered),
+                    available=failure is None,
+                )
+                async for chunk in self._local_chunks(rendered):
+                    yield chunk
+
+            return self.observe(
+                direct_answer_chunks(),
+                epoch,
+                started,
+                owner_turn_id=self.turn_number,
+                direct_research_answer=True,
+            )
         if self.retrieval_failures >= MAX_RESEARCH_RETRIEVALS_PER_TURN:
             return self._terminal_response("research_retrieval_failures_exhausted")
         if (
@@ -637,8 +858,8 @@ class NativeLLM(OpenAILLMService):
         self.on_event("llm_request", context_groups_dropped=dropped, request_id=request_id)
         research_question = self._latest_user_question(request_context)
         structured_research = self._uses_structured_research_output()
-        strict_research_support = (
-            structured_research and self._requires_strict_research_support(request_context)
+        strict_research_support = structured_research and self._requires_strict_research_support(
+            request_context
         )
         if self.spec.backend == "external":
             try:
@@ -693,6 +914,7 @@ class NativeLLM(OpenAILLMService):
                         return self._terminal_response("input_token_budget_exhausted")
                     raise
                 self._last_request_started = time.monotonic()
+                self.on_event("llm_provider_request_started", request_id=request_id)
                 try:
                     stream = await self._client.chat.completions.create(**params)
                     self._observe_rate_headers(getattr(stream, "response", None))
@@ -723,7 +945,9 @@ class NativeLLM(OpenAILLMService):
         else:
             stream = self.mock_chunks(context)
         validate_research_answer = bool(
-            self.research_tool_calls and not self.response_failure_reason and not structured_research
+            self.research_tool_calls
+            and not self.response_failure_reason
+            and not structured_research
         )
         observed = self.observe(
             self._bounded_stream(stream),
@@ -821,7 +1045,9 @@ class NativeLLM(OpenAILLMService):
                 if evidence_recovery:
                     self._research_evidence_repair_active = True
                     tools = getattr(request_context.tools, "standard_tools", ())
-                    retrieve_tools = [tool for tool in tools if getattr(tool, "name", None) == "retrieve_source"]
+                    retrieve_tools = [
+                        tool for tool in tools if getattr(tool, "name", None) == "retrieve_source"
+                    ]
                     if not retrieve_tools:
                         for item in held_failure:
                             yield item
@@ -1214,6 +1440,10 @@ class NativeLLM(OpenAILLMService):
         if not isinstance(payload, dict) or set(payload) != {"claims"}:
             return None, "invalid_structured_answer", [], False
         claims = payload.get("claims")
+        # An explicit abstention follows the answer contract. It is terminal,
+        # not a rejected draft that warrants another model or retrieval call.
+        if isinstance(claims, list) and not claims:
+            return None, "research_abstained", [], False
         if not isinstance(claims, list) or not 1 <= len(claims) <= 2:
             return None, "insufficient_verified_evidence", [], False
 
@@ -1278,7 +1508,10 @@ class NativeLLM(OpenAILLMService):
             punctuation = text[-1:] if text[-1:] in ".!?" else ""
             body = text[:-1].rstrip() if punctuation else text
             rendered.append(f"{body} [{source_id}]{punctuation}")
-        return " ".join(rendered), None, sorted(set(used)), False
+        citations = sorted(set(used))
+        if {item["source_id"] for item in self.citation_sources(citations)} != set(citations):
+            return None, "unavailable_citation_url", citations, False
+        return " ".join(rendered), None, citations, False
 
     def _validate_cited_research_prose(self, raw, *, question="", strict_support=False):
         """Accept ordinary prose only when each claim names a retained source.
@@ -1291,7 +1524,9 @@ class NativeLLM(OpenAILLMService):
         """
         if not isinstance(raw, str) or "{" in raw or "}" in raw:
             return None, "invalid_structured_answer", [], False
-        sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+", raw.strip()) if part.strip()]
+        sentences = [
+            part.strip() for part in re.split(r"(?<=[.!?])\s+", raw.strip()) if part.strip()
+        ]
         if not 1 <= len(sentences) <= 2:
             return None, "invalid_structured_answer", [], False
 
@@ -1347,12 +1582,15 @@ class NativeLLM(OpenAILLMService):
             rendered.append(f"{body} [{source_id}]{punctuation}")
             used_sources.append(source_id)
 
+        citations = sorted(set(used_sources))
+        if {item["source_id"] for item in self.citation_sources(citations)} != set(citations):
+            return None, "unavailable_citation_url", citations, False
         self.on_event(
             "llm_cited_prose_accepted",
-            source_ids=sorted(set(used_sources)),
+            source_ids=citations,
             claim_count=len(rendered),
         )
-        return " ".join(rendered), None, sorted(set(used_sources)), False
+        return " ".join(rendered), None, citations, False
 
     def _log_llm_response(self, context):
         """Keep Pipecat's request log useful without dumping user conversation text."""
@@ -1364,17 +1602,50 @@ class NativeLLM(OpenAILLMService):
 
     async def _track_ledger_stream(self, stream, request_id):
         """Finalize only after complete consumption; cancellation stays unknown."""
+        actual_input_tokens = None
+        actual_output_tokens = None
         try:
             async for chunk in stream:
+                usage = getattr(chunk, "usage", None)
+                if usage is not None:
+                    if callable(getattr(usage, "model_dump", None)):
+                        usage = usage.model_dump()
+                    if isinstance(usage, dict):
+                        prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+                        completion_tokens = usage.get(
+                            "completion_tokens", usage.get("output_tokens")
+                        )
+                        actual_input_tokens = (
+                            prompt_tokens
+                            if type(prompt_tokens) is int and 0 <= prompt_tokens <= 2**31 - 1
+                            else None
+                        )
+                        actual_output_tokens = (
+                            completion_tokens
+                            if type(completion_tokens) is int
+                            and 0 <= completion_tokens <= 2**31 - 1
+                            else None
+                        )
                 yield chunk
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             error = self.safe_error(exc)
-            self.budget.finish_request(request_id, "failure", error.code)
+            self.budget.finish_request(
+                request_id,
+                "failure",
+                error.code,
+                input_tokens_actual=actual_input_tokens,
+                output_tokens_actual=actual_output_tokens,
+            )
             raise
         else:
-            self.budget.finish_request(request_id, "success")
+            self.budget.finish_request(
+                request_id,
+                "success",
+                input_tokens_actual=actual_input_tokens,
+                output_tokens_actual=actual_output_tokens,
+            )
 
     @staticmethod
     def _local_chunks(answer):
@@ -1585,6 +1856,7 @@ class NativeLLM(OpenAILLMService):
         strict_research_support=False,
         owner_turn_id=None,
         research_repair_context_id=None,
+        direct_research_answer=False,
     ):
         first = True
         total_chars = 0
@@ -1614,10 +1886,12 @@ class NativeLLM(OpenAILLMService):
             if error_code:
                 fields["error_code"] = error_code
             self.on_event("llm_stream_terminal", **fields)
+
         validate_research_answer = bool(
             self.research_tool_calls
             and not self.response_failure_reason
             and not structured_research
+            and not direct_research_answer
         )
         try:
             async for chunk in stream:
@@ -1646,7 +1920,11 @@ class NativeLLM(OpenAILLMService):
                     is_research_final = (
                         choice.finish_reason == "stop"
                         and not self.response_tool_indices
-                        and (structured_research or validate_research_answer)
+                        and (
+                            structured_research
+                            or validate_research_answer
+                            or direct_research_answer
+                        )
                     )
                     if research_finalized and is_research_final:
                         # Some compatible streaming endpoints emit another
@@ -1704,6 +1982,17 @@ class NativeLLM(OpenAILLMService):
                                 text = ""
                         choice.delta.content = text
                     if (
+                        direct_research_answer
+                        and choice.finish_reason == "stop"
+                        and not self.response_tool_indices
+                    ):
+                        research_finalized = True
+                        self.on_event(
+                            "tavily_answer_stream_finished",
+                            completed=True,
+                            citation_count=1,
+                        )
+                    if (
                         structured_research
                         and choice.finish_reason == "stop"
                         and not self.response_tool_indices
@@ -1724,6 +2013,9 @@ class NativeLLM(OpenAILLMService):
                             invalid_citation=invalid_citation,
                             retained_source_ids=sorted(self.source_ids()),
                             evidence_valid=failure is None,
+                            citation_sources=(
+                                self.citation_sources(citations) if failure is None else []
+                            ),
                         )
                         if failure:
                             self.response_failure_reason = failure
@@ -1748,19 +2040,29 @@ class NativeLLM(OpenAILLMService):
                         and not self.response_tool_indices
                     ):
                         research_finalized = True
-                        self.on_event(
-                            "llm_citation_check",
-                            response_characters=sum(map(len, research_text)) + len(text or ""),
-                            citation_ids=sorted(research_citations),
-                            invalid_citation=invalid_research_citation,
-                            retained_source_ids=sorted(self.source_ids()),
-                        )
                         if invalid_research_citation:
                             self.response_failure_reason = "unsupported_source"
                         elif not self.source_ids():
                             self.response_failure_reason = "insufficient_verified_evidence"
                         elif not research_citations:
                             self.response_failure_reason = "missing_research_citation"
+                        elif {
+                            item["source_id"] for item in self.citation_sources(research_citations)
+                        } != research_citations:
+                            self.response_failure_reason = "unavailable_citation_url"
+                        evidence_valid = self.response_failure_reason is None
+                        citation_sources = (
+                            self.citation_sources(research_citations) if evidence_valid else []
+                        )
+                        self.on_event(
+                            "llm_citation_check",
+                            response_characters=sum(map(len, research_text)) + len(text or ""),
+                            citation_ids=sorted(research_citations),
+                            invalid_citation=invalid_research_citation,
+                            retained_source_ids=sorted(self.source_ids()),
+                            evidence_valid=evidence_valid,
+                            citation_sources=citation_sources,
+                        )
                         if self.response_failure_reason:
                             choice.delta.content = "I couldn't verify this answer from a retrieved source, so I won't guess."
                             self.on_event(
@@ -1787,6 +2089,9 @@ class NativeLLM(OpenAILLMService):
                 yield chunk
             if self.response_tool_indices - named_indices:
                 raise ProviderError("tool name missing", code="invalid_tool_arguments")
+            if epoch != self.epoch:
+                terminal("superseded", "turn_epoch_changed")
+                return
             if first or not completed:
                 raise ProviderError(
                     "empty or incomplete reasoning stream", code="provider_incomplete_response"
@@ -1796,10 +2101,9 @@ class NativeLLM(OpenAILLMService):
             if research_repair_context_id is not None:
                 repair_state = self._research_repair_tool_rounds.get(research_repair_context_id)
                 if repair_state is not None and self.response_tool_indices:
-                    if (
-                        len(self.response_tool_indices) != 1
-                        or response_tool_names != {"retrieve_source"}
-                    ):
+                    if len(self.response_tool_indices) != 1 or response_tool_names != {
+                        "retrieve_source"
+                    }:
                         raise ProviderError(
                             "research evidence repair permits one source retrieval",
                             code="tool_budget_exhausted",

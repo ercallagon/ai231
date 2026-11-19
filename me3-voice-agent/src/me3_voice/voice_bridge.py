@@ -1312,6 +1312,11 @@ def main():
                 "live research is enabled but its key is absent from --research-secrets-file"
             )
         credentials.update(research_credentials)
+    # Optional private GitHub writer credential is provisioned separately so
+    # adding it never rewrites the existing provider-credentials file.
+    github_secret_path = Path(__file__).resolve().parents[2] / "var/cache/github-write-token.env"
+    if github_secret_path.exists():
+        credentials.update(load_secrets(github_secret_path, {"ME3_GITHUB_WRITE_TOKEN"}))
     if args.runtime_options.research.allow_live and not (
         credentials.get("ME3_RESEARCH_TAVILY_API_KEY")
         or os.environ.get("ME3_RESEARCH_TAVILY_API_KEY")

@@ -115,7 +115,11 @@ context.modules = [
 def build_wake(args):
     from .wake import OpenWakeWord, SherpaWakeWord, WakeGate
 
-    wake_paths = [args.wake_model, args.mel_model, args.embedding_model]
+    wake_paths = [
+        getattr(args, "wake_model", None),
+        getattr(args, "mel_model", None),
+        getattr(args, "embedding_model", None),
+    ]
     if any(wake_paths) and not all(wake_paths):
         raise ValueError("supply all three explicit wake/mel/embedding model paths")
     kws_assets = getattr(args, "kws_assets", None)

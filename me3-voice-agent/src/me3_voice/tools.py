@@ -190,11 +190,15 @@ class MockTaskExecutor:
         if call.name in {"run_device_action", "run_mock_action"} and set(call.arguments) in (
             {"action"},
             {"action", "value"},
+            {"action", "value", "message"},
         ):
             action, value = call.arguments["action"], call.arguments.get("value")
             if not isinstance(action, str) or value is not None and not isinstance(value, str):
                 raise ValueError("invalid device action arguments")
-            return await self.actions.run(operation, action, value)
+            message = call.arguments.get("message")
+            if "message" in call.arguments and (action != "message_demo" or not isinstance(message, str)):
+                raise ValueError("custom text is only valid for a message to a resolved contact")
+            return await self.actions.run(operation, action, value, message)
         raise ValueError("unsupported task or arguments")
 
     def cancel_pending(self):

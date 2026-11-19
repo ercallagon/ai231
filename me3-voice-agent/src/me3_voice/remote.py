@@ -77,6 +77,20 @@ def qwen_tts_instructions(spec):
     return configured + "\n\nRequired Swift delivery policy: " + QWEN_TTS_STYLE_INSTRUCTIONS
 
 
+OPENROUTER_TEXT_PRICES_USD_PER_MILLION = {
+    "anthropic/claude-haiku-5.5": (0.10, 0.50),
+    "openai/gpt-oss-120b": (0.05, 0.25),
+}
+
+
+def estimated_provider_cost_usd(model, input_tokens, output_tokens):
+    """Conservative list-price estimate; actual provider charges may differ."""
+    rates = OPENROUTER_TEXT_PRICES_USD_PER_MILLION.get(model)
+    if rates is None or type(input_tokens) is not int or type(output_tokens) is not int:
+        return None
+    return (input_tokens * rates[0] + output_tokens * rates[1]) / 1_000_000
+
+
 class LiveTransport:
     def __init__(self, spec, credentials=None):
         self.spec, self.requests, self.client = spec, 0, None
@@ -115,11 +129,16 @@ class LiveTransport:
             or input_tokens < 1
             or type(input_token_limit) is not int
             or input_token_limit < 1
-            or type(input_tokens_total_limit) is not int
-            or input_tokens_total_limit < input_token_limit
+            or (
+                input_tokens_total_limit is not None
+                and (
+                    type(input_tokens_total_limit) is not int
+                    or input_tokens_total_limit < input_token_limit
+                )
+            )
         ):
             raise ConfigurationError(
-                "live chat dispatch requires an estimated request size and configured per-request plus aggregate input-token ceilings"
+                "live chat dispatch requires an estimated request size and a per-request context ceiling"
             )
         if not is_chat and any(
             value is not None
@@ -132,6 +151,10 @@ class LiveTransport:
         identity = uuid.uuid4().hex
         provider = urlsplit(self.spec.endpoint).hostname or "unknown"
         with sqlite3.connect(ledger, timeout=10) as db:
+            # Serialize schema migration and budget reservation together. A
+            # concurrent first dispatch must re-read the columns only after
+            # the prior initializer has committed its migration.
+            db.execute("BEGIN IMMEDIATE")
             db.execute(
                 "CREATE TABLE IF NOT EXISTS provider_requests (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, protocol TEXT NOT NULL, status TEXT NOT NULL, error_code TEXT, created REAL NOT NULL, updated REAL NOT NULL)"
             )
@@ -164,7 +187,14 @@ class LiveTransport:
                 db.execute(
                     "ALTER TABLE provider_requests ADD COLUMN input_tokens_reserved INTEGER NOT NULL DEFAULT 0"
                 )
-            db.execute("BEGIN IMMEDIATE")
+            if "input_tokens_actual" not in columns:
+                db.execute(
+                    "ALTER TABLE provider_requests ADD COLUMN input_tokens_actual INTEGER"
+                )
+            if "output_tokens_actual" not in columns:
+                db.execute(
+                    "ALTER TABLE provider_requests ADD COLUMN output_tokens_actual INTEGER"
+                )
             count, reserved_input_tokens = db.execute(
                 "SELECT COUNT(*), COALESCE(SUM(input_tokens_reserved),0) FROM provider_requests WHERE run_id=? AND provider=? AND model=? AND protocol=?",
                 (run_id, provider, self.spec.model, self.spec.protocol),
@@ -207,6 +237,7 @@ class LiveTransport:
                         frozen_request_limit != -1
                         and requested_request_limit > frozen_request_limit
                     )
+                    or (frozen_input_limit != 0 and requested_input_limit == 0)
                     or requested_input_request_limit > frozen_input_request_limit
                     or requested_input_limit > frozen_input_limit
                 ):
@@ -261,7 +292,11 @@ class LiveTransport:
                     "durable provider request allowance exhausted; no request was sent",
                     code="request_limit_reached",
                 )
-            if is_chat and reserved_input_tokens + input_tokens > effective_input_limit:
+            if (
+                is_chat
+                and effective_input_limit > 0
+                and reserved_input_tokens + input_tokens > effective_input_limit
+            ):
                 db.commit()
                 raise ProviderError(
                     "conservative aggregate input-token allowance exhausted; no request was sent",
@@ -289,7 +324,9 @@ class LiveTransport:
         self.requests += 1
         return key, identity
 
-    def finish_request(self, identity, outcome, error_code=None):
+    def finish_request(
+        self, identity, outcome, error_code=None, *, input_tokens_actual=None, output_tokens_actual=None
+    ):
         if outcome not in {"success", "failure", "unknown"}:
             outcome, error_code = "unknown", "invalid_outcome"
         if error_code and not re.fullmatch(r"[a-z0-9_]{1,48}", error_code):
@@ -297,8 +334,15 @@ class LiveTransport:
         ledger = Path(os.environ.get("ME3_REQUEST_LEDGER", "var/cache/provider-requests.sqlite"))
         with sqlite3.connect(ledger, timeout=10) as db:
             db.execute(
-                "UPDATE provider_requests SET status=?, error_code=?, updated=? WHERE id=?",
-                (outcome, error_code, time.time(), identity),
+                "UPDATE provider_requests SET status=?, error_code=?, updated=?, input_tokens_actual=?, output_tokens_actual=? WHERE id=?",
+                (
+                    outcome,
+                    error_code,
+                    time.time(),
+                    input_tokens_actual if type(input_tokens_actual) is int and 0 <= input_tokens_actual <= 2**31 - 1 else None,
+                    output_tokens_actual if type(output_tokens_actual) is int and 0 <= output_tokens_actual <= 2**31 - 1 else None,
+                    identity,
+                ),
             )
 
     @staticmethod
@@ -399,8 +443,15 @@ class LiveTransport:
             self.spec.endpoint + "?" + urlencode(params),
             headers={"Authorization": "Token " + key},
             max_msg_size=131072,
-            heartbeat=10,
-            timeout=aiohttp.ClientWSTimeout(ws_receive=self.spec.timeout_seconds, ws_close=1),
+            # Speak is consumed only during synthesis. aiohttp heartbeat
+            # requires receive() to process Pong, so it cannot police idle
+            # gaps between completed Speak/Flush operations.
+            heartbeat=None if role == "tts" else 10,
+            # Socket.receive owns the active-operation deadline. A transport
+            # read timer must not expire between completed Speak operations.
+            timeout=aiohttp.ClientWSTimeout(
+                ws_receive=None if role == "tts" else self.spec.timeout_seconds, ws_close=1
+            ),
         )
         try:
             async with asyncio.timeout(self.spec.timeout_seconds):
@@ -549,6 +600,7 @@ class LiveTransport:
         )
         headers_received = False
         first_event_received = False
+        actual_usage = None
         outcome, error_code = "unknown", None
         try:
             self.on_event(f"{event_prefix}_request_submission_started")
@@ -603,6 +655,17 @@ class LiveTransport:
                                 self.on_event(f"{event_prefix}_first_sse_event")
                                 first_event = False
                                 first_event_received = True
+                            usage = event.get("usage")
+                            if isinstance(usage, dict):
+                                prompt_tokens = usage.get("prompt_tokens")
+                                completion_tokens = usage.get("completion_tokens")
+                                if (
+                                    type(prompt_tokens) is int
+                                    and 0 <= prompt_tokens <= 2**31 - 1
+                                    and type(completion_tokens) is int
+                                    and 0 <= completion_tokens <= 2**31 - 1
+                                ):
+                                    actual_usage = (prompt_tokens, completion_tokens)
                             yield event
                             if terminal_type and event.get("type") == terminal_type:
                                 outcome = "success"
@@ -653,7 +716,13 @@ class LiveTransport:
                 error_stage=error_stage,
             ) from None
         finally:
-            self.finish_request(request_id, outcome, error_code)
+            self.finish_request(
+                request_id,
+                outcome,
+                error_code,
+                input_tokens_actual=actual_usage[0] if actual_usage else None,
+                output_tokens_actual=actual_usage[1] if actual_usage else None,
+            )
 
     async def aclose(self):
         if self.client:
@@ -745,6 +814,29 @@ class LiveTransport:
             self.finish_request(request_id, outcome, error_code)
 
 
+def request_monitor_stop_reason(requests, *, now, owner_active, unresolved_after_seconds=180):
+    """Classify durable unknowns without treating an active reservation as final.
+
+    Dispatch first writes ``dispatched_unknown`` with identical timestamps.
+    Completion changes its status; a crashed owner or expired reservation cannot
+    safely be retried even though that initial row was never finalized.
+    """
+    for row in requests:
+        status = row.get("status")
+        if status == "unknown":
+            return "finalized_unknown_request"
+        if status != "dispatched_unknown":
+            continue
+        created, updated = row.get("created_at"), row.get("updated_at")
+        if isinstance(created, (int, float)) and isinstance(updated, (int, float)) and updated > created:
+            return "finalized_dispatched_unknown_request"
+        if not owner_active:
+            return "unresolved_dispatched_request_owner_gone"
+        if isinstance(created, (int, float)) and now - created >= unresolved_after_seconds:
+            return "unresolved_dispatched_request_timeout"
+    return None
+
+
 def request_ledger_summary(run_id, ledger_path=None):
     """Return sanitized request rows for one approved replay/run identity."""
     if not isinstance(run_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,80}", run_id):
@@ -771,8 +863,15 @@ def request_ledger_summary(run_id, ledger_path=None):
             }
             if not required <= columns:
                 return {"run_id": run_id, "requests": [], "counts": {}}
+            has_reservation = "input_tokens_reserved" in columns
+            has_actual_input = "input_tokens_actual" in columns
+            has_actual_output = "output_tokens_actual" in columns
+            reservation_column = "input_tokens_reserved" if has_reservation else "0"
+            actual_input_column = "input_tokens_actual" if has_actual_input else "NULL"
+            actual_output_column = "output_tokens_actual" if has_actual_output else "NULL"
             rows = db.execute(
-                "SELECT id,provider,model,protocol,status,error_code,created,updated "
+                "SELECT id,provider,model,protocol,status,error_code,created,updated,"
+                f"{reservation_column},{actual_input_column},{actual_output_column} "
                 "FROM provider_requests WHERE run_id=? ORDER BY created,id",
                 (run_id,),
             ).fetchall()
@@ -781,7 +880,22 @@ def request_ledger_summary(run_id, ledger_path=None):
 
     requests = []
     counts = {}
-    for identity, provider, model, protocol, status, error_code, created, updated in rows:
+    reserved_values = []
+    actual_input_values = []
+    actual_output_values = []
+    for (
+        identity,
+        provider,
+        model,
+        protocol,
+        status,
+        error_code,
+        created,
+        updated,
+        input_reserved,
+        input_actual,
+        output_actual,
+    ) in rows:
         status = (
             status
             if status in {"dispatched_unknown", "success", "failure", "unknown"}
@@ -809,11 +923,41 @@ def request_ledger_summary(run_id, ledger_path=None):
             "error_code": error_code,
             "created_at": created if isinstance(created, (int, float)) else None,
             "updated_at": updated if isinstance(updated, (int, float)) else None,
+            "estimated_input_tokens_reserved": (
+                input_reserved
+                if type(input_reserved) is int and 0 <= input_reserved <= 2**31 - 1
+                else None
+            ),
+            "actual_input_tokens": (
+                input_actual
+                if type(input_actual) is int and 0 <= input_actual <= 2**31 - 1
+                else None
+            ),
+            "actual_output_tokens": (
+                output_actual
+                if type(output_actual) is int and 0 <= output_actual <= 2**31 - 1
+                else None
+            ),
         }
         requests.append(row)
+        if row["estimated_input_tokens_reserved"] is not None:
+            reserved_values.append(row["estimated_input_tokens_reserved"])
+        if row["actual_input_tokens"] is not None:
+            actual_input_values.append(row["actual_input_tokens"])
+        if row["actual_output_tokens"] is not None:
+            actual_output_values.append(row["actual_output_tokens"])
         key = f"{row['provider']}|{row['model']}|{row['protocol']}"
         counts.setdefault(key, {})[status] = counts.setdefault(key, {}).get(status, 0) + 1
-    return {"run_id": run_id, "requests": requests, "counts": counts}
+    usage = {
+        "estimated_input_tokens_reserved": sum(reserved_values),
+        "actual_input_tokens": sum(actual_input_values) if actual_input_values else None,
+        "actual_output_tokens": sum(actual_output_values) if actual_output_values else None,
+        "requests_with_actual_usage": sum(
+            row["actual_input_tokens"] is not None or row["actual_output_tokens"] is not None
+            for row in requests
+        ),
+    }
+    return {"run_id": run_id, "requests": requests, "counts": counts, "usage": usage}
 
 
 class FileTranscriptionASR:
@@ -1579,9 +1723,9 @@ class DeepgramASRStream:
 
 
 class DeepgramTTS:
-    # Keep one Aura socket warm for the short gap between sentences/follow-ups.
+    # Keep the conversation's one Aura socket warm across normal user pauses.
     # Longer idle periods release the provider connection/concurrency slot.
-    IDLE_CLOSE_SECONDS = 15.0
+    IDLE_CLOSE_SECONDS = 300.0
 
     def __init__(self, spec, transport=None, *, mcp_call_timeout=None):
         self.spec, self.transport = spec, transport or LiveTransport(spec)
@@ -1595,12 +1739,12 @@ class DeepgramTTS:
         self._idle_close_task = None
         self._connection_generation = 0
         self._last_flushed_at = None
+        self._connection_count = 0
 
     def _reuse_idle_seconds(self):
-        # The WebSocket receive deadline is per read. A provider may also close
-        # an idle Speak socket without a read in progress. Release it before
-        # that deadline instead of sending the next turn to a stale peer.
-        return min(self.IDLE_CLOSE_SECONDS, max(0.1, self.spec.timeout_seconds * 0.8))
+        # Idle retention is separate from the active request/read deadline.
+        # Cover the 20-second conversation window with a small margin.
+        return self.IDLE_CLOSE_SECONDS
 
     def diagnostics(self):
         """Return timing/count metadata only; never expose text, headers or PCM."""
@@ -1617,6 +1761,7 @@ class DeepgramTTS:
             "provider_pcm_packets": 0,
             "provider_pcm_bytes": 0,
             "provider_receive_wait_seconds": 0.0,
+            "provider_max_receive_wait_seconds": 0.0,
             "consumer_pause_seconds": 0.0,
         }
         self._last_diagnostics = metrics
@@ -1655,6 +1800,7 @@ class DeepgramTTS:
                         metrics["connection_setup_seconds"] = (
                             metrics["connection_ready_monotonic"] - connection_started
                         )
+                        self._connection_count += 1
                         metrics["connection_trace"] = self._connection_trace()
                     else:
                         metrics["connection_reused"] = True
@@ -1663,6 +1809,9 @@ class DeepgramTTS:
                             self.transport.last_websocket_timing.get("connection_ready_monotonic")
                         )
                     connection = self._connection
+                    metrics["connection_count"] = self._connection_count
+                    metrics["reconnect_count"] = max(0, self._connection_count - 1)
+                    metrics["idle_retention_seconds"] = self._reuse_idle_seconds()
                     peer = connection.socket
                     peer.begin_operation()
                     # A provider receive timeout must fire before the server's
@@ -1681,8 +1830,10 @@ class DeepgramTTS:
                         try:
                             value = await peer.receive()
                         finally:
-                            metrics["provider_receive_wait_seconds"] += (
-                                time.monotonic() - receive_started
+                            waited = time.monotonic() - receive_started
+                            metrics["provider_receive_wait_seconds"] += waited
+                            metrics["provider_max_receive_wait_seconds"] = max(
+                                metrics["provider_max_receive_wait_seconds"], waited
                             )
                         if isinstance(value, bytes):
                             metrics["provider_pcm_packets"] += 1

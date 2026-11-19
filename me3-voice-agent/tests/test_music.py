@@ -474,6 +474,29 @@ async def test_available_receiver_is_targeted_without_manual_song_or_transfer(
     await music.close()
 
 
+async def test_soloist_device_id_is_rediscovered_by_configured_name():
+    discovered_ids = iter(("soloist-before-restart", "soloist-after-restart"))
+
+    async def peer(method, path, **kwargs):
+        assert (method, path) == ("GET", "/me/player/devices")
+        return {
+            "devices": [
+                {
+                    "id": next(discovered_ids),
+                    "name": "Swift Soloist",
+                    "is_active": False,
+                    "is_restricted": False,
+                },
+                player("some-other-active-player", active=True),
+            ]
+        }
+
+    music = MusicController(token="dummy", device_name="Swift Soloist", request=peer)
+    assert await music.playback_target() == "soloist-before-restart"
+    assert await music.playback_target() == "soloist-after-restart"
+    await music.close()
+
+
 @pytest.mark.parametrize(
     "rows, configured, code",
     [

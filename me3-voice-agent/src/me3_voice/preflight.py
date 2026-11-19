@@ -67,8 +67,9 @@ def inventory(args):
             )
             required = [
                 "communications.phone_address",
-                "communications.call_number",
-                "communications.message_number",
+                "communications.contacts[].name",
+                "communications.contacts[].aliases",
+                "communications.contacts[].phone_number",
             ]
         elif target == "pi" and not is_pi:
             state = "temporarily unavailable"
@@ -148,8 +149,7 @@ def inventory(args):
                 "original_me2": "selected calling/messaging service backends; stub handlers are not the full implementation",
                 "required_inputs": [
                     "communications.phone_address",
-                    "communications.call_number",
-                    "communications.message_number",
+                    "communications.contacts[].name/aliases/phone_number",
                     "paired phone permissions; user D-Bus services",
                 ],
             },

@@ -7,19 +7,51 @@ contacts a provider. Engagement/UI/task migration belongs to later phases.
 
 from dataclasses import dataclass
 
+from pipecat.frames.frames import InterimTranscriptionFrame, TranscriptionFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.types import ProcessFrameResult
+from pipecat.turns.user_start.base_user_turn_start_strategy import BaseUserTurnStartStrategy
 from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import (
     SpeechTimeoutUserTurnStopStrategy,
 )
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
 from .native_speech import McpSTTService, McpTTSService
+
+
+class ASRConfirmedUserTurnStartStrategy(BaseUserTurnStartStrategy):
+    """Require recognized text before superseding the current response.
+
+    Interruptions are disabled here because Pipecat broadcasts an interruption
+    in both directions, which would abort the ASR stream carrying this turn.
+    NativeApplication cancels the old assistant branch after this event.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.start_evidence = None
+
+    async def process_frame(self, frame):
+        if isinstance(frame, InterimTranscriptionFrame):
+            if not frame.text.strip():
+                return ProcessFrameResult.CONTINUE
+            self.start_evidence = "asr_interim"
+            await self.trigger_user_turn_started(enable_interruptions=False)
+            return ProcessFrameResult.STOP
+        if isinstance(frame, TranscriptionFrame):
+            if not frame.text.strip():
+                return ProcessFrameResult.CONTINUE
+            # A final-only ASR provider reaches the aggregator after the text
+            # was appended. Do not reset the aggregator or abort its ASR stream.
+            self.start_evidence = "asr_final"
+            await self.trigger_user_turn_started(enable_interruptions=False)
+            return ProcessFrameResult.STOP
+        return ProcessFrameResult.CONTINUE
 
 
 @dataclass(frozen=True)
@@ -55,7 +87,7 @@ def make_native_pipeline(
             user_idle_timeout=user_idle_seconds,
             empty_user_turn=None,
             user_turn_strategies=UserTurnStrategies(
-                start=[VADUserTurnStartStrategy()],
+                start=[ASRConfirmedUserTurnStartStrategy()],
                 stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=silence_seconds)],
             ),
         ),

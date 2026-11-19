@@ -1,0 +1,34 @@
+{
+  "asr": {
+    "backend": "external",
+    "protocol": "deepgram-listen-v1",
+    "endpoint": "wss://api.deepgram.com/v1/listen",
+    "auth_env": "ME3_DEEPGRAM_API_KEY",
+    "model": "nova-3",
+    "allow_live": true,
+    "request_limit": null,
+    "timeout_seconds": 10
+  },
+  "llm": {
+    "backend": "external",
+    "protocol": "chat-completions-v1",
+    "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+    "auth_env": "ME3_OPENROUTER_API_KEY",
+    "model": "openai/gpt-oss-120b",
+    "allow_live": true,
+    "request_limit": null,
+    "max_input_tokens": 65536,
+    "max_input_tokens_total": null,
+    "timeout_seconds": 30
+  },
+  "tts": {
+    "backend": "external",
+    "protocol": "deepgram-speak-v1",
+    "endpoint": "wss://api.deepgram.com/v1/speak",
+    "auth_env": "ME3_DEEPGRAM_API_KEY",
+    "model": "aura-2-thalia-en",
+    "allow_live": true,
+    "request_limit": null,
+    "timeout_seconds": 30
+  }
+}

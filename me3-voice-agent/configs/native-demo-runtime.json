@@ -1,0 +1,17 @@
+{
+  "engine": "native",
+  "silence_seconds": 0,
+  "research": {
+    "allow_live": true,
+    "request_limit": null,
+    "answer_mode": "tavily"
+  },
+  "max_model_calls_per_turn": 7,
+  "max_tool_calls_per_turn": 8,
+  "max_repeated_tool_calls": 2,
+  "task_model": "anthropic/claude-haiku-5.5",
+  "task_request_limit": null,
+  "task_input_tokens_total": null,
+  "task_max_output_tokens": 8192,
+  "cost_alert_usd": 0.5
+}

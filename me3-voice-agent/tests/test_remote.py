@@ -21,6 +21,7 @@ from me3_voice.remote import (
     LiveTransport,
     ProviderError,
     request_ledger_summary,
+    request_monitor_stop_reason,
 )
 from me3_voice.providers import MockLLM, MockTTS
 from me3_voice.playback import MemorySink
@@ -162,6 +163,51 @@ def test_unknown_outcome_keeps_aggregate_input_tokens_consumed_after_restart(tmp
         assert db.execute(
             "SELECT status,input_tokens_reserved FROM provider_requests WHERE id=?", (request_id,)
         ).fetchone() == ("dispatched_unknown", 300)
+
+
+def test_provider_managed_run_records_unbounded_requests_and_keeps_per_request_context(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "provider-managed.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
+    unlimited = replace(
+        spec("llm"),
+        allow_live=True,
+        request_limit=None,
+        max_input_tokens=1000,
+        max_input_tokens_total=None,
+    )
+    transport = LiveTransport(unlimited, {"ME3_TEST_ONLY_KEY": "offline-key"})
+    for _ in range(4):
+        _, request_id = transport.authorize(
+            input_tokens=900,
+            input_token_limit=1000,
+            input_tokens_total_limit=None,
+        )
+        transport.finish_request(request_id, "success", input_tokens_actual=900, output_tokens_actual=1)
+    with sqlite3.connect(path) as db:
+        cap = db.execute(
+            "SELECT request_limit,input_tokens_per_request_limit,input_tokens_limit "
+            "FROM provider_campaign_caps"
+        ).fetchone()
+        requests = db.execute(
+            "SELECT COUNT(*),SUM(input_tokens_reserved) FROM provider_requests"
+        ).fetchone()
+    assert cap == (-1, 1000, 0)
+    assert requests == (4, 3600)
+
+
+def test_unbounded_tavily_usage_is_persisted_without_an_application_cap(tmp_path, monkeypatch):
+    from me3_voice.research import ResearchClient, ResearchOptions
+
+    ledger = tmp_path / "research.sqlite"
+    monkeypatch.setenv("ME3_RESEARCH_LEDGER", str(ledger))
+    client = ResearchClient(ResearchOptions(allow_live=True, request_limit=None))
+    for _ in range(3):
+        client.authorize()
+    with sqlite3.connect(ledger) as db:
+        assert db.execute("SELECT used,cap FROM research_campaign").fetchone() == (3, -1)
+    assert client.usage_count() == 3
 
 
 def _reserve_result(transport):
@@ -1077,6 +1123,54 @@ async def test_speech_client_transport_error_preserves_only_exception_class_chai
     assert "private" not in str(caught.value)
 
 
+@pytest.mark.parametrize("outcome", ["success", "failure"])
+def test_request_monitor_waits_for_in_flight_then_observes_final_outcome(
+    tmp_path, monkeypatch, outcome
+):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "monitor-test-01")
+    transport = _ledger_transport(path)
+    _, request_id = authorize_chat(transport)
+    active = request_ledger_summary("monitor-test-01", path)["requests"]
+    assert active[0]["status"] == "dispatched_unknown"
+    assert active[0]["created_at"] == active[0]["updated_at"]
+    assert request_monitor_stop_reason(
+        active, now=active[0]["created_at"] + 120, owner_active=True
+    ) is None
+    transport.finish_request(request_id, outcome, "provider_timeout" if outcome == "failure" else None)
+    finished = request_ledger_summary("monitor-test-01", path)["requests"]
+    assert finished[0]["status"] == outcome
+    assert request_monitor_stop_reason(finished, now=time.time(), owner_active=True) is None
+
+
+def test_request_monitor_stops_on_finalized_unknown(tmp_path, monkeypatch):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "monitor-test-02")
+    transport = _ledger_transport(path)
+    _, request_id = authorize_chat(transport)
+    transport.finish_request(request_id, "unknown", "task_request_interrupted")
+    rows = request_ledger_summary("monitor-test-02", path)["requests"]
+    assert request_monitor_stop_reason(rows, now=time.time(), owner_active=True) == "finalized_unknown_request"
+
+
+def test_request_monitor_stops_unresolved_dispatch_after_timeout_or_owner_loss(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "requests.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "monitor-test-03")
+    transport = _ledger_transport(path)
+    authorize_chat(transport)
+    rows = request_ledger_summary("monitor-test-03", path)["requests"]
+    created = rows[0]["created_at"]
+    assert request_monitor_stop_reason(rows, now=created + 179, owner_active=True) is None
+    assert request_monitor_stop_reason(rows, now=created + 180, owner_active=True) == "unresolved_dispatched_request_timeout"
+    assert request_monitor_stop_reason(rows, now=created + 1, owner_active=False) == "unresolved_dispatched_request_owner_gone"
+    with sqlite3.connect(path) as db:
+        db.execute("update provider_requests set updated=created+1 where run_id='monitor-test-03'")
+    finalized = request_ledger_summary("monitor-test-03", path)["requests"]
+    assert request_monitor_stop_reason(finalized, now=created + 2, owner_active=True) == "finalized_dispatched_unknown_request"
+
+
 def test_request_ledger_summary_is_run_scoped_and_sanitized(tmp_path, monkeypatch):
     path = tmp_path / "requests.sqlite"
     monkeypatch.setenv("ME3_REQUEST_LEDGER", str(path))
@@ -1084,7 +1178,12 @@ def test_request_ledger_summary_is_run_scoped_and_sanitized(tmp_path, monkeypatc
     _, request_id = authorize_chat(transport)
     transport.finish_request(request_id, "failure", "provider_timeout")
     _, other_id = authorize_chat(transport)
-    transport.finish_request(other_id, "success")
+    transport.finish_request(
+        other_id,
+        "success",
+        input_tokens_actual=20,
+        output_tokens_actual=5,
+    )
     with sqlite3.connect(path) as db:
         db.execute(
             "INSERT INTO provider_requests "
@@ -1109,6 +1208,18 @@ def test_request_ledger_summary_is_run_scoped_and_sanitized(tmp_path, monkeypatc
     }
     assert [request["request_id"] for request in summary["requests"]] == [request_id, other_id]
     assert {request["status"] for request in summary["requests"]} == {"failure", "success"}
+    assert summary["requests"][0]["estimated_input_tokens_reserved"] > 0
+    assert summary["requests"][0]["actual_input_tokens"] is None
+    assert summary["requests"][1]["actual_input_tokens"] == 20
+    assert summary["requests"][1]["actual_output_tokens"] == 5
+    assert summary["usage"] == {
+        "estimated_input_tokens_reserved": sum(
+            request["estimated_input_tokens_reserved"] for request in summary["requests"]
+        ),
+        "actual_input_tokens": 20,
+        "actual_output_tokens": 5,
+        "requests_with_actual_usage": 1,
+    }
     assert request_ledger_summary("another-run-0001", path)["requests"][0]["model"] == "other-model"
     invalid = request_ledger_summary("api_key=do-not-echo", path)
     assert invalid["run_id"] is None and "do-not-echo" not in repr(invalid)
@@ -2231,6 +2342,8 @@ async def test_native_aura_cycles_reuse_one_real_local_websocket_without_mixing_
         try:
             first = b"".join([chunk async for chunk in provider.synthesize("First answer.")])
             first_diagnostics = provider.diagnostics()
+            # Simulate a normal conversational pause without waiting 31 seconds.
+            provider._last_flushed_at -= 31.0
             second = b"".join([chunk async for chunk in provider.synthesize("Follow-up answer.")])
             second_diagnostics = provider.diagnostics()
             assert first == (b"\1\0" * 80) + b"\0\0"
@@ -2257,7 +2370,7 @@ async def test_native_aura_cycles_reuse_one_real_local_websocket_without_mixing_
 
 
 async def test_aura_releases_idle_socket_before_receive_deadline(monkeypatch):
-    """A follow-up after the provider read deadline opens a fresh socket."""
+    """A confirmed provider-closed idle socket is replaced before a follow-up."""
     from dataclasses import replace
     from aiohttp import WSMsgType, web
     from aiohttp.test_utils import TestServer
@@ -2291,7 +2404,7 @@ async def test_aura_releases_idle_socket_before_receive_deadline(monkeypatch):
         )
         try:
             assert b"".join([c async for c in provider.synthesize("First.")]) == b"\1\0" * 80
-            await asyncio.sleep(0.27)
+            await provider._connection.socket.peer.close()
             assert b"".join([c async for c in provider.synthesize("Second.")]) == b"\1\0" * 80
             assert len(connections) == 2
             assert provider.diagnostics()["connection_reused"] is False

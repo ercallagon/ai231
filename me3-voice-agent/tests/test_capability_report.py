@@ -53,8 +53,7 @@ def test_profile_report_projects_registered_surfaces_and_redacts_credentials(mon
 
     llm_tool = pipecat["get_runtime_time"]
     llm_credential = next(
-        item for item in llm_tool["credential_requirements"]
-        if item["name"] == "ME3_GROQ_API_KEY"
+        item for item in llm_tool["credential_requirements"] if item["name"] == "ME3_GROQ_API_KEY"
     )
     assert llm_credential["presence"] == "present_unvalidated"
     assert llm_tool["configured"] is True
@@ -96,3 +95,25 @@ def test_export_writes_deck_ready_json_and_markdown_exclusively():
     for path in (json_path, markdown_path):
         path.unlink()
     directory.rmdir()
+
+
+def test_provider_managed_tavily_is_advertised_without_an_application_cap():
+    backends = load_backends(Path("configs/native-demo-backends.json"))
+    options = load_runtime(Path("configs/native-demo-runtime.json"), engine="native")
+    report = build_capability_report(
+        backends=backends,
+        options=options,
+        credentials={
+            "ME3_OPENROUTER_API_KEY": "offline-fixture",
+            "ME3_RESEARCH_TAVILY_API_KEY": "offline-fixture",
+        },
+        wake_configured=False,
+    )
+    assert report["profile"]["research_request_limit"] is None
+    assert report["profile"]["research_requests_remaining"] is None
+    web_search = next(row for row in report["capabilities"] if row["name"] == "web_search")
+    assert options.research.request_limit is None
+    assert web_search["registered"] is True
+    assert web_search["advertised"] is True
+    assert web_search["configured"] is True
+    assert "provider/account quota" in web_search["dependencies"]

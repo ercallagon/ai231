@@ -75,9 +75,51 @@ For browser capture, open the forwarded `http://127.0.0.1:8765/` and press Start
 | Onit project tools | Separate pinned installation below plus configured compatible model/key | Omit Onit flags for mock/basic mode. This loses general project generation, not basic startup. |
 | Weather | Network and explicit Open-Meteo location, QC default in prepared profiles | Disabled/unavailable honestly when not configured. Dynamic city lookup supported, ambiguity requires clarification. Service attribution/terms apply. |
 | Music | Own Spotify authorization, Premium, appropriate developer permissions, real browser/Connect receiver | Omit music configuration. A token alone is not a speaker/receiver. Pi receiver setup is external and not automatically installed. |
-| Calls/SMS | Paired compatible phone, telephony/MAP services/permissions and bounded demo recipients | Disabled by default; setup never pairs/dials/sends. Real answered/delivered state requires separate observation. |
+| Calls/SMS | Paired compatible phone, telephony/MAP services/permissions and a private named contact list | Disabled by default; setup never pairs/dials/sends. Real answered/delivered state requires separate observation. |
 | GPIO/display | Verified wiring, libraries, explicit Pi adapter | Explicit mock mode for software-only testing. A requested real target never silently falls back. |
 | Search/GitHub | Optional own Tavily/GitHub tokens plus explicit capability flags | Omit flags; no mandatory account for basic conversation/project tools. HF token alone enables no tool. |
+
+### One-time Spotify/Soloist setup on the Pi
+
+After `bash scripts/setup.sh --pi`, authorize ME3's Spotify Web API control
+client once with `./scripts/setup_spotify_soloist.sh` in an interactive Pi
+terminal. This creates ignored, owner-private `var/cache/music.json` and
+`var/cache/spotify.env`; the launcher loads the config when present. Register
+`http://127.0.0.1:8876/callback` in the Spotify app settings first. This OAuth
+grant and Soloist's daemon API key are separate credentials; do not copy laptop
+tokens or put the Soloist key in the provider credential file.
+
+To install and run the **official Linux build for the Pi's detected CPU**, use
+the maintained project helper:
+
+```bash
+bash scripts/run_soloist_receiver.sh
+```
+
+On first run it downloads the matching ARM32/ARM64 build directly from
+Spotify's official CDN, installs `~/.local/bin/soloist`, prompts silently for
+the Soloist API key, and stores the key in the owner-only
+`~/.config/swift-me3/soloist-api-key` file (mode 0600). Later runs reuse the
+installed binary and saved key. Use `--update` when Spotify expires the build;
+Soloist builds currently expire after 90 days. The helper runs as the normal
+Pi user, keeps the receiver in the foreground with verbose diagnostics, and
+does not create/enable a boot service or expose Soloist's optional WebSocket.
+Keep its terminal open while testing; Ctrl+C stops it. The CLI must receive the
+key as a process argument, so run the daemon under the dedicated owner account
+and do not share process listings or logs that might include command details.
+
+Once it is running, open Spotify on the same account and local network and
+select **Swift Soloist** from Connect devices. Then verify the exact receiver
+with the read-only command:
+
+```bash
+PYTHONPATH=src var/cache/venv/bin/python -B -m me3_voice.music inspect --config var/cache/music.json
+```
+
+Inspection does not start playback. Do not test ME3 playback until this reports
+the configured target ready. A Spotify-reported playback state still does not
+prove audio is audible at the Pi's physical output. The laptop Windows `.exe`
+is a separate build; use PowerShell syntax for it, not these Pi/Linux steps.
 
 ### Network access on the Pi
 
@@ -224,7 +266,7 @@ PYTHONPATH=src var/cache/venv/bin/python -B -m me3_voice.preflight --backend-con
 PYTHONPATH=src var/cache/venv/bin/python -B -m me3_voice.communications --config var/cache/pi_demo-devices.json
 ```
 
-Phone setup needs the paired tablet MAC and configured authorized demo call/SMS recipient numbers, stored only in `communications.phone_address/call_number/message_number`. Require exactly one PipeWire telephony gateway, no active call, user D-Bus access, and a BlueZ MAP-capable phone with message permission. Read-only checks: `busctl --user list` and `bluetoothctl devices Connected`. No recipient or Bluetooth address belongs in chat/logs. The code never retries Dial/PushMessage; unknown outcome requires checking the phone. Calling reports requested, SMS reports transfer complete; neither asserts answered/delivered. Current transport adapters are mock-tested, not Pi/carrier-tested.
+Phone setup uses `PYTHONPATH=src var/cache/venv/bin/python -B -m me3_voice.communications --config var/cache/pi_demo-devices.json`. It prompts with hidden input for the paired phone MAC and each contact's display name, aliases and international phone number; it writes only the owner-only Pi config. Keep the existing `communications.phone_address` and `communications.contacts[]` private. Require exactly one PipeWire telephony gateway, no active call, user D-Bus access, and a BlueZ MAP-capable phone with message permission. Read-only checks: `busctl --user list` and `bluetoothctl devices Connected`. No recipient or Bluetooth address belongs in chat/logs. Swift resolves a name or alias, asks the user to resolve ambiguity, then requires confirmation naming the selected contact and action before dispatch. Custom single-line SMS drafts can be edited before confirmation; the existing fixed demo text is used when no custom body is supplied. The code never retries Dial/PushMessage; unknown outcome requires checking the phone. Calling reports requested, SMS reports transfer complete; neither asserts answered/delivered. Current transport adapters are mock-tested, not Pi/carrier-tested.
 
 3. Start the Pi bridge in terminal A **only after the separate Pi VPN/network gate passes**. Use the actual deployed profile paths consistently; the earlier preparation example below uses `pi_demo`, while the verified network gate uses the local `pi_live` profile. Omit ME3_MUSIC_CONFIG for the first quiet test. No device opens until a voice peer starts; Pi device configuration explicitly selects real GPIO. If GPIO is unavailable, voice should remain available and actions report unavailable.
 
@@ -430,7 +472,7 @@ Display ownership and receipts:
 - A device-service process restart cancels its in-memory timer/alarm. Reminders can persist in the configured JSON store at `var/cache/device-state/reminders.json`.
 - The dashboard’s countdown is a visualization of the receipt deadline. `Accepted` means the software output call returned; it is not sensor verification. The LED has no readback sensor, and no task is labelled Pi-verified by this adapter.
 
-For future weather use, an explicit config may set `weather.enabled` and provide latitude/longitude/IANA timezone. It makes on-demand GET requests to Open-Meteo's documented current-weather endpoint; this work used only a mocked response. See [Open-Meteo API parameters](https://open-meteo.com/en/docs) and [service terms](https://open-meteo.com/en/terms): the free API is limited to non-commercial use, its weather data is CC BY 4.0 and needs attribution. Weather remains disabled in the tracked config. ME2's optional runtime includes Bluetooth telephony and a fixed-message OBEX MAP SMS service. ME3 keeps both unavailable until a project-specific demo recipient and paired phone are configured and real-call/message testing is separately authorized; do not copy ME2's concrete recipient/device defaults. Dialing and Bluetooth transfer receipts are not proof of a connected call or carrier delivery.
+For future weather use, an explicit config may set `weather.enabled` and provide latitude/longitude/IANA timezone. It makes on-demand GET requests to Open-Meteo's documented current-weather endpoint; this work used only a mocked response. See [Open-Meteo API parameters](https://open-meteo.com/en/docs) and [service terms](https://open-meteo.com/en/terms): the free API is limited to non-commercial use, its weather data is CC BY 4.0 and needs attribution. Weather remains disabled in the tracked config. ME2's optional runtime includes Bluetooth telephony and a fixed-message OBEX MAP SMS service. ME3 keeps both unavailable until a private named contact list and paired phone are configured and real-call/message testing is separately authorized; do not copy ME2's concrete recipient/device defaults. Dialing and Bluetooth transfer receipts are not proof of a connected call or carrier delivery.
 
 ## Pi acceptance checklist
 

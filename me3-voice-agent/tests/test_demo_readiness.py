@@ -135,7 +135,9 @@ def test_answer_only_metadata_preserves_receipts_and_cannot_hide_artifacts():
 async def test_phone_effects_use_device_identity_and_unknown_is_not_retried():
     from me3_voice.communications import Communications, MessagingUncertain
 
-    phone = Communications()
+    phone = Communications(
+        contacts=[{"name": "Demo", "aliases": [], "phone_number": "+15551234567"}]
+    )
     phone.enabled = phone.on_pi = True
     calls = []
 
@@ -151,12 +153,12 @@ async def test_phone_effects_use_device_identity_and_unknown_is_not_retried():
 
     phone.caller, phone.sms = Caller(), SMS()
     devices = DeviceActions(communications=phone)
-    result = await devices.run("one-call", "call_demo", None)
+    result = await devices.run("one-call", "call_demo", "Demo")
     assert "not yet confirmed" in result["summary"]
-    assert await devices.run("one-call", "call_demo", None) == result
-    uncertain = await devices.run("one-sms", "message_demo", None)
+    assert await devices.run("one-call", "call_demo", "Demo") == result
+    uncertain = await devices.run("one-sms", "message_demo", "Demo")
     assert uncertain["result_status"] == "unknown"
-    assert await devices.run("one-sms", "message_demo", None) == uncertain
+    assert await devices.run("one-sms", "message_demo", "Demo") == uncertain
     assert calls == ["dial", "sms"]
     await devices.close()
 

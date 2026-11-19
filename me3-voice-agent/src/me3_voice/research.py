@@ -16,7 +16,9 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import time
+from pathlib import Path
 from urllib.parse import urlsplit, urljoin
 import aiohttp
 
@@ -73,15 +75,22 @@ class ResearchError(ValueError):
 @dataclass(frozen=True)
 class ResearchOptions:
     allow_live: bool = False
-    request_limit: int = 0
+    request_limit: int | None = 0
+    answer_mode: str = "llm"
 
     def __post_init__(self):
         if (
             type(self.allow_live) is not bool
-            or type(self.request_limit) is not int
-            or not 0 <= self.request_limit <= 100
+            or (
+                self.request_limit is not None
+                and (
+                    type(self.request_limit) is not int
+                    or not 0 <= self.request_limit <= 100
+                )
+            )
+            or self.answer_mode not in {"llm", "tavily"}
         ):
-            raise ValueError("research allow_live boolean and request_limit0..100 required")
+            raise ValueError("research allow_live, request_limit, or answer_mode is invalid")
 
 
 def public_url(value):
@@ -211,6 +220,29 @@ class ResearchClient:
         self.search_snippet_source_ids = {}
         self.failed_retrieval_urls = set()
         self.projected_passage_ids = set()
+        self.provider_state = "NOT_PROBED"
+        self.operation_state = "NOT_PROBED"
+        self.last_checked_at = None
+
+    def usage_count(self):
+        """Return process count plus any durable run-scoped Tavily reservation count."""
+        ledger = os.environ.get("ME3_RESEARCH_LEDGER")
+        campaign = os.environ.get("ME3_REQUEST_RUN_ID")
+        if not ledger or not campaign or not Path(ledger).is_file():
+            return self.requests
+        try:
+            with sqlite3.connect(ledger, timeout=1) as db:
+                exists = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='research_campaign'"
+                ).fetchone()
+                if not exists:
+                    return self.requests
+                row = db.execute(
+                    "SELECT used FROM research_campaign WHERE run_id=?", (campaign,)
+                ).fetchone()
+        except sqlite3.Error:
+            return self.requests
+        return max(self.requests, row[0] if row else 0)
 
     @staticmethod
     def _ensure_evidence_passages(source):
@@ -322,9 +354,33 @@ class ResearchClient:
 
         return sorted(rows, key=rank, reverse=True)
 
+    @classmethod
+    def rank_answer_support(cls, answer, rows):
+        """Order already-returned search leads by overlap with a provider answer."""
+        return cls._rank_leads(answer, rows)
+
     def authorize(self):
-        if not self.options.allow_live or self.requests >= self.options.request_limit:
+        limit = self.options.request_limit
+        if not self.options.allow_live or (limit is not None and self.requests >= limit):
             raise ResearchError("research_disabled_or_budget_exhausted")
+        # The optional demo campaign ledger survives reconnect/client replacement.
+        import os
+        import sqlite3
+        ledger = os.environ.get("ME3_RESEARCH_LEDGER")
+        campaign = os.environ.get("ME3_REQUEST_RUN_ID")
+        if ledger:
+            if not campaign:
+                raise ResearchError("research_campaign_missing")
+            with sqlite3.connect(ledger, timeout=1) as db:
+                db.execute("CREATE TABLE IF NOT EXISTS research_campaign (run_id TEXT PRIMARY KEY, used INTEGER NOT NULL, cap INTEGER NOT NULL)")
+                db.execute("BEGIN IMMEDIATE")
+                cap = -1 if limit is None else limit
+                db.execute("INSERT OR IGNORE INTO research_campaign VALUES (?,0,?)", (campaign, cap))
+                used, cap = db.execute("SELECT used,cap FROM research_campaign WHERE run_id=?", (campaign,)).fetchone()
+                requested_cap = -1 if limit is None else limit
+                if cap != requested_cap or (cap != -1 and used >= cap):
+                    raise ResearchError("research_disabled_or_budget_exhausted")
+                db.execute("UPDATE research_campaign SET used=used+1 WHERE run_id=?", (campaign,))
         self.requests += 1  # Reserve before I/O; timeouts do not refund/retry.
 
     def session(self):
@@ -434,28 +490,46 @@ class ResearchClient:
         if cached is not None:
             self._remember_search_leads(cached)
             return {**cached, "cache_hit": True}
-        if not self.options.allow_live or self.requests >= self.options.request_limit:
+        limit = self.options.request_limit
+        if not self.options.allow_live or (limit is not None and self.requests >= limit):
             raise ResearchError("research_disabled_or_budget_exhausted")
         key = self.credentials.get("ME3_RESEARCH_TAVILY_API_KEY") or os.environ.get(
             "ME3_RESEARCH_TAVILY_API_KEY", ""
         )
         if not key or len(key) > 4096 or any(ord(c) < 33 or ord(c) > 126 for c in key):
+            self.provider_state = "NOT_CONFIGURED"
+            self.operation_state = "NOT_PROBED"
             raise ResearchError("search_credential_missing")
         self.search_requests += 1  # Includes failed Tavily API attempts.
-        row = await self.read(
-            "POST",
-            "https://api.tavily.com/search",
-            headers={"Authorization": "Bearer " + key},
-            json={
-                "query": query,
-                "search_depth": "basic",
-                "max_results": max_results,
-                "include_answer": False,
-                "include_raw_content": False,
-                "auto_parameters": False,
-            },
-        )
+        try:
+            row = await self.read(
+                "POST",
+                "https://api.tavily.com/search",
+                headers={"Authorization": "Bearer " + key},
+                json={
+                    "query": query,
+                    "search_depth": "basic",
+                    "max_results": max_results,
+                    "include_answer": "basic" if self.options.answer_mode == "tavily" else False,
+                    "include_raw_content": False,
+                    "auto_parameters": False,
+                },
+            )
+        except ResearchError as exc:
+            self.provider_state = (
+                "AUTH_REJECTED"
+                if exc.status in {401, 403}
+                else "REACHABLE_RATE_LIMITED"
+                if exc.status == 429
+                else "UNAVAILABLE"
+            )
+            self.operation_state = "FAILED"
+            self.last_checked_at = datetime.now(timezone.utc).isoformat()
+            raise
+        self.provider_state = "AUTHENTICATED_REACHABLE"
+        self.last_checked_at = datetime.now(timezone.utc).isoformat()
         if "redirect" in row:
+            self.operation_state = "REDIRECT_REJECTED"
             raise ResearchError(
                 "search_redirect_rejected",
                 status=row.get("redirect_status"),
@@ -464,8 +538,8 @@ class ResearchClient:
                 failure_class="redirect_not_followed",
             )
         try:
-            result = json.loads(row["data"])
-            results = result["results"]
+            result_payload = json.loads(row["data"])
+            results = result_payload["results"]
             if not isinstance(results, list):
                 raise ValueError
             leads = []
@@ -496,10 +570,16 @@ class ResearchClient:
                 "results": leads,
                 "retrieved_utc": datetime.now(timezone.utc).isoformat(),
             }
+            if self.options.answer_mode == "tavily":
+                answer = result_payload.get("answer")
+                if isinstance(answer, str) and answer.strip():
+                    result["answer"] = answer
             self._remember(key_cache, result)
             self._remember_search_leads(result)
+            self.operation_state = "SEARCH_READY"
             return result
         except (ValueError, KeyError, TypeError):
+            self.operation_state = "INVALID_RESPONSE"
             raise ResearchError("invalid_search_response") from None
 
     def _remember_search_leads(self, result):
@@ -722,7 +802,10 @@ class ResearchClient:
         """One Basic Extract fallback, called only when local HTML lacks content."""
         if not self.options.allow_live:
             return "", "disabled", None
-        if self.requests >= self.options.request_limit:
+        if (
+            self.options.request_limit is not None
+            and self.requests >= self.options.request_limit
+        ):
             return "", "budget_exhausted", None
         token = self.credentials.get("ME3_RESEARCH_TAVILY_API_KEY") or os.environ.get(
             "ME3_RESEARCH_TAVILY_API_KEY", ""

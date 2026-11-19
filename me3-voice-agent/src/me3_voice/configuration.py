@@ -29,10 +29,11 @@ class BackendSpec:
     max_audio_seconds: int = 30
     allow_live: bool = False
     request_limit: int | None = 0
-    # Required for live chat-completions. The first bounds one full serialized
-    # request; the second is frozen as the run-scoped aggregate campaign cap.
+    # Required per-request context ceiling for live chat-completions. A None
+    # aggregate ceiling leaves request volume provider-managed while still
+    # recording every reservation and actual usage in the run ledger.
     max_input_tokens: int = 0
-    max_input_tokens_total: int = 0
+    max_input_tokens_total: int | None = 0
     allow_private_http: bool = False
     voice: str = ""
     language: str = ""
@@ -65,8 +66,13 @@ class BackendSpec:
             or (self.request_limit is not None and not 0 <= self.request_limit <= 10000)
             or type(self.max_input_tokens) is not int
             or not 0 <= self.max_input_tokens <= 1_000_000
-            or type(self.max_input_tokens_total) is not int
-            or not 0 <= self.max_input_tokens_total <= 1_000_000
+            or (
+                self.max_input_tokens_total is not None
+                and (
+                    type(self.max_input_tokens_total) is not int
+                    or not 0 <= self.max_input_tokens_total <= 1_000_000
+                )
+            )
             or (
                 self.seed is not None
                 and (type(self.seed) is not int or not 0 <= self.seed <= 2147483647)
@@ -156,6 +162,7 @@ class BackendSpec:
                 # Explicit opt-in paid route; other paid OpenRouter models
                 # remain outside this project's supported provider contract.
                 "openai/gpt-oss-120b",
+                "anthropic/claude-haiku-5.5",
             }
             if url.hostname == "openrouter.ai" and (
                 role != "llm"
@@ -184,7 +191,11 @@ class BackendSpec:
                 if (
                     role == "llm"
                     and self.allow_live
-                    and (not 1 <= self.max_input_tokens <= self.max_input_tokens_total <= 1_000_000)
+                    and (
+                        not 1 <= self.max_input_tokens <= 1_000_000
+                        or self.max_input_tokens_total is not None
+                        and not self.max_input_tokens <= self.max_input_tokens_total <= 1_000_000
+                    )
                 ):
                     raise ConfigurationError(
                         "llm: live chat requires positive per-request and aggregate input-token ceilings"
@@ -313,6 +324,11 @@ class RuntimeOptions:
     max_model_calls_per_turn: int = 7
     max_tool_calls_per_turn: int = 8
     max_repeated_tool_calls: int = 2
+    task_model: str = ""
+    task_request_limit: int | None = None
+    task_input_tokens_total: int | None = None
+    task_max_output_tokens: int = 1024
+    cost_alert_usd: float = 0.50
 
 
 def load_runtime(path=None, *, engine=None):
@@ -332,6 +348,11 @@ def load_runtime(path=None, *, engine=None):
             "max_model_calls_per_turn",
             "max_tool_calls_per_turn",
             "max_repeated_tool_calls",
+            "task_model",
+            "task_request_limit",
+            "task_input_tokens_total",
+            "task_max_output_tokens",
+            "cost_alert_usd",
         }:
             raise ConfigurationError(
                 "runtime accepts engine, silence_seconds, research and bounded turn safeguards"
@@ -353,6 +374,26 @@ def load_runtime(path=None, *, engine=None):
             or not 1 <= result.max_tool_calls_per_turn <= 8
             or type(result.max_repeated_tool_calls) is not int
             or not 1 <= result.max_repeated_tool_calls <= 4
+            or result.task_model not in {"", "anthropic/claude-haiku-5.5"}
+            or (
+                result.task_request_limit is not None
+                and (
+                    type(result.task_request_limit) is not int
+                    or result.task_request_limit < 1
+                )
+            )
+            or (
+                result.task_input_tokens_total is not None
+                and (
+                    type(result.task_input_tokens_total) is not int
+                    or result.task_input_tokens_total < 1
+                )
+            )
+            or type(result.task_max_output_tokens) is not int
+            or not 1 <= result.task_max_output_tokens <= 8192
+            or type(result.cost_alert_usd) not in (int, float)
+            or not math.isfinite(result.cost_alert_usd)
+            or result.cost_alert_usd <= 0
         ):
             raise ValueError
         return result

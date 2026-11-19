@@ -135,16 +135,17 @@ def build_capability_report(
     research_credential = _credential_status(
         "ME3_RESEARCH_TAVILY_API_KEY", credentials, credential_presence
     )
-    research_enabled = bool(research_options.allow_live and research_options.request_limit > 0)
+    research_limit = research_options.request_limit
+    research_enabled = bool(
+        research_options.allow_live and (research_limit is None or research_limit > 0)
+    )
     research_available = bool(
-        research_enabled and research_requests < research_options.request_limit
+        research_enabled and (research_limit is None or research_requests < research_limit)
     )
     research_credential_present = research_credential["presence"] == "present_unvalidated"
     device_mode = device_capabilities.get("target", "mock")
     device_available = device_capabilities.get("available") is not False
-    music_mode = (
-        "real_provider_selected" if music_capabilities.get("configured") else "mock"
-    )
+    music_mode = "real_provider_selected" if music_capabilities.get("configured") else "mock"
     music_credentials = [
         _credential_status("ME3_SPOTIFY_ACCESS_TOKEN", credentials, credential_presence),
         _credential_status(
@@ -155,9 +156,20 @@ def build_capability_report(
     rows = []
 
     def add(
-        name, *, surface, implementation, provider, registered, configured,
-        credentials_required=(), dependencies=(), permission_gate="none", mode="local",
-        operationally_verified=False, verification_evidence="not_probed", advertised=None,
+        name,
+        *,
+        surface,
+        implementation,
+        provider,
+        registered,
+        configured,
+        credentials_required=(),
+        dependencies=(),
+        permission_gate="none",
+        mode="local",
+        operationally_verified=False,
+        verification_evidence="not_probed",
+        advertised=None,
         selected_by=None,
     ):
         required = [entry for entry in credentials_required if entry is not None]
@@ -198,9 +210,10 @@ def build_capability_report(
         for name in sorted(names):
             requires_inference = name in inference_tool_names
             configured = (
-                spec.backend == "mock"
-                or bool(spec.allow_live and spec.request_limit != 0)
-            ) if requires_inference else True
+                (spec.backend == "mock" or bool(spec.allow_live and spec.request_limit != 0))
+                if requires_inference
+                else True
+            )
             if requires_inference and credential and credential["presence"] == "missing":
                 configured = False
             add(
@@ -216,7 +229,7 @@ def build_capability_report(
                     "local stdio subprocess",
                 ),
                 permission_gate=(
-                    "allow_live and request_limit > 0"
+                    "allow_live and request_limit is not 0"
                     if spec.backend == "external"
                     else "none"
                 ),
@@ -330,12 +343,14 @@ def build_capability_report(
                 if name == "web_search"
                 else (provider_credential("llm"),)
             )
-            configured = provider_configured("llm") and research_available and (
-                research_credential_present if name == "web_search" else True
+            configured = (
+                provider_configured("llm")
+                and research_available
+                and (research_credential_present if name == "web_search" else True)
             )
-            dependencies = ["research.allow_live", "positive research request limit"]
+            dependencies = ["research.allow_live", "provider/account quota"]
             permission = (
-                "research provider request cap"
+                "research provider/account quota"
                 if name == "web_search"
                 else "public URL validation and retained-source contract"
             )
@@ -355,9 +370,7 @@ def build_capability_report(
                 else f"ME3 {device_mode} device adapter"
             )
             configured = provider_configured("llm") and (
-                True
-                if name in {"set_mock_light", "read_mock_light"}
-                else device_available
+                True if name in {"set_mock_light", "read_mock_light"} else device_available
             )
             mode = (
                 "mock"
@@ -373,9 +386,7 @@ def build_capability_report(
                 if name in {"set_mock_light", "read_mock_light"}
                 else [
                     "device configuration",
-                    "GPIO hardware"
-                    if device_mode == "pi"
-                    else "none; in-memory simulation",
+                    "GPIO hardware" if device_mode == "pi" else "none; in-memory simulation",
                 ]
             )
             permission = (
@@ -433,9 +444,7 @@ def build_capability_report(
             ),
         )
         if name == "run_device_action":
-            rows[-1]["supported_actions"] = list(
-                DEFINITIONS[name][1]["action"].get("enum", ())
-            )
+            rows[-1]["supported_actions"] = list(DEFINITIONS[name][1]["action"].get("enum", ()))
             rows[-1]["action_modes"] = {
                 action: (
                     "configured_unverified"
@@ -476,9 +485,7 @@ def build_capability_report(
                 "set_temperature": "display-only simulated value; no thermostat adapter",
             }
         elif name == "control_music":
-            rows[-1]["supported_actions"] = list(
-                DEFINITIONS[name][1]["action"].get("enum", ())
-            )
+            rows[-1]["supported_actions"] = list(DEFINITIONS[name][1]["action"].get("enum", ()))
 
     for tool in task_tools:
         name = tool.name
@@ -502,8 +509,10 @@ def build_capability_report(
                 if name == "web_search"
                 else (provider_credential("llm"),)
             )
-            configured = provider_configured("llm") and research_available and (
-                research_credential_present if name == "web_search" else True
+            configured = (
+                provider_configured("llm")
+                and research_available
+                and (research_credential_present if name == "web_search" else True)
             )
             mode = (
                 "real_provider_selected"
@@ -514,8 +523,8 @@ def build_capability_report(
                 if name == "verify_evidence" and configured
                 else "unavailable"
             )
-            dependencies = ["research allow_live and request cap"]
-            permission = "research budget and URL/source verification contract"
+            dependencies = ["research allow_live", "provider/account quota"]
+            permission = "provider/account quota and URL/source verification contract"
         elif name == "request_external_action":
             provider = "mock approval-gated dispatcher"
             mode = "mock"
@@ -569,14 +578,12 @@ def build_capability_report(
             "research_enabled": research_enabled,
             "research_request_limit": research_options.request_limit,
             "research_requests_used": research_requests,
-            "research_requests_remaining": max(
-                0, research_options.request_limit - research_requests
+            "research_requests_remaining": (
+                max(0, research_limit - research_requests) if research_limit is not None else None
             ),
             "device_mode": device_mode,
             "weather_enabled": bool(device_details.get("weather_enabled")),
-            "communications_enabled": bool(
-                device_details.get("communications_enabled")
-            ),
+            "communications_enabled": bool(device_details.get("communications_enabled")),
             "music_mode": music_mode,
             "task_storage": {
                 "database": "ME3_TASK_DATABASE configured"
@@ -646,19 +653,19 @@ def render_capability_markdown(report):
             str(row.get("service_operationally_verified", "—")),
             row["availability"],
         )
-        lines.append(
-            "| " + " | ".join(str(value).replace("|", "\\|") for value in values) + " |"
-        )
+        lines.append("| " + " | ".join(str(value).replace("|", "\\|") for value in values) + " |")
     lines.extend(("", "## Dependencies and gates", ""))
     for row in report["capabilities"]:
         deps = ", ".join(row["dependencies"]) or "none"
         gates = row["permission_gate"] or "none"
-        creds = ", ".join(
-            f"{item['name']} ({item['presence']})" for item in row["credential_requirements"]
-        ) or "none"
+        creds = (
+            ", ".join(
+                f"{item['name']} ({item['presence']})" for item in row["credential_requirements"]
+            )
+            or "none"
+        )
         lines.append(
-            f"- **{row['name']}** — credentials: {creds}; "
-            f"dependencies: {deps}; gate: {gates}."
+            f"- **{row['name']}** — credentials: {creds}; dependencies: {deps}; gate: {gates}."
         )
     return "\n".join(lines) + "\n"
 

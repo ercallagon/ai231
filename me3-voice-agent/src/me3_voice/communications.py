@@ -17,37 +17,104 @@ from pathlib import Path
 
 
 class Communications:
-    """Fixed demo recipients only; never automatically retry a submitted effect."""
+    """Private named contacts over the existing Bluetooth call/MAP adapters."""
 
-    def __init__(self, *, enabled=False, phone_address="", call_number="", message_number=""):
+    def __init__(
+        self,
+        *,
+        enabled=False,
+        phone_address="",
+        contacts=None,
+        call_number=None,
+        message_number=None,
+    ):
         self.enabled = enabled
         model = Path("/proc/device-tree/model")
         self.on_pi = model.exists() and "raspberry pi" in model.read_text().casefold()
-        self.call_number, self.message_number = call_number, message_number
+        if contacts is None and (call_number or message_number):
+            # Read old private profiles without assuming a person's identity.
+            # New setup writes named contacts; these labels are explicit roles.
+            contacts = []
+            if call_number:
+                contacts.append(
+                    {
+                        "name": "Configured call recipient",
+                        "aliases": ["call recipient", "demo contact"],
+                        "phone_number": call_number,
+                    }
+                )
+            if message_number:
+                contacts.append(
+                    {
+                        "name": "Configured message recipient",
+                        "aliases": ["message recipient", "demo message recipient"],
+                        "phone_number": message_number,
+                    }
+                )
+        self.contacts = normalize_contacts(contacts or [])
         self.caller = self.sms = None
         if enabled:
-            validate_number(call_number)
-            validate_number(message_number)
+            if not self.contacts:
+                raise ValueError("configure at least one private phone contact")
+            validate_number(phone_address)
             self.caller = BluetoothCallingBackend()
             self.sms = BluetoothMessagingBackend(phone_address, timeout=10, total_timeout=30)
 
-    async def execute(self, action):
+    def match_contact(self, query):
+        """Match a display name or alias without guessing between recipients."""
+        key = normalize_contact_label(query)
+        if not key:
+            return {"status": "missing", "matches": []}
+        matches = [
+            contact
+            for contact in self.contacts
+            if key == normalize_contact_label(contact["name"])
+            or key in {normalize_contact_label(alias) for alias in contact["aliases"]}
+        ]
+        if not matches:
+            return {"status": "missing", "matches": []}
+        if len(matches) > 1:
+            return {"status": "ambiguous", "matches": [row["name"] for row in matches]}
+        contact = matches[0]
+        return {"status": "matched", "name": contact["name"]}
+
+    def _configured_contact(self, name):
+        key = normalize_contact_label(name)
+        return next(
+            (
+                contact
+                for contact in self.contacts
+                if normalize_contact_label(contact["name"]) == key
+            ),
+            None,
+        )
+
+    async def execute(self, action, contact_name=None, message_text=None):
         if not self.enabled or not self.on_pi:
             return {
                 "mode": "reported",
                 "result_status": "unavailable",
-                "summary": "Phone actions are not configured. Pair the demo phone and configure the demo recipients first.",
+                "summary": "Phone actions are not configured. Pair the phone and configure the private contact list first.",
                 "display": "Phone unavailable",
+            }
+        contact = self._configured_contact(contact_name)
+        if contact is None:
+            return {
+                "mode": "reported",
+                "result_status": "unavailable",
+                "summary": "That contact is no longer configured. No phone action was sent.",
+                "display": "Contact unavailable",
             }
         try:
             if action == "call_demo":
-                await asyncio.to_thread(self.caller.dial, self.call_number)
-                summary = (
-                    "Call requested on the paired phone. An answered call is not yet confirmed."
-                )
+                await asyncio.to_thread(self.caller.dial, contact["phone_number"])
+                summary = f"Call requested to {contact['name']} on the paired phone. An answered call is not yet confirmed."
             elif action == "message_demo":
-                await self.sms._operate(self.message_number)
-                summary = "The demo SMS transfer completed on the paired phone. Recipient delivery is not confirmed."
+                message_text = (
+                    DEMO_MESSAGE if message_text is None else validate_message_text(message_text)
+                )
+                await self.sms._operate(contact["phone_number"], message_text)
+                summary = f"The message transfer to {contact['name']} completed on the paired phone. Recipient delivery is not confirmed."
             else:
                 raise ValueError("unsupported communication action")
             return {
@@ -73,6 +140,63 @@ class Communications:
 
 
 DEMO_MESSAGE = "Hello from Swift! This is the configured Raspberry Pi voice-assistant demo message."
+MAX_SMS_BODY_LENGTH = 1000
+
+
+def validate_message_text(value):
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= MAX_SMS_BODY_LENGTH
+        or any(char in value for char in "\r\n")
+        or any(ord(char) < 32 and char != "\t" for char in value)
+    ):
+        raise ValueError("SMS text must be a nonempty single line of at most 1000 characters")
+    return value
+
+
+def normalize_contact_label(value):
+    if not isinstance(value, str):
+        return ""
+    return " ".join(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
+
+
+def normalize_contacts(contacts):
+    if not isinstance(contacts, list):
+        raise ValueError("contacts must be a list")
+    normalized = []
+    canonical_names = set()
+    for row in contacts:
+        if not isinstance(row, dict) or set(row) - {"name", "aliases", "phone_number"}:
+            raise ValueError("invalid private contact entry")
+        name = row.get("name")
+        aliases = row.get("aliases", [])
+        number = row.get("phone_number")
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 80:
+            raise ValueError("contact name must contain 1 to 80 characters")
+        if (
+            not isinstance(aliases, list)
+            or len(aliases) > 20
+            or any(
+                not isinstance(alias, str) or not 1 <= len(alias.strip()) <= 80 for alias in aliases
+            )
+        ):
+            raise ValueError("contact aliases must be strings of 1 to 80 characters")
+        canonical = name.strip()
+        key = normalize_contact_label(canonical)
+        if not key or key in canonical_names:
+            raise ValueError("contact names must be unique")
+        if not isinstance(number, str):
+            raise ValueError("contact phone number must be a string")
+        validate_number(number)
+        canonical_names.add(key)
+        normalized.append(
+            {
+                "name": canonical,
+                "aliases": [alias.strip() for alias in aliases],
+                "phone_number": number,
+            }
+        )
+    return normalized
 
 
 class CallingUnavailable(Exception):
@@ -208,15 +332,14 @@ async def create_map_session(call, address, variant, *, retry_budget=None):
 
 
 def validate_number(number):
-    if not re.fullmatch("\\+[1-9][0-9]{7,14}", number):
+    if not isinstance(number, str) or not re.fullmatch("\\+[1-9][0-9]{7,14}", number):
         raise ValueError("Set ME3 configured SMS recipient in international format, e.g. +639...")
 
 
 def make_bmessage(number, text=DEMO_MESSAGE):
     """MAP UTF-8 GSM bMessage. LENGTH includes the complete MSG block."""
     validate_number(number)
-    if not text.strip() or any((c in text for c in "\r\n")):
-        raise ValueError("Message must be nonempty single-line text.")
+    validate_message_text(text)
     block = f"BEGIN:MSG\r\n{text}\r\nEND:MSG\r\n"
     header = f"BEGIN:BMSG\r\nVERSION:1.0\r\nSTATUS:UNREAD\r\nTYPE:SMS_GSM\r\nFOLDER:telecom/msg/outbox\r\nBEGIN:BENV\r\nBEGIN:VCARD\r\nVERSION:2.1\r\nN:;\r\nTEL:{number}\r\nEND:VCARD\r\nBEGIN:BBODY\r\nCHARSET:UTF-8\r\nLENGTH:{len(block.encode('utf-8'))}\r\n"
     return (header + block + "END:BBODY\r\nEND:BENV\r\nEND:BMSG\r\n").encode("utf-8")
@@ -457,15 +580,26 @@ def main():
     if data.get("backend") != "pi":
         parser.error("communications require a separately selected Pi device configuration")
     phone = getpass.getpass("Paired phone Bluetooth MAC (hidden): ").strip()
-    call = getpass.getpass("Authorized demo call recipient, +country format (hidden): ").strip()
-    sms = getpass.getpass("Authorized demo SMS recipient, +country format (hidden): ").strip()
+    contacts = []
+    while True:
+        name = getpass.getpass("Contact display name (hidden; blank to finish): ").strip()
+        if not name:
+            break
+        aliases = getpass.getpass("Aliases, comma-separated (hidden; optional): ").strip()
+        number = getpass.getpass("Contact phone number, international format (hidden): ").strip()
+        contacts.append(
+            {
+                "name": name,
+                "aliases": [alias.strip() for alias in aliases.split(",") if alias.strip()],
+                "phone_number": number,
+            }
+        )
     # Validate everything before saving; constructors do not connect to D-Bus.
-    Communications(enabled=True, phone_address=phone, call_number=call, message_number=sms)
+    Communications(enabled=True, phone_address=phone, contacts=contacts)
     data["communications"] = {
         "enabled": True,
         "phone_address": phone,
-        "call_number": call,
-        "message_number": sms,
+        "contacts": contacts,
     }
     fd, temporary = tempfile.mkstemp(prefix="phone-config-", dir=path.parent)
     try:
@@ -478,7 +612,7 @@ def main():
         if os.path.exists(temporary):
             os.unlink(temporary)
     print(
-        "Pi phone configuration saved privately. No call, message, pairing or service change was performed."
+        f"Pi phone configuration saved privately ({len(contacts)} contacts). No call, message, pairing or service change was performed."
     )
 
 

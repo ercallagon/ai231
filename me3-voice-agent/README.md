@@ -38,7 +38,7 @@ The Python package/module remains `me3_voice`; moving the checkout does not rena
 
 ## Intended experience
 
-Say a wake phrase once to start a session. Speak naturally, ask follow-ups, execute real tasks, and interrupt spoken answers. Active reasoning and playback remain interruptible without a wall-clock turn cutoff. The browser bridge's Follow-up conversation mode keeps the session open for a configurable 20 seconds after a completed response; a valid follow-up resets the window, and processing or playback does not consume it. Select Single request to return to wake standby after one response, or Extended conversation to use its separately configurable idle window (20 seconds by default). End explicitly with “That’s all,” “Goodbye,” or “End conversation,” or use End in the UI. The microphone transport remains active for wake detection in standby; ordinary speech is no longer submitted to ASR. These timings and acoustic wake behavior still require laptop/Pi validation. CLI replay retains its existing inactivity policy unless adaptive mode is explicitly selected in Session.
+Click **Start conversation**, allow microphone access, and say “Hey Swift” once. After activation, speak naturally and ask follow-ups without repeating the wake phrase; Swift remains in the conversation until you click **End conversation**. The browser keeps the same LangGraph conversation context across refresh/reconnect while the bridge stays running; a bridge restart starts a new context and is reported in the UI. Spoken replies remain interruptible. Conversation history is available in Diagnostics. Laptop microphone, speaker, wake-word and barge-in behavior still require physical qualification; CLI replay retains its separate inactivity policy.
 
 ## Requirements
 
@@ -88,9 +88,7 @@ Use this repository as the source of truth. Local and HPC work prepare reviewabl
 
 The user's Codex SSH agent works in the HPC sandbox, which also has an onit agent. HPC is the development environment; Raspberry Pi 5 with 4 GB RAM is the deployment target. Pi access is separate. HPC tests do not establish Pi compatibility or physical audio behavior.
 
-Commits are deferred at the user's request until more structure is established. Continue setup without staging or committing; an initial commit is not a prerequisite for the Pi inventory.
-
-Stage explicit paths, inspect the staged diff, and scan for secrets, recordings, generated output and oversized files before committing. Push and external publication require user authorization. No GitHub remote has been configured by this planning baseline.
+Create submission commits only at the user's explicit request. Stage explicit ME3 paths, inspect the staged diff, and scan for secrets, recordings, generated output and oversized files before committing. Push and external publication require separate user authorization. This project is a subdirectory of the shared `ercallagon/ai231` repository; preserve its existing `main`, artifact and Pages branch policies.
 
 ## Verified HPC development workflow
 
@@ -401,6 +399,41 @@ Use fresh trace paths on subsequent runs. This example uses an injected wake wit
 The Assistant keeps the active conversation compact beside task results. Opening or refreshing the page shows a clean welcome screen. Use the conversation-history dropdown in the header to view a saved session; choose New session to return to welcome. Report-feed updates never open an old conversation automatically. Starting voice displays only that new runtime session; ending it retains its history on the current page. The dropdown includes sessions loaded from reports or observed during this page visit, not every archive on disk. Mock light and timer results have event-derived widgets; generated files show preview/download actions and an execution receipt. Spotify has a live in-page browser player for laptop trials and a Spotify Connect target for the final Pi output path. The Assistant shows the track/state Spotify reports and offers real play/pause, previous/next, and seek controls; it never claims that reported playback proves audible sound. See [Spotify playback on laptop and Pi](docs/ARCHITECTURE.md#spotify-playback-on-laptop-and-pi). One fresh authorization with `--browser-player` is required to grant the streaming scope; refresh credentials remain server-side and the short-lived access token is sent only to the live loopback page. For Pi, Soloist outputs through the Pi audio device while the local ME3 bridge reads and controls the same Spotify Connect session. No Spotify audio passes through the UI or HPC bridge. Report import and feed controls are in **Diagnostics**, separate from voice-runtime status; the Swift voice mark opens read-only session details. Diagnostics includes sanitized DGX3 discovery status; “Key required” is an inspection result, not proof of inference. Restart your laptop watcher to receive regenerated HTML; refreshing an old downloaded file does not fetch the new template.
 
 Latest validation: the existing wake/rearm fixture now completes two actual Sherpa/Silero sessions through Pipecat and DGX3 ASR/TTS (mock reasoning, memory output). Diagnostics shows correlated historical speech-trial results, software timings and Inspect buttons separately from catalog authentication. Conversation bubbles distinguish partial/draft/interrupted text and the welcome layout is compact. Restart the laptop watcher to fetch the latest canonical UI. Exact evidence and remaining reasoning/Pi gates are in PLAN.md.
+
+### Test the Soloist Connect receiver during the WSL laptop bridge
+
+The current `var/cache/music.json` targets **Swift Soloist**. The Linux helper
+`bash scripts/run_soloist_receiver.sh` supports x86_64 WSL, but Soloist's
+Connect discovery uses mDNS. The latest WSL startup logged a `172.29.*` address
+and started mDNS while remaining at “waiting for login.” Default WSL networking
+is NAT; Microsoft documents multicast support in mirrored mode. Prefer Spotify's
+native Windows Soloist build for a laptop test when the WSL receiver is not
+visible, or use WSL mirrored networking only if it is already approved for the
+machine. See [Microsoft's WSL networking guide](https://learn.microsoft.com/windows/wsl/networking).
+
+For the native Windows build, stop the current WSL Soloist with Ctrl+C, then
+run this Bash command from the ME3 checkout. It downloads Spotify's official
+Windows x86_64 archive to Windows LocalAppData and reuses the key stored by the
+WSL helper; no PowerShell syntax or key copy/paste is needed:
+
+```bash
+bash scripts/run_soloist_windows.sh
+```
+
+Keep that terminal open. Select **Swift Soloist** in Spotify on the same local
+network. If the native Windows receiver is absent from the device picker,
+check that the active Windows network is trusted/Private and allow the Soloist
+application through Windows Defender Firewall on Private networks; do not turn
+the firewall off. In a second WSL terminal run `bash scripts/swift.sh laptop-demo`;
+then verify the target from the ME3 checkout:
+
+```bash
+var/cache/venv/bin/python -B -m me3_voice.music inspect --config var/cache/music.json
+```
+
+“This web browser” is a separate Spotify browser-player output and does not
+satisfy the configured Soloist target. WSL audio and discovery are still
+unverified. For Pi ARM setup, see [the Pi deployment guide](deploy/rpi/README.md#one-time-spotifysoloist-setup-on-the-pi).
 
 ## Existing Onit / free-only OpenRouter trial
 

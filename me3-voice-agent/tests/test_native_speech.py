@@ -121,22 +121,22 @@ async def test_vad_confirmation_replays_bounded_pre_onset_audio_in_order():
 
     async with CapturePCM(transcript="onset restored", timeout=5) as speech:
         async with running(speech) as (worker, stt, sink, events):
-            assert stt.onset_buffer_frames == 8
-            for index in range(10):
+            assert stt.onset_buffer_frames == 20
+            for index in range(22):
                 await worker.queue_frame(InputAudioRawFrame(bytes([index + 1]) * 1024, 16000, 1))
-            await until(lambda: len(stt.onset_buffer) == 8)
-            assert stt.operation is None and len(stt.onset_buffer) == 8
+            await until(lambda: len(stt.onset_buffer) == 20)
+            assert stt.operation is None and len(stt.onset_buffer) == 20
 
             await worker.queue_frame(VADUserStartedSpeakingFrame())
             await worker.queue_frame(InputAudioRawFrame(b"\x0b\0" * 512, 16000, 1))
             await worker.queue_frame(VADUserStoppedSpeakingFrame())
             await until(lambda: any(isinstance(f, TranscriptionFrame) for f in sink.frames))
 
-            expected = [bytes([i]) * 1024 for i in range(3, 11)] + [b"\x0b\0" * 512]
+            expected = [bytes([i]) * 1024 for i in range(3, 23)] + [b"\x0b\0" * 512]
             assert b"".join(speech.accepted_pcm) == b"".join(expected)
             assert not stt.onset_buffer
             onset = next(e for e in events if e["event"] == "asr_onset_audio_submitted")
-            assert onset["frames"] == 8 and onset["bytes"] == 8 * 1024
+            assert onset["frames"] == 20 and onset["bytes"] == 20 * 1024
             assert not any(e["event"] == "asr_open_started" for e in events[: events.index(onset)])
 
 
@@ -550,7 +550,14 @@ async def test_new_onset_is_forwarded_before_old_resource_cleanup():
             speech.proceed.set()
 
 
-async def test_delayed_asr_cancel_cannot_revive_native_context_or_model_request():
+@pytest.mark.parametrize("demo_profile", [False, True], ids=["prior-policy", "laptop-demo"])
+async def test_delayed_asr_cancel_cannot_revive_native_context_or_model_request(
+    demo_profile, record_property
+):
+    from pathlib import Path
+    import time
+
+    from me3_voice.configuration import load_runtime
     from me3_voice.native_pipeline import make_native_pipeline
     from pipecat.frames.frames import LLMContextFrame
     from pipecat.processors.aggregators.llm_context import LLMContext
@@ -559,10 +566,12 @@ async def test_delayed_asr_cancel_cannot_revive_native_context_or_model_request(
         def __init__(self):
             super().__init__()
             self.requests = []
+            self.request_at = None
 
         async def process_frame(self, frame, direction):
             await super().process_frame(frame, direction)
             if isinstance(frame, LLMContextFrame):
+                self.request_at = time.monotonic()
                 self.requests.append(
                     [m["content"] for m in frame.context.get_messages() if m["role"] == "user"]
                 )
@@ -573,8 +582,18 @@ async def test_delayed_asr_cancel_cannot_revive_native_context_or_model_request(
         events = []
         context = LLMContext()
         probe = Probe()
+        silence_seconds = (
+            load_runtime(Path("configs/native-demo-runtime.json"), engine="native").silence_seconds
+            if demo_profile
+            else 0.5
+        )
         parts = make_native_pipeline(
-            speech, probe, Collect(), context=context, silence_seconds=0.05, on_event=events.append
+            speech,
+            probe,
+            Collect(),
+            context=context,
+            silence_seconds=silence_seconds,
+            on_event=events.append,
         )
         worker = PipelineWorker(
             parts.pipeline,
@@ -601,6 +620,10 @@ async def test_delayed_asr_cancel_cannot_revive_native_context_or_model_request(
             await feed(worker, events)
             await worker.queue_frame(VADUserStoppedSpeakingFrame())
             await until(lambda: bool(probe.requests))
+            final = next(e for e in events if e["event"] == "asr_final")
+            record_property(
+                "asr_final_to_model_context_ms", (probe.request_at - final["at"]) * 1000
+            )
             await asyncio.sleep(0.4)
             assert probe.requests == [["current input"]]
             assert [m["content"] for m in context.get_messages() if m["role"] == "user"] == [

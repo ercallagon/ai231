@@ -276,6 +276,18 @@ def direct_clock_query(text, turn_id):
     return None
 
 
+def demo_owner_identity_query(text):
+    """Recognize only local profile-identity questions; never authenticate a speaker."""
+    normalized = re.sub(r"\s+", " ", text.strip().casefold()).strip(" .!?")
+    return bool(
+        re.fullmatch(
+            r"(?:who am i|what(?:'s| is) my name|what do i do|what(?:'s| is) my (?:current )?(?:role|job)|"
+            r"what do you know about me|who owns (?:this )?(?:demo|swift)|who is (?:this )?demo for)",
+            normalized,
+        )
+    )
+
+
 def explicit_percentage(value):
     """Parse an explicit integer 0..100; never rewrite the user's transcript."""
     if value.isdecimal():
@@ -301,28 +313,53 @@ def explicit_percentage(value):
 
 
 def direct_me2_command(text, turn_id):
-    """Exact final-utterance ME2 operations through the existing shared executor."""
+    """Route narrow ME2 commands; recipient names are resolved by Communications."""
     from .devices import ACTION_VALUES
 
+    sms_draft = direct_sms_draft(text, turn_id)
+    if sms_draft is not None:
+        return sms_draft
     phrase = re.sub(r"\s+", " ", text.strip().casefold()).strip(" .!?")
     phrase = re.sub(r"^please ", "", phrase)
+    phrase = re.sub(r"^hey swift[, ]+", "", phrase)
     action, value = None, None
     if phrase in {"make a call", "make a phone call", "call the demo contact"}:
         action = "call_demo"
     elif phrase in {"send a message", "send a text", "send the demo message"}:
         action = "message_demo"
-    elif phrase in {"list reminders", "list my reminders", "what are my reminders"}:
+    else:
+        recipient = re.fullmatch(
+            r"(?:call|phone)(?: to)? (.+)|make (?:a )?(?:phone )?call to (.+)", phrase
+        )
+        if recipient:
+            action, value = "call_demo", (recipient.group(1) or recipient.group(2)).strip()
+        else:
+            recipient = re.fullmatch(
+                r"(?:send (?:a )?(?:message|text) to|text|message) (.+)", phrase
+            )
+            if recipient:
+                action, value = "message_demo", recipient.group(1).strip()
+    if action is None and phrase in {
+        "list reminders",
+        "list my reminders",
+        "what are my reminders",
+    }:
         action = "list_reminders"
-    elif phrase in {"cancel the timer", "cancel my timer", "cancel the alarm", "cancel my alarm"}:
+    elif action is None and phrase in {
+        "cancel the timer",
+        "cancel my timer",
+        "cancel the alarm",
+        "cancel my alarm",
+    }:
         action = "cancel_schedule"
-    elif phrase in {
+    elif action is None and phrase in {
         "what's the weather",
         "what is the weather",
         "what's the weather like",
         "check the weather",
     }:
         action = "get_weather"
-    else:
+    elif action is None:
         patterns = (
             (
                 "get_weather",
@@ -370,9 +407,47 @@ def direct_me2_command(text, turn_id):
     return ToolCall(f"local-me2-{turn_id}", "run_device_action", args)
 
 
+def direct_sms_draft(text, turn_id):
+    """Parse only explicit single-turn custom SMS drafts; keep body bytes intact."""
+    raw = re.sub(r"^\s*hey swift[, ]+", "", text.strip(), flags=re.IGNORECASE)
+    patterns = (
+        r"(?:(?:draft|send|write) (?:a )?(?:text|message) to|(?:text|message) to) "
+        r"(.+?) (?:saying|that says|with message|:) (.+)",
+        r"(?:draft|send|write) (?:a )?(?:text|message) "
+        r"(?:saying|that says|with message|:) (.+)",
+    )
+    match = re.fullmatch(patterns[0], raw, flags=re.IGNORECASE)
+    if match:
+        contact, body = match.group(1).strip(), match.group(2).strip()
+    else:
+        match = re.fullmatch(patterns[1], raw, flags=re.IGNORECASE)
+        if not match:
+            return None
+        contact, body = None, match.group(1).strip()
+    args = {"action": "message_demo", "message": body}
+    if contact:
+        args["value"] = contact
+    return ToolCall(f"local-sms-draft-{turn_id}", "run_device_action", args)
+
+
+def direct_sms_edit(text):
+    """Return an explicit replacement body while a message confirmation is pending."""
+    raw = re.sub(r"^\s*hey swift[, ]+", "", text.strip(), flags=re.IGNORECASE)
+    match = re.fullmatch(
+        r"(?:actually[, ]+)?(?:change|edit|update) (?:the )?(?:message|text) to:? (.+)|"
+        r"(?:actually[, ]+)?change it to:? (.+)",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return (match.group(1) or match.group(2)).strip()
+
+
 def direct_light_command(text, turn_id):
     """Route exact final light commands through the shared device tool contract."""
     normalized = re.sub(r"\s+", " ", text.strip().casefold()).strip(" .!?")
+    normalized = re.sub(r"^hey swift[, ]+", "", normalized)
     requester = r"(?:(?:can|could) you )?(?:please )?"
 
     power = re.fullmatch(
