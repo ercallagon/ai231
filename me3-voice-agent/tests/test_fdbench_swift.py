@@ -40,6 +40,22 @@ def test_resume_is_limited_to_complete_saved_run_under_output_root(tmp_path):
         fdbench_swift._validate_resume_run(incomplete, output)
 
 
+def test_next_trial_waits_for_previous_stop_to_return_idle():
+    rig = fdbench_swift.SwiftWebSocketRig("http://fixture.invalid")
+    waited = []
+    idle = _health(session="idle")
+
+    def wait_for_idle(*, timeout):
+        waited.append(timeout)
+        return idle
+
+    rig._wait_for_idle = wait_for_idle
+    result = rig._await_prior_trial_idle(_health(session="active"))
+
+    assert result["voice_session"] == "idle"
+    assert waited == [12.0]
+
+
 def _health(run_id="fixture-run", *, usage=0, session="idle"):
     return {
         "bridge": "ready",

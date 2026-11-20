@@ -506,6 +506,14 @@ class SwiftWebSocketRig(RigBase):
                 raise TimeoutError("Swift did not return to idle after the benchmark session stop")
             time.sleep(0.05)
 
+    def _await_prior_trial_idle(self, health: dict) -> dict:
+        """Wait for the previous trial's bounded stop cleanup before starting the next."""
+        self._require_health(health, idle=False)
+        if health.get("voice_session") != "idle":
+            health = self._wait_for_idle(timeout=12.0)
+        self._require_health(health, idle=True)
+        return health
+
     def _append_packets(self) -> None:
         while True:
             try:
@@ -566,7 +574,7 @@ class SwiftWebSocketRig(RigBase):
 
     def run(self, script: TrialScript) -> Recording:
         health_before = _health(self.base_url)
-        self._require_health(health_before, idle=True)
+        health_before = self._await_prior_trial_idle(health_before)
         reset_from_session = self._reset_session()
         health_before = _health(self.base_url)
         self._require_health(health_before, idle=True)
