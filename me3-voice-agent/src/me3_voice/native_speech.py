@@ -297,6 +297,10 @@ class McpSTTService(STTService):
             "socket_closed_monotonic",
             "connection_closed_monotonic",
             "outbound_flush_completed_monotonic",
+            "close_stream_send_started_monotonic",
+            "close_stream_send_completed_monotonic",
+            "last_provider_final_monotonic",
+            "terminal_metadata_monotonic",
             "first_append_monotonic",
             "first_send_started_monotonic",
             "first_send_completed_monotonic",
@@ -671,16 +675,14 @@ class McpSTTService(STTService):
                 or row["revision"] <= self.revision
             ):
                 raise ValueError("invalid native ASR final")
-            self.event(
-                "asr_final",
-                stream_id=self.stream_ref(identifier),
-                utterance_id=key.turn_id,
-                seconds=time.monotonic() - started,
-            )
+            trace_key = {"stream_id": self.stream_ref(identifier), "utterance_id": key.turn_id}
+            self.event("asr_final", seconds=time.monotonic() - started, **trace_key)
             if self.on_partial:
                 self.on_partial(None)
             # Finalized is an ASR-completion marker, not a second turn endpoint.
-            await self.push_frame(TranscriptionFrame(row["text"], "user", "", finalized=True))
+            frame = TranscriptionFrame(row["text"], "user", "", finalized=True)
+            frame.metadata["me3_asr_final"] = trace_key
+            await self.push_frame(frame)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

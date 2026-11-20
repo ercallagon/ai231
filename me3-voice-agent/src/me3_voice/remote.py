@@ -1348,6 +1348,10 @@ class DeepgramASRStream:
         self.first_send_started_at = None
         self.first_send_completed_at = None
         self.outbound_flush_completed_at = None
+        self.close_stream_send_started_at = None
+        self.close_stream_send_completed_at = None
+        self.last_provider_final_at = None
+        self.terminal_metadata_at = None
         self.outbound = asyncio.Queue(maxsize=self.OUTBOUND_QUEUE_ITEMS)
         self.outbound_bytes = 0
         self.peak_outbound_bytes = 0
@@ -1484,6 +1488,10 @@ class DeepgramASRStream:
             "first_send_started_monotonic": self.first_send_started_at,
             "first_send_completed_monotonic": self.first_send_completed_at,
             "outbound_flush_completed_monotonic": self.outbound_flush_completed_at,
+            "close_stream_send_started_monotonic": self.close_stream_send_started_at,
+            "close_stream_send_completed_monotonic": self.close_stream_send_completed_at,
+            "last_provider_final_monotonic": self.last_provider_final_at,
+            "terminal_metadata_monotonic": self.terminal_metadata_at,
             "accepted_audio_bytes": self.accepted_bytes,
             "sent_audio_bytes": self.sent_bytes,
             "queued_audio_bytes": self.outbound_bytes,
@@ -1588,6 +1596,7 @@ class DeepgramASRStream:
             if not isinstance(value, dict):
                 raise ProviderError("unexpected ASR binary response")
             if value.get("type") == "Metadata" and self.finishing:
+                self.terminal_metadata_at = time.monotonic()
                 return
             if value.get("type") == "Results":
                 try:
@@ -1595,6 +1604,7 @@ class DeepgramASRStream:
                     if not isinstance(text, str) or type(value.get("is_final")) is not bool:
                         raise ValueError
                     if value["is_final"]:
+                        self.last_provider_final_at = time.monotonic()
                         if text:
                             self.parts.append(text)
                         self.hypothesis = ""
@@ -1671,7 +1681,9 @@ class DeepgramASRStream:
         self.finishing = True
         # CloseStream has a documented terminal Metadata response. Finalize's
         # optional from_finalize event alone cannot safely delimit an empty tail.
+        self.close_stream_send_started_at = time.monotonic()
         await self.peer.send({"type": "CloseStream"})
+        self.close_stream_send_completed_at = time.monotonic()
         await self.reader
         result = ASRResult(" ".join(self.parts), final=True)
         self.completed = True

@@ -6,8 +6,13 @@ contacts a provider. Engagement/UI/task migration belongs to later phases.
 """
 
 from dataclasses import dataclass
+import time
 
-from pipecat.frames.frames import InterimTranscriptionFrame, TranscriptionFrame
+from pipecat.frames.frames import (
+    InterimTranscriptionFrame,
+    LLMContextUserTurnFrame,
+    TranscriptionFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
@@ -92,6 +97,24 @@ def make_native_pipeline(
             ),
         ),
     )
+    if on_event is not None:
+        latest_final = None
+
+        @aggregators.user().event_handler("on_before_process_frame")
+        async def observe_final(_processor, frame):
+            nonlocal latest_final
+            if isinstance(frame, TranscriptionFrame) and frame.text.strip():
+                latest_final = frame.metadata.get("me3_asr_final")
+
+        @aggregators.user().event_handler("on_before_push_frame")
+        async def observe_commit(_processor, frame):
+            nonlocal latest_final
+            if isinstance(frame, LLMContextUserTurnFrame) and latest_final is not None:
+                # Pipecat broadcasts this immediately after appending the user
+                # message. Consume the marker once for the two directions.
+                fields, latest_final = latest_final, None
+                on_event({"event": "asr_transcript_committed", "at": time.monotonic(), **fields})
+
     stt = McpSTTService(
         speech,
         session_id=session_id,

@@ -634,6 +634,12 @@ async def test_delayed_asr_cancel_cannot_revive_native_context_or_model_request(
             assert [m["content"] for m in context.get_messages() if m["role"] == "user"] == [
                 "current input"
             ]
+            commits = [e for e in events if e["event"] == "asr_transcript_committed"]
+            assert len(commits) == 1
+            assert commits[0]["stream_id"] == final["stream_id"]
+            assert commits[0]["utterance_id"] == final["utterance_id"] == 2
+            assert final["at"] <= commits[0]["at"] <= probe.request_at
+            assert "text" not in commits[0]
         finally:
             await runner.cancel()
             await asyncio.wait_for(task, 8)

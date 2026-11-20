@@ -1380,6 +1380,15 @@ async def test_deepgram_incremental_segments_close_boundary_and_mcp_cleanup():
     assert (result["partial"] or first["partial"])["text"] == "hello wor"
     final = await service.finish(identifier)
     assert final["text"] == "hello world" and final["final"]
+    timing = final["provider_diagnostics"]
+    assert (
+        timing["outbound_flush_completed_monotonic"]
+        <= timing["close_stream_send_started_monotonic"]
+        <= timing["close_stream_send_completed_monotonic"]
+        <= timing["last_provider_final_monotonic"]
+        <= timing["terminal_metadata_monotonic"]
+        <= timing["connection_closed_monotonic"]
+    )
     assert peer.closed and not service.operations
     assert wire.params["endpointing"] == "false" and wire.params["sample_rate"] == 16000
 
@@ -1402,6 +1411,88 @@ async def test_asr_cancel_during_receive_and_disconnected_result_never_finalizes
         await stream.finish()
     await stream.aclose()
     assert peer.closed
+
+
+@pytest.mark.parametrize("cancel_pending", [False, True])
+async def test_asr_delayed_final_segments_wait_for_metadata_and_isolate_next_utterance(
+    cancel_pending,
+):
+    class DelayedTail(Peer):
+        def __init__(self):
+            super().__init__()
+            self.close_sent = asyncio.Event()
+            self.tail_received = asyncio.Event()
+
+        async def send(self, value):
+            self.sent.append(value)
+            if value == {"type": "CloseStream"}:
+                self.close_sent.set()
+
+        async def receive(self):
+            value = await super().receive()
+            if (
+                value.get("type") == "Results"
+                and value["channel"]["alternatives"][0]["transcript"] == "tail"
+            ):
+                self.tail_received.set()
+            return value
+
+    def final_segment(text):
+        return {
+            "type": "Results",
+            "is_final": True,
+            "channel": {"alternatives": [{"transcript": text}]},
+        }
+
+    peer = DelayedTail()
+    wire = Wire(peer)
+    service = SpeechService(DeepgramASR(spec("asr"), wire), MockTTS())
+    try:
+        async with asyncio.timeout(2):
+            first = (await service.open("delayed-tail", 1))["operation_id"]
+            pcm = b"\1\0" * 512
+            await service.append(first, 0, encode_pcm(pcm))
+            finish = asyncio.create_task(service.finish(first))
+            await peer.close_sent.wait()
+            assert peer.sent == [pcm, {"type": "CloseStream"}]
+            assert not finish.done()
+            stream = service.operations[first].asr_stream
+            peer.queue.put_nowait(final_segment("opening"))
+            peer.queue.put_nowait(final_segment("tail"))
+            await peer.tail_received.wait()
+            assert not finish.done()
+            timing = stream.diagnostics()
+            assert (
+                timing["close_stream_send_completed_monotonic"]
+                <= timing["last_provider_final_monotonic"]
+            )
+            assert timing["terminal_metadata_monotonic"] is None
+            if cancel_pending:
+                assert (await service.cancel(first))["cancelled"]
+                with pytest.raises(ValueError, match="operation cancelled"):
+                    await finish
+                peer.queue.put_nowait({"type": "Metadata"})
+                assert stream.diagnostics()["terminal_metadata_monotonic"] is None
+            else:
+                peer.queue.put_nowait({"type": "Metadata"})
+                result = await finish
+                assert result["final"] and result["text"] == "opening tail"
+                timing = result["provider_diagnostics"]
+                assert (
+                    timing["last_provider_final_monotonic"]
+                    <= timing["terminal_metadata_monotonic"]
+                )
+            assert peer.closed and first not in service.operations
+            with pytest.raises(ValueError):
+                await service.finish(first)
+
+            wire.peer = Peer()
+            second = (await service.open("delayed-tail", 2))["operation_id"]
+            await service.append(second, 0, encode_pcm(pcm))
+            result = await service.finish(second)
+            assert result["turn_id"] == 2 and result["final"] and result["text"] == "world"
+    finally:
+        await service.close()
 
 
 async def test_tts_wire_packet_boundaries_first_audio_flush_and_clear_on_cancel():
