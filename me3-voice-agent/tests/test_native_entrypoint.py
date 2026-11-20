@@ -755,6 +755,27 @@ def test_native_event_projection_excludes_secrets_and_free_text():
     ]
     assert citation["citation_source_mapping_complete"] is False
     assert "raw_response" not in citation
+    rejection = _safe_event(
+        {
+            "event": "llm_citation_check",
+            "error_code": "insufficient_verified_evidence",
+            "rejection_rule": "claim_count_out_of_bounds",
+            "draft_claim_count": 3,
+            "draft_passage_ids": ["S2-P1", "S3-P1"],
+            "retained_passage_ids": ["S2-P1"],
+            "draft_source_ids": ["S2"],
+            "raw_response": "private draft",
+        }
+    )
+    assert rejection["draft_claim_count"] == 3
+    assert rejection["draft_passage_ids"] == ["S2-P1", "S3-P1"]
+    assert rejection["retained_passage_ids"] == ["S2-P1"]
+    assert rejection["draft_source_ids"] == ["S2"]
+    assert rejection["rejection_rule"] == "claim_count_out_of_bounds"
+    assert "raw_response" not in rejection
+    assert "draft_passage_ids" not in _safe_event(
+        {**rejection, "draft_passage_ids": ["https://example.invalid/private"]}
+    )
     rejected_mapping = _safe_event(
         {
             "event": "llm_citation_check",

@@ -1701,23 +1701,38 @@ class NativeLLM(OpenAILLMService):
             return
 
     def _validate_structured_research_answer(
-        self, raw, *, question="", strict_support=False, diagnostic_draft=None
+        self, raw, *, question="", strict_support=False, diagnostic_draft=None, rejection=None
     ):
         """Resolve source-owned IDs, screen explicit conflicts, and report lexical fit."""
+        trace = rejection if rejection is not None else {}
         try:
             payload = json.loads(raw)
         except (TypeError, ValueError):
             return self._validate_cited_research_prose(
-                raw, question=question, strict_support=strict_support
+                raw, question=question, strict_support=strict_support, rejection=trace
             )
         if not isinstance(payload, dict) or set(payload) != {"claims"}:
             return None, "invalid_structured_answer", [], False
         claims = payload.get("claims")
+        if rejection is not None and diagnostic_draft is None and isinstance(claims, list):
+            trace["draft_claim_count"] = len(claims)
+            trace["draft_passage_ids"] = list(
+                dict.fromkeys(
+                    c["passage_id"]
+                    for c in claims
+                    if isinstance(c, dict)
+                    and isinstance(c.get("passage_id"), str)
+                    and re.fullmatch(r"S[0-9]{1,6}-P[0-9]{1,6}", c["passage_id"])
+                )
+            )[:64]
         # An explicit abstention follows the answer contract. It is terminal,
         # not a rejected draft that warrants another model or retrieval call.
         if isinstance(claims, list) and not claims:
             return None, "research_abstained", [], False
         if not isinstance(claims, list) or not 1 <= len(claims) <= 2:
+            trace["rejection_rule"] = (
+                "claim_count_out_of_bounds" if isinstance(claims, list) else "claims_not_list"
+            )
             return None, "insufficient_verified_evidence", [], False
 
         available = self.source_ids()
@@ -1725,16 +1740,21 @@ class NativeLLM(OpenAILLMService):
         rendered = []
         for claim in claims:
             if not isinstance(claim, dict) or set(claim) != {"text", "passage_id"}:
+                if isinstance(claim, dict) and "passage_id" not in claim:
+                    trace["rejection_rule"] = "missing_passage_id"
                 return None, "invalid_structured_answer", used, False
             text = claim["text"].strip() if isinstance(claim["text"], str) else ""
             passage_id = claim["passage_id"]
             if not text or len(text) > 500:
+                trace["rejection_rule"] = "claim_text_too_long" if text else "claim_text_empty"
                 return None, "insufficient_verified_evidence", used, False
             if re.search(r"\[S\d+\]", text, flags=re.I):
                 return None, "unsupported_source", used, True
             if not isinstance(passage_id, str) or not re.fullmatch(r"S\d+-P\d+", passage_id):
+                trace["rejection_rule"] = "malformed_passage_id"
                 return None, "unsupported_evidence_passage", used, True
             if passage_id not in self._structured_research_passage_ids():
+                trace["rejection_rule"] = "passage_not_eligible"
                 return None, "unsupported_evidence_passage", used, True
             passage = self.evidence_passage_lookup(passage_id)
             source_id = passage.get("source_id") if isinstance(passage, dict) else None
@@ -1749,6 +1769,13 @@ class NativeLLM(OpenAILLMService):
                 or not isinstance(passage, dict)
                 or passage.get("text") != original
             ):
+                trace["rejection_rule"] = (
+                    "passage_owner_missing"
+                    if source_id not in available
+                    else "retained_passage_missing"
+                    if not isinstance(original, str)
+                    else "retained_passage_text_mismatch"
+                )
                 failed_sources = used + ([source_id] if source_id in available else [])
                 return None, "insufficient_verified_evidence", failed_sources, False
             claim_terms = _research_content_terms(text)
@@ -1767,6 +1794,7 @@ class NativeLLM(OpenAILLMService):
                 contradiction_codes=conflicts,
             )
             if not claim_terms:
+                trace["rejection_rule"] = "claim_content_terms_missing"
                 return None, "insufficient_verified_evidence", used + [source_id], False
             if conflicts:
                 self._rejected_research_passage = passage_id
@@ -1806,7 +1834,7 @@ class NativeLLM(OpenAILLMService):
             return None, "unavailable_citation_url", citations, False
         return " ".join(rendered), None, citations, False
 
-    def _validate_cited_research_prose(self, raw, *, question="", strict_support=False):
+    def _validate_cited_research_prose(self, raw, *, question="", strict_support=False, rejection=None):
         """Accept ordinary prose only when each claim names a retained source.
 
         OpenRouter-compatible endpoints may return a readable, explicitly
@@ -1866,6 +1894,7 @@ class NativeLLM(OpenAILLMService):
                 question=question,
                 strict_support=strict_support,
                 diagnostic_draft=raw,
+                rejection=rejection,
             )
             if failure:
                 return None, failure, used_sources + citations, invalid
@@ -2292,13 +2321,26 @@ class NativeLLM(OpenAILLMService):
                         research_finalized = True
                         raw_answer = "".join(structured_text)
                         self._rejected_research_passage = None
+                        rejection = {}
                         rendered, failure, citations, invalid_citation = (
                             self._validate_structured_research_answer(
                                 raw_answer,
                                 question=research_question,
                                 strict_support=strict_research_support,
+                                rejection=rejection,
                             )
                         )
+                        if failure:
+                            rejection["error_code"] = failure
+                            rejection.setdefault("rejection_rule", failure)
+                            rejection["draft_source_ids"] = list(
+                                dict.fromkeys(re.findall(r"\[(S[0-9]{1,6})\]", raw_answer))
+                            )[:64]
+                            rejection["retained_passage_ids"] = (
+                                self._structured_research_passage_ids()[:256]
+                            )
+                        else:
+                            rejection.clear()
                         self.on_event(
                             "llm_citation_check",
                             response_characters=len(raw_answer),
@@ -2309,6 +2351,7 @@ class NativeLLM(OpenAILLMService):
                             citation_sources=(
                                 self.citation_sources(citations) if failure is None else []
                             ),
+                            **rejection,
                         )
                         if failure:
                             self.response_failure_reason = failure

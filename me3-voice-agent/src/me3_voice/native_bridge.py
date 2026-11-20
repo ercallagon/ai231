@@ -55,6 +55,7 @@ _SAFE_EVENT_TEXT = {
     "result_status",
     "outcome",
     "reason",
+    "rejection_rule",
     "route",
     "request_id",
     "llm_request_id",
@@ -317,13 +318,19 @@ def _safe_event(event):
             except (ValueError, UnicodeError):
                 pass
     if result.get("event") == "llm_citation_check":
-        for key in ("citation_ids", "retained_source_ids"):
+        for key, pattern in (
+            ("citation_ids", r"S[0-9]{1,6}"),
+            ("retained_source_ids", r"S[0-9]{1,6}"),
+            ("draft_source_ids", r"S[0-9]{1,6}"),
+            ("draft_passage_ids", r"S[0-9]{1,6}-P[0-9]{1,6}"),
+            ("retained_passage_ids", r"S[0-9]{1,6}-P[0-9]{1,6}"),
+        ):
             values = event.get(key)
             if (
                 isinstance(values, list)
                 and len(values) <= 256
                 and all(
-                    isinstance(value, str) and re.fullmatch(r"S[0-9]{1,6}", value)
+                    isinstance(value, str) and re.fullmatch(pattern, value)
                     for value in values
                 )
             ):

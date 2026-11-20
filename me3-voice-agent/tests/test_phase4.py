@@ -1528,6 +1528,11 @@ async def test_structured_research_answer_resolves_passages_and_keeps_chat_strea
         missing = await result({"claims": [{"text": "Takaichi attended the meeting."}]})
         assert "won't guess" in missing
         assert llm.response_failure_reason == "invalid_structured_answer"
+        def citation_trace():
+            return next(e for e in reversed(events) if e["event"] == "llm_citation_check")
+
+        assert citation_trace()["rejection_rule"] == "missing_passage_id"
+        assert citation_trace()["draft_passage_ids"] == []
 
         llm.response_failure_reason = None
         invented = await result(
@@ -1542,6 +1547,19 @@ async def test_structured_research_answer_resolves_passages_and_keeps_chat_strea
         )
         assert "won't guess" in invented
         assert llm.response_failure_reason == "unsupported_evidence_passage"
+        assert citation_trace()["rejection_rule"] == "passage_not_eligible"
+        assert citation_trace()["draft_passage_ids"] == ["S1-P2"]
+        assert citation_trace()["retained_passage_ids"] == ["S1-P1", "S2-P1"]
+
+        llm.response_failure_reason = None
+        excess = await result(
+            {"claims": [{"text": "One claim.", "passage_id": "S1-P1"}] * 3}
+        )
+        assert "won't guess" in excess
+        assert citation_trace()["draft_claim_count"] == 3
+        assert citation_trace()["error_code"] == "insufficient_verified_evidence"
+        assert citation_trace()["rejection_rule"] == "claim_count_out_of_bounds"
+        assert citation_trace()["citation_ids"] == []
 
         llm.response_failure_reason = None
         irrelevant = await result(
@@ -1564,6 +1582,7 @@ async def test_structured_research_answer_resolves_passages_and_keeps_chat_strea
         )
         assert "won't guess" in mismatched_owner
         assert llm.response_failure_reason == "insufficient_verified_evidence"
+        assert citation_trace()["rejection_rule"] == "passage_owner_missing"
         passages["S1-P1"]["source_id"] = "S1"
 
         llm.response_failure_reason = None
