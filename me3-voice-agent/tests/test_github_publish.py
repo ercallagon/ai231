@@ -348,7 +348,7 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
             (201, {"sha": page_commit}),
             (200, {"ref": "refs/heads/gh-pages"}),
             (200, {"source": pages_source}),
-            (200, {"status": "built", "commit": page_commit}),
+            (200, {"status": "built", "commit": page_commit, "updated_at": "2026-11-20T19:04:00Z"}),
             (200, {"source": pages_source, "html_url": "https://private-owner.github.io/demo-repo/"}),
         ]
     )
@@ -420,6 +420,7 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
     )
 
     assert result["deployment_status"] == "verified"
+    assert result["published_at_pht"] == "2026-11-21T03:04:00+08:00"
     assert result["deployment_url"] == (
         "https://private-owner.github.io/demo-repo/"
         "me3-voice-agent/artifacts/trials/nasa-artemis/"
@@ -622,6 +623,7 @@ def test_pages_root_index_lists_only_sanitized_published_site_paths():
         ]
     )
     assert "Site One" in rendered
+    assert "From conversation to live web projects" in rendered
     assert "Site Two" in rendered
     assert "Demos" in rendered
     assert "Trials" in rendered

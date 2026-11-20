@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from datetime import datetime
 import html
 import json
 import os
@@ -11,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 from urllib.parse import quote, urlsplit
+from zoneinfo import ZoneInfo
 
 import aiohttp
 
@@ -29,6 +31,25 @@ SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. -]{0,119}$")
 MAX_FILES = 20
 MAX_TOTAL_BYTES = 512 * 1024
 ARTIFACT_BRANCH = "swift-artifacts"
+
+
+def _pages_published_at(value):
+    """Use the matching successful build's GitHub timestamp when available."""
+    if not isinstance(value, str):
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp.astimezone(ZoneInfo("Asia/Manila")).isoformat() if stamp.tzinfo else None
+
+
+def new_pages_artifact_paths(files, task_id):
+    """Map a new local site to a unique Demo directory, retaining relative paths."""
+    if not re.fullmatch(r"task_[a-f0-9]{24}", task_id):
+        raise GitHubPublishError("github_pages_artifact_path_invalid")
+    prefix = f"me3-voice-agent/artifacts/demos/{task_id[5:]}/"
+    return {_path(prefix + _path(path)): content for path, content in files.items()}
 
 
 def render_pages_index(site_paths):
@@ -99,7 +120,7 @@ def render_pages_index(site_paths):
         "@media(max-width:760px){.hero{padding:58px 0 42px}.site-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.shell{width:min(100% - 28px,1080px)}.topbar{padding:19px 0}.top-note{font-size:.72rem}.site-grid{grid-template-columns:1fr}.site-card{min-height:142px}.hero-copy{font-size:1rem}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}</style></head><body>"
         '<a class="skip-link" href="#main">Skip to published sites</a>'
         '<header class="shell topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">S</span><span>SWIFT / PUBLISHED</span></div><span class="top-note">A gallery of live work</span></header>'
-        '<main id="main" class="shell"><div class="hero"><p class="eyebrow">Made with Swift</p><h1>Small ideas.<br>Live on the web.</h1>'
+        '<main id="main" class="shell"><div class="hero"><p class="eyebrow">Made with Swift</p><h1>From conversation to live web projects</h1>'
         '<p class="hero-copy">Browse demos, experiments, and other sites that have been published and verified.</p>'
         f'<p class="total"><strong>{count:02d}</strong> {count_label}</p></div>{"".join(sections)}</main>'
         '<footer class="shell footer">Only published sites appear here. New work is listed after its deployment succeeds.</footer></body></html>\n'
@@ -488,7 +509,7 @@ class GitHubPublisher:
             raise
         except (aiohttp.ClientError, asyncio.TimeoutError):
             raise GitHubPublishError("github_pages_public_url_unavailable") from None
-        return url
+        return url, _pages_published_at(build.get("updated_at"))
 
     async def enable_pages_for_published_branch(
         self,
@@ -590,7 +611,7 @@ class GitHubPublisher:
                 )
                 if status not in {200, 201, 202, 204}:
                     raise GitHubPublishError("github_pages_configuration_failed", unknown=status >= 500)
-            url = await self._enable_and_verify_pages(
+            url, published_at = await self._enable_and_verify_pages(
                 client,
                 source_branch,
                 page_commit,
@@ -607,6 +628,7 @@ class GitHubPublisher:
             "review_commit": commit_sha,
             "deployment_url": url,
             "deployment_status": "verified",
+            **({"published_at_pht": published_at} if published_at else {}),
         }
 
     async def _commit_files_to_branch(

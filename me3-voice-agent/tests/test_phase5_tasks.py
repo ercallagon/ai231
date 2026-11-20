@@ -81,6 +81,9 @@ async def test_unfinished_task_does_not_project_private_partial_artifact(tmp_pat
         assert failed_projection["status"] == "failed"
         assert failed_projection["artifact_id"] == task["task_id"][5:]
         assert failed_projection["artifacts"] == ["game.html", "todo/index.html"]
+        assert failed_projection["absolute_path"] == str(
+            runtime.store.artifact_root / task["task_id"]
+        )
     finally:
         await runtime.close()
 
@@ -494,7 +497,8 @@ async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tm
         async def repository_visibility(self):
             return "public"
 
-        async def existing_paths(self, paths):
+        async def existing_paths(self, paths, *, ref):
+            assert ref == "swift-artifacts"
             return []
 
         async def pages_configuration(self):
@@ -615,7 +619,8 @@ async def test_github_branch_and_pages_require_distinct_approvals(
         async def repository_visibility(self):
             return "public"
 
-        async def existing_paths(self, paths):
+        async def existing_paths(self, paths, *, ref):
+            assert ref == "swift-artifacts"
             return []
 
         async def pages_configuration(self):
@@ -623,14 +628,22 @@ async def test_github_branch_and_pages_require_distinct_approvals(
 
         async def publish(self, task_id, tool_call_id, artifacts, message, **kwargs):
             self.published.append((task_id, tool_call_id, tuple(artifacts), message, kwargs))
-            return {"status": "published", "commit": "a" * 40}
+            return {
+                "status": "published",
+                "commit": "a" * 40,
+                "url": "https://github.com/public-owner/demo-repo/tree/swift-artifacts",
+            }
 
         async def enable_pages_for_published_branch(self, branch, commit, site_path, **kwargs):
             self.pages.append((branch, commit, site_path, kwargs))
-            return {"status": "deployed", "deployment_url": "https://public-owner.github.io/demo-repo/site/"}
+            return {
+                "status": "deployed",
+                "deployment_url": self.expected_pages_url(site_path),
+                "deployment_status": "verified",
+            }
 
-        def expected_pages_url(self, site_path):
-            return "https://public-owner.github.io/demo-repo/" + site_path + "/"
+        def expected_pages_url(self, site_path=""):
+            return "https://public-owner.github.io/demo-repo/" + (site_path + "/" if site_path else "")
 
     async def verify_pages_artifact(_path, **_kwargs):
         return {"available": True, "verified": True, "browser": "chromium", "errors": []}
@@ -684,7 +697,12 @@ async def test_github_branch_and_pages_require_distinct_approvals(
         assert "publicly accessible" in pages_approval["details"]
         assert "gh-pages:/" in pages_approval["details"]
         assert "stable" in pages_approval["details"]
-        assert "https://public-owner.github.io/demo-repo/site/" in pages_approval["details"]
+        destination = "me3-voice-agent/artifacts/demos/" + task["task_id"][5:] + "/site"
+        assert f"https://public-owner.github.io/demo-repo/{destination}/" in pages_approval["details"]
+        assert set(writer.published[0][2]) == {
+            f"{destination}/index.html",
+            f"{destination}/styles.css",
+        }
         assert len(writer.published) == 1
         assert writer.pages == []
 
@@ -700,6 +718,12 @@ async def test_github_branch_and_pages_require_distinct_approvals(
         )
         assert len(writer.published) == 1
         assert len(writer.pages) == (1 if pages_decision == "approve" else 0)
+        projection = runtime.store._project(runtime.store.rows[task["task_id"]])
+        assert projection["publication"]["repository_url"].endswith("/tree/swift-artifacts")
+        if pages_decision == "approve":
+            assert projection["publication"]["pages_url"] == writer.expected_pages_url(destination)
+        else:
+            assert "pages_url" not in projection["publication"]
         assert result["verification"]["effects_checked"] == 2
     finally:
         await runtime.close()

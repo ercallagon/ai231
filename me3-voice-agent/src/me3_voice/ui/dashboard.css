@@ -596,8 +596,8 @@ html[data-hidden="true"] .voice-status[data-state="thinking"] .signal-bars { ani
 .spotify-progress input:disabled { cursor: default; opacity: .6; }
 .spotify-time { display: flex; justify-content: space-between; margin-top: -9px; color: var(--muted); font-size: .6875rem; font-variant-numeric: tabular-nums; }
 .spotify-controls { display: flex; justify-content: center; align-items: center; gap: 9px; }
-.spotify-controls .button { min-width: 42px; min-height: 40px; padding: 6px; font-size: 1rem; }
-.spotify-controls #spotify-toggle { min-width: 48px; border-radius: 50%; font-size: .9375rem; }
+.spotify-controls .button { display: grid; place-items: center; min-width: 42px; min-height: 40px; padding: 6px; font-size: 1rem; }
+.spotify-controls #spotify-toggle { width: 48px; height: 48px; border-radius: 50%; font-size: .9375rem; }
 .spotify-volume { display: grid; gap: 4px; }
 .spotify-volume label { display: flex; justify-content: space-between; color: var(--muted); font-size: .75rem; }
 .spotify-volume output { color: var(--ink); font-variant-numeric: tabular-nums; }

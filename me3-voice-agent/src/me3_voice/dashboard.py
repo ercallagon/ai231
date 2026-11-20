@@ -619,6 +619,7 @@ def main():
     export.add_argument("--output", type=output_path, default="var/results/dashboard.html")
     serve = commands.add_parser("serve", help="loopback-only read-only viewer")
     serve.add_argument("--port", type=int, default=8765)
+    serve.add_argument("--open-browser", action="store_true", help="open the loopback viewer")
     feed = commands.add_parser("stream", help="sanitized JSONL report feed over stdout/SSH")
     feed.add_argument("--interval", type=float, default=2)
     args = parser.parse_args()
@@ -635,6 +636,20 @@ def main():
             parser.error("port must be 1024..65535")
         with ThreadingHTTPServer(("127.0.0.1", args.port), handler(root, args.port)) as server:
             print(f"ME3 dashboard: http://127.0.0.1:{args.port} (read only)", flush=True)
+            if args.open_browser:
+                import shutil
+                import subprocess
+
+                opener = shutil.which("xdg-open") or shutil.which("wslview")
+                if opener is not None:
+                    try:
+                        subprocess.Popen(
+                            [opener, f"http://127.0.0.1:{args.port}/"],
+                            stdin=subprocess.DEVNULL,
+                            start_new_session=True,
+                        )
+                    except OSError:
+                        print("Browser opener unavailable. Open the dashboard URL manually.")
             try:
                 server.serve_forever()
             except KeyboardInterrupt:

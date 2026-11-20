@@ -14,6 +14,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .artifacts import output_path, public_task_artifact_name
 from .async_utils import await_thread_future
@@ -21,6 +22,38 @@ from .contracts import TurnKey
 from .devices import normalize_rgb_color
 
 MAX_TEXT = 8000
+
+
+def task_publication_links(value):
+    """Keep only recognized HTTPS destinations from recorded publisher receipts."""
+    result = {}
+    if not isinstance(value, dict):
+        return result
+    for key in ("repository_url", "pages_url"):
+        url = value.get(key)
+        if not isinstance(url, str) or len(url) > 512 or any(ord(c) <= 32 for c in url):
+            continue
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            continue
+        if parsed.scheme != "https" or parsed.hostname != parsed.netloc or not parsed.path:
+            continue
+        if key == "repository_url" and parsed.hostname == "github.com":
+            result[key] = url
+        elif key == "pages_url" and parsed.hostname and parsed.hostname.endswith(".github.io"):
+            result[key] = url
+    stamp = value.get("published_at_pht")
+    if "pages_url" in result and isinstance(stamp, str) and len(stamp) <= 40:
+        try:
+            parsed_stamp = datetime.fromisoformat(stamp)
+            if parsed_stamp.isoformat().endswith("+08:00"):
+                result["published_at_pht"] = parsed_stamp.isoformat()
+        except ValueError:
+            pass
+    return result
+
+
 MAX_CHARACTERS = 100000  # Also bounds ASCII-escaped non-BMP JSON below the report file limit.
 MODES = {"mock", "HPC-live", "Pi-verified"}
 STATES = {"idle", "listening", "thinking", "speaking", "interrupted", "ended"}
@@ -336,6 +369,9 @@ def normalize_transcript(data):
         if artifacts:
             normalized_task["artifact_id"] = artifact_id
             normalized_task["artifacts"] = artifacts
+        publication = task_publication_links(row.get("publication"))
+        if publication and row["kind"] == "agent":
+            normalized_task["publication"] = publication
         if "widget" in row:
             normalized_task["widget"] = normalize_task_widget(row["widget"])
         location_fields = ("execution_target", "absolute_path", "verification_level")

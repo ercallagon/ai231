@@ -12,14 +12,21 @@ git -C ~/ai231 sparse-checkout set me3-voice-agent
 cd ~/ai231/me3-voice-agent
 bash scripts/setup.sh
 bash scripts/swift.sh check
-bash scripts/swift.sh demo
+./scripts/swift.sh demo
 ```
 
 Linux, Python 3.11–3.13 and `python3-venv` are required. HPC/x86_64 Python 3.13 and one Raspberry Pi OS/Debian 13.7 aarch64 installation with Python 3.13.5 have software smoke evidence; see the dated Pi runbook for its limits. Setup installs the editable application with `uv==0.13.4` and `uv.lock` into `var/cache/venv`. It downloads dependencies but opens no devices and uses no model API. Add `--dev` for tests or `--pi` for optional Bluetooth support. Do not copy an HPC virtual environment to the Pi. Windows users can view the browser UI; native Windows installation is not qualified.
 
 Optional automatic VPN startup: fresh Pi setup accepts `bash scripts/setup.sh --pi --vpn-profile /path/to/private-profile.ovpn`; existing installations use `bash scripts/swift.sh vpn-setup --profile /path/to/private-profile.ovpn`. Enter credentials only at the hidden Pi prompts. Then use the documented `swift.sh vpn` launch command to initialize VPN, check routes and start the bridge. Credentials stay private on the Pi; see the runbook for permissions, OS sudo requirements and current qualification limits.
 
-The `demo` command uses deterministic mock providers, memory playback and mock actions through our real Session/MCP path. It requires no account, university network, wake assets or GPIO. It does not use your microphone. To view the actual dashboard separately:
+The no-argument `demo` command runs a deterministic Pipecat/MCP smoke test,
+saves its report under `var/results/swift-demo.*/`, then serves that isolated
+report at [127.0.0.1:8765](http://127.0.0.1:8765/) and opens it on an available
+desktop. Press Ctrl+C to stop the viewer. Relaunching creates a fresh report.
+The demo uses mock inference, memory playback, and no microphone, GPIO, or
+provider credentials. For CI or a headless terminal use
+`./scripts/swift.sh demo --report-only`. To serve the checkout's existing
+reports separately:
 
 ```bash
 bash scripts/swift.sh dashboard --port 8765
@@ -30,6 +37,13 @@ Open `http://127.0.0.1:8765/`. This dashboard-only command does not start a voic
 **For real voice, model assets, credentials, hardware and Onit:** follow the [fresh-install and launch guide](deploy/rpi/README.md#fresh-checkout-installation-and-operation), then the current demo procedure below it. **University TTS requires a route from the Pi itself (university VPN/DILNET) plus an authorized key; your laptop’s OpenVPN connection is not inherited by the Pi.** See the [network checklist](deploy/rpi/README.md#network-access-on-the-pi). The native provisional profile selects OpenRouter GPT-OSS-120B for LLM requests; `configs/groq-gpt-oss-120b.rollback.json` keeps Groq explicitly selectable. Both profiles default to live requests disabled and zero request allowance. Groq ASR, if selected, requires its own key and is subject to provider limits. Spotify requires its own authorization, Premium and an actual playback receiver. Phone actions require explicitly configured recipients, paired compatible devices and permissions. Weather uses Open-Meteo without a key; its service terms apply. Optional integrations are not required for mock startup.
 
 [Architecture](docs/ARCHITECTURE.md) · [Actual results and open issues](docs/PLAN.md) · [Hardware, acceptance, troubleshooting, update and rollback](deploy/rpi/README.md)
+
+For focused development checks, install with `bash scripts/setup.sh --dev`,
+then run `PYTHONPATH=src var/cache/venv/bin/python -m pytest tests/test_dashboard.py tests/test_github_publish.py`.
+See [Benchmark reproduction](docs/BENCHMARK.md) and [recorded results](docs/REPORT.md).
+The checkout currently has no project license grant. Obtain an explicit
+license from the copyright holders before redistribution. Dependencies and
+downloadable model assets follow their upstream terms.
 
 
 Provider credentials use model-qualified names in new profiles: `ME3_DEEPGRAM_API_KEY`, `ME3_OPENROUTER_API_KEY`, `ME3_GROQ_API_KEY`, `ME3_QWEN_ASR_API_KEY`, `ME3_QWEN_LLM_API_KEY`, and `ME3_QWEN_TTS_API_KEY`. Enter keys locally with the masked helper, for example `PYTHONPATH=src var/cache/venv/bin/python scripts/configure_provider_keys.py openrouter-gpt-oss-120b --output var/cache/openrouter-gpt-oss-keys.env`. This writes a mode-0600, no-overwrite file under ignored `var/cache/` and sends no request. For the bridge, pass provider credentials in `--secrets-file` and the selected reasoning key in `--llm-secrets-file`. Never paste API keys into chat, source, or command-line arguments. Existing role-generic names remain accepted for older profiles but should not be used for new provider configurations.
@@ -44,6 +58,21 @@ bash scripts/swift.sh setup --interactive
 Use `--profile pi-primary` to prepare Pi credentials for Nova-3 and Aura-2 via Deepgram, GPT-OSS and Haiku via OpenRouter, and native Tavily research. This uses `configs/native-demo-{backends,runtime}.json` with the Pi stores `var/cache/demo-models.env` and `var/cache/pi_live-devices.json`. Setup prepares those files for a later launch. `--profile pi` retains the existing five-turn Groq/Whisper/Qwen option, and `--profile laptop` uses the laptop stores. Automatic selection continues to use `pi` on Raspberry Pi or when the Pi backend file exists.
 
 Status is offline and reports credential presence only. In interactive mode, Enter keeps existing values or skips missing ones. Use `a` or `u` to add or update a hidden secret. Device fields are edited individually, `!` clears supported fields, and private contact/phone prompts are hidden. Secret files and Pi device/contact JSON remain owner-only and are updated atomically without replacing unrelated keys/settings. The Soloist key and Connect pairing are sufficient for receiver use. Swift's Spotify voice controls use the Spotify Web API and require the separate Spotify OAuth step. Skip that step if you only want to use Soloist as a receiver. The wizard offers GitHub, Spotify and Soloist setup as selectable steps and leaves optional Onit setup to its legacy utility.
+
+For a Pi software smoke from a fresh checkout, install and launch with
+`bash scripts/setup.sh --pi && ./scripts/swift.sh demo`. Port 8765 must be
+free. On a headless Pi, forward it over SSH and open the loopback URL on your
+laptop. The live production bridge has a separate launch procedure in the
+[Pi runbook](deploy/rpi/README.md).
+
+Native coding tasks use a private per-task directory under
+`${XDG_STATE_HOME:-$HOME/.local/state}/swift-me3/workspace` by default.
+The task card reports saved file locations and offers downloads. When you
+request publication, Swift uses the repository selected in guided setup.
+A new website with no explicit destination goes under
+`me3-voice-agent/artifacts/demos/<task-id>/`. Swift asks first to push the
+files, then separately to publish them on Pages. The task card links to the
+GitHub branch and adds the Pages link when the deployment has been verified.
 
 The Python package/module remains `me3_voice`; moving the checkout does not rename it. Run commands from the project root. All credentials, models, logs, recordings and outputs stay in ignored `var/`; source code never implicitly reads ME2 or another coursework checkout. Preserve the original recordings on the development machine rather than publishing them.
 

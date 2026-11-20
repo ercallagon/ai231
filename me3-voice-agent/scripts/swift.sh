@@ -93,7 +93,16 @@ case "$command" in
     "$uv_bin" pip check --python "$python_bin"
     "$python_bin" -B -c 'import aiohttp, mcp, numpy, pipecat, soxr, sherpa_onnx, sentencepiece; print("Runtime imports OK; no devices opened")'
     exec "$python_bin" -B -m me3_voice.preflight "$@" ;;
-  demo) exec "$python_bin" -B -m me3_voice.cli demo "$@" ;;
+  demo)
+    if [[ "${1:-}" == --report-only ]]; then shift; exec "$python_bin" -B -m me3_voice.cli demo "$@"; fi
+    if (( $# )); then exec "$python_bin" -B -m me3_voice.cli demo "$@"; fi
+    # Keep the smoke report and transcript separate from the production session.
+    mkdir -p var/results
+    demo_workspace="$(mktemp -d "$PWD/var/results/swift-demo.XXXXXXXX")"
+    cd "$demo_workspace"
+    mkdir -p var/results
+    "$python_bin" -B -m me3_voice.cli demo --transcript
+    exec "$python_bin" -B -m me3_voice.dashboard serve --open-browser ;;
   dashboard) exec "$python_bin" -B -m me3_voice.dashboard serve "$@" ;;
   bridge) exec "$python_bin" -B -m me3_voice.voice_bridge "$@" ;;
   laptop-demo)
