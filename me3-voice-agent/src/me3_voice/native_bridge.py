@@ -79,6 +79,53 @@ def _voice_readiness(speech_owner_live, services):
     return configured, ready
 
 
+def _parse_wpctl_volume(output):
+    """Return PipeWire's reported default-sink level, or None for unknown output."""
+    match = re.search(r"(?:^|\s)Volume:\s*(0(?:\.\d+)?|1(?:\.0+)?)(?![\d.])", output)
+    if not match:
+        return None
+    value = float(match.group(1))
+    return value if 0.0 <= value <= 1.0 else None
+
+
+async def _pipewire_output_volume(level=None):
+    """Read or adjust only the local PipeWire default sink via fixed wpctl args."""
+    if level is not None:
+        if type(level) not in (int, float) or not 0 <= level <= 1:
+            return None
+    try:
+        if level is not None:
+            process = await asyncio.create_subprocess_exec(
+                "wpctl",
+                "set-volume",
+                "@DEFAULT_AUDIO_SINK@",
+                f"{level:.2f}",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                "wpctl",
+                "get-volume",
+                "@DEFAULT_AUDIO_SINK@",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+    except OSError:
+        return None
+    try:
+        stdout, _ = await asyncio.wait_for(process.communicate(), timeout=2)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        return None
+    if process.returncode != 0:
+        return None
+    if level is not None:
+        return await _pipewire_output_volume()
+    return _parse_wpctl_volume(stdout.decode("utf-8", errors="replace"))
+
+
 def _safe_event(event):
     """Retain timing and symbolic diagnostics, never speech, prompts or credentials."""
     result = {}
@@ -1233,6 +1280,48 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
     music = state.tasks.music.capabilities()
     last_music_command = 0.0
 
+    output_volume_lock = asyncio.Lock()
+    last_output_volume_update = 0.0
+
+    async def output_volume(request):
+        nonlocal last_output_volume_update
+        local_request(request)
+        if request.method == "POST":
+            if request.headers.get("Origin") != "http://" + request.headers.get("Host", ""):
+                raise web.HTTPForbidden()
+            if request.content_type != "application/json":
+                raise web.HTTPUnsupportedMediaType()
+            try:
+                value = await request.json()
+            except (ValueError, json.JSONDecodeError):
+                raise web.HTTPBadRequest(text="Invalid speaker volume") from None
+            level = value.get("volume") if isinstance(value, dict) else None
+            if (
+                not isinstance(value, dict)
+                or set(value) != {"volume"}
+                or type(level) not in (int, float)
+                or not 0.0 <= level <= 1.0
+            ):
+                raise web.HTTPBadRequest(text="Speaker volume must be between 0 and 1")
+            now = time.monotonic()
+            if now - last_output_volume_update < 0.15:
+                raise web.HTTPTooManyRequests(text="Wait before changing speaker volume again")
+            last_output_volume_update = now
+            async with output_volume_lock:
+                current = await _pipewire_output_volume(float(level))
+        else:
+            current = await _pipewire_output_volume()
+        if current is None:
+            return web.json_response(
+                {"available": False, "scope": "local_default_output_sink", "volume": None},
+                status=503,
+                headers={"Cache-Control": "no-store"},
+            )
+        return web.json_response(
+            {"available": True, "scope": "local_default_output_sink", "volume": current},
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def capability(request):
         local_request(request)
         from .capability_report import build_capability_report
@@ -1990,6 +2079,8 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
     app.router.add_get("/api/health", health)
     app.router.add_post("/api/session/prepare", prepare_session)
     app.router.add_post("/api/health/provider-check", check_provider_connectivity)
+    app.router.add_get("/api/audio/output-volume", output_volume)
+    app.router.add_post("/api/audio/output-volume", output_volume)
     app.router.add_get("/api/snapshot", reports)
     app.router.add_get("/api/voice/tasks/{artifact_id}/artifacts/{name:.*}", task_artifact)
     app.router.add_get("/api/voice/capabilities", capability)

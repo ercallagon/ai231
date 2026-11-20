@@ -844,6 +844,10 @@
     if(!value||!['playing','paused','not_playing','buffering','unavailable'].includes(value.status))return;
     const m=runtime.music;
     if(source==='api'&&m.capabilities?.output_backend==='web_playback_sdk'&&(!m.sdkReady||value.target_matched!==true))return;
+    if(source==='api'&&m.capabilities?.output_backend==='spotify_connect'&&value.target_matched!==true){
+      m.state={status:'not_playing',output_backend:'spotify_connect',device_name:null,track:null,progress_ms:null,duration_ms:null,volume_percent:null,supports_volume:false,audible:null,reported:true,target_matched:false,disallows:{},source};
+      m.statusError='';m.stateStale=false;m.stateUpdatedAt=performance.now();renderMusic();return;
+    }
     if(source==='api'&&m.sdkReady&&m.state?.source==='sdk'){
       m.state.volume_percent=numeric(value.volume_percent)?value.volume_percent:null;
       m.state.supports_volume=value.supports_volume===true;
@@ -854,6 +858,7 @@
     const artists=typeof track?.artists==='string'?track.artists.slice(0,240):'';
     runtime.music.state={
       status:value.status,
+      target_matched:value.target_matched===true,
       output_backend:source==='sdk'?'web_playback_sdk':value.output_backend,
       device_name:typeof value.device_name==='string'?value.device_name.slice(0,80):null,
       track:track?{name:typeof track.name==='string'?track.name.slice(0,160):'Unknown track',artists,artwork:safeArtwork(track.artwork)}:null,
@@ -910,7 +915,7 @@
     let outputLabel;
     if(browser){
       outputLabel=state?.source==='sdk'?'Swift · this browser':m.sdkReady&&state?.device_name?`Swift ready · active Spotify: ${state.device_name}`:m.sdkReady?'Swift · this browser ready':m.sdkConnecting?'Connecting this browser…':'Browser player ready to connect';
-    }else if(cap.device_name&&state?.device_name&&cap.device_name!==state.device_name){outputLabel=`Active: ${state.device_name} · Target: ${cap.device_name}`;}
+    }else if(cap.target_configured&&state?.target_matched!==true){outputLabel=`${cap.device_name||'Configured receiver'} · not active`;}
     else outputLabel=state?.device_name?`Spotify Connect · ${state.device_name}`:cap.device_name?`Spotify Connect · ${cap.device_name}`:'Spotify Connect · waiting for player';
     text('spotify-output-label',outputLabel);
     text('spotify-track-title',track?.name||(state?.status==='unavailable'?'Playback status unavailable':'Nothing playing'));
@@ -950,9 +955,28 @@
     if(!caption&&state?.status==='unavailable')caption='Spotify status is unavailable. Check authorization and network access.';
     if(!caption&&state?.status==='playing')caption=`Spotify reports playback on ${state.device_name||'the selected player'}. Sound is not acoustically verified.`;
     if(!caption&&state?.status==='paused')caption='Spotify reports playback paused.';
-    if(!caption&&state?.status==='not_playing')caption=cap.target_configured?'The configured Spotify player is ready when it appears online.':'No active Spotify playback is reported.';
+    if(!caption&&state?.status==='not_playing')caption=cap.target_configured&&state?.target_matched!==true?`${cap.device_name||'The configured receiver'} is not the active Spotify player.`:cap.target_configured?'The configured Spotify player is online and not playing.':'No configured Spotify playback is confirmed.';
     text('spotify-caption',caption||'Waiting for Spotify playback state.');
   }
+  async function refreshOutputVolume(){
+    const slider=$('output-volume'),output=$('output-volume-value');
+    try{
+      const response=await fetch('/api/audio/output-volume',{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(2500)});
+      const result=response.ok?await response.json():null;
+      if(!result?.available||!numeric(result.volume)||result.volume<0||result.volume>1)throw new Error('unavailable');
+      slider.value=String(result.volume);output.textContent=`${Math.round(result.volume*100)}%`;slider.disabled=false;
+    }catch(_){slider.disabled=true;output.textContent='N/A';}
+  }
+  $('output-volume').addEventListener('input',event=>text('output-volume-value',`${Math.round(Number(event.currentTarget.value)*100)}%`));
+  $('output-volume').addEventListener('change',async event=>{
+    const slider=event.currentTarget,level=Number(slider.value);slider.disabled=true;
+    try{
+      const response=await fetch('/api/audio/output-volume',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(5000),body:JSON.stringify({volume:level})});
+      const result=response.ok?await response.json():null;
+      if(!result?.available||!numeric(result.volume))throw new Error('unavailable');
+      slider.value=String(result.volume);text('output-volume-value',`${Math.round(result.volume*100)}%`);slider.disabled=false;
+    }catch(_){showNotice('Speaker volume could not be changed on the Swift bridge machine.','error');await refreshOutputVolume();}
+  });
   async function registerSpotifyDevice(type,deviceId){
     const response=await fetch('/api/voice/music/device',{method:'POST',headers:{'Content-Type':'application/json'},cache:'no-store',signal:AbortSignal.timeout(8000),body:JSON.stringify({type,device_id:deviceId})});
     if(!response.ok)throw new Error('Spotify player registration failed.');
@@ -1050,6 +1074,9 @@
   function musicStatusUnavailable(){
     const m=runtime.music;
     if(m.sdkReady&&m.state?.source==='sdk')return;
+    if(m.capabilities?.output_backend==='spotify_connect'){
+      m.state=null;m.stateStale=true;m.statusError='Could not confirm playback on the configured receiver.';renderMusic();return;
+    }
     if(m.state&&!m.stateStale&&m.state.status==='playing'&&m.state.progress_ms!==null)m.state.progress_ms+=Math.max(0,performance.now()-m.stateUpdatedAt);
     m.stateStale=true;m.statusError='Playback status temporarily unavailable. Showing the last confirmed state.';renderMusic();
   }
@@ -1303,7 +1330,7 @@
     void refreshServiceHealth();
     if(runtime.music.connectRequested&&runtime.music.capabilitiesLoaded){if(runtime.music.capabilities?.configured&&runtime.music.capabilities.browser_player)loadSpotifySdk();else runtime.music.connectRequested=false;}
   }).catch(()=>{runtime.music.capabilitiesError=true;runtime.music.message='Swift could not read Spotify setup from the voice bridge. Check its connection and refresh.';renderMusic();});
-  if(livePage){void refreshServiceHealth();setInterval(()=>{if(!document.hidden)void refreshServiceHealth();},5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refreshServiceHealth();});}
+  if(livePage){void refreshOutputVolume();void refreshServiceHealth();setInterval(()=>{if(!document.hidden)void refreshServiceHealth();},5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refreshServiceHealth();});}
   setInterval(()=>{if(!document.hidden&&(sourceMode==='server'||sourceMode==='folder'))refresh();},2000);
   paint();
 })();
