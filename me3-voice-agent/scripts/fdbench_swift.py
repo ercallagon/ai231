@@ -29,6 +29,7 @@ PINNED_BENCHMARK = "57eaddbc188ce9a19b8fd002b575f703426956f4"
 PINNED_STAGE_BENCHMARK = PINNED_BENCHMARK
 DEFAULT_BENCHMARK_ROOT = PROJECT_ROOT / "var/cache/fd-benchmark-reference"
 DEFAULT_RUNS_ROOT = PROJECT_ROOT / "var/results/fdbench-swift"
+STAGE_RUNS_ROOT = PROJECT_ROOT / "var/results/fdbench-swift-stage"
 BENCHMARK_ROOT = Path(os.environ.get("SWIFT_FDBENCH_ROOT", DEFAULT_BENCHMARK_ROOT))
 if str(BENCHMARK_ROOT) not in sys.path:
     sys.path.insert(0, str(BENCHMARK_ROOT))
@@ -103,6 +104,46 @@ _TOKEN_FIELDS = (
     "requests_with_actual_usage",
 )
 
+_STAGE_NAMES = {
+    "vad_speech_stopped": "vad_end",
+    "asr_final": "asr_final",
+    "llm_provider_request_started": "llm_request",
+    "llm_first_token": "llm_first_token",
+    "llm_usage": "llm_usage",
+    "tts_progress_start": "tts_request",
+    "tts_progress_pcm": "tts_first_audio",
+    "tts_start": "tts_request",
+    "tts_pcm": "tts_first_audio",
+    "playback_packet": "audio_out",
+}
+
+
+def _publish_stage_marks(store, events, transcripts, *, src):
+    """Use Pi timestamps, with WSL receive times only for audio-clock alignment."""
+    finals = sum(row["event"] == "asr_final" for row, _ in events)
+    # The bridge emits final timing and committed text on separate messages.
+    # A single final and single committed user row in a fresh session can
+    # be aligned without guessing. An empty ASR mark would score as a deletion.
+    text = next(iter(transcripts.values())) if finals == len(transcripts) == 1 else None
+    requests = set()
+    for row, received in events:
+        name = row["event"]
+        mark = {"stage": _STAGE_NAMES[name], "t": row["at"]}
+        if name == "asr_final":
+            if text is None:
+                continue
+            mark["text"] = text
+        elif name == "llm_provider_request_started":
+            if row.get("request_id"):
+                requests.add(row["request_id"])
+        elif name == "llm_first_token" and (text is None or row.get("request_id") not in requests):
+            # The scorer otherwise falls back to request-to-token for missing ASR.
+            # Local fast routes emit a synthetic token without a provider request.
+            continue
+        elif name == "llm_usage" and type(row.get("prompt_tokens")) is int:
+            mark["prompt_tokens"] = row["prompt_tokens"]
+        store.add(mark, recv=received, src=src)
+
 
 def encode_pcm16_mono(normalized_pcm: np.ndarray) -> bytes:
     """Convert fdbench float32 [-1, 1] samples to the bridge's signed PCM16 wire format."""
@@ -175,7 +216,9 @@ class SwiftWebSocketRig(RigBase):
 
     name = "swift-native-websocket"
 
-    def __init__(self, base_url: str, *, chunk_ms: int = 32, connect_timeout: float = 12):
+    def __init__(
+        self, base_url: str, *, chunk_ms: int = 32, connect_timeout: float = 12, marks=None
+    ):
         super().__init__(chunk_ms)
         parsed = urlsplit(base_url)
         if (
@@ -197,6 +240,9 @@ class SwiftWebSocketRig(RigBase):
         self._output_packets: queue.Queue = queue.Queue()
         self._pcm = deque()
         self._native_events: list[dict] = []
+        self.marks = marks
+        self._stage_events: list[tuple[dict, float]] = []
+        self._stage_transcripts: dict[str, str] = {}
         self._transcripts: list[str] = []
         self._assistant_text: list[str] = []
         self._event_lock = threading.Lock()
@@ -341,6 +387,15 @@ class SwiftWebSocketRig(RigBase):
                 if not isinstance(row, dict) or row.get("status") != "final":
                     continue
                 text = row.get("text")
+                if (
+                    self.marks is not None
+                    and row.get("role") == "user"
+                    and row.get("delivery") == "asr_final"
+                    and isinstance(row.get("id"), str)
+                    and isinstance(text, str)
+                    and text.strip()
+                ):
+                    self._stage_transcripts[row["id"]] = text
                 if isinstance(text, str) and text and len(text) <= 1000:
                     target = (
                         self._transcripts if row.get("role") == "user" else self._assistant_text
@@ -371,7 +426,14 @@ class SwiftWebSocketRig(RigBase):
                 and count_same
             ):
                 return
-            self._native_events.append({key: row[key] for key in _TRACE_FIELDS if key in row})
+            projected = {key: row[key] for key in _TRACE_FIELDS if key in row}
+            self._native_events.append(projected)
+            if (
+                self.marks is not None
+                and name in _STAGE_NAMES
+                and type(projected.get("at")) in (int, float)
+            ):
+                self._stage_events.append((projected, time.monotonic()))
         if name == "voice_latency":
             self._latency.set()
         elif name in {"turn_completed", "turn_failed", "turn_error"}:
@@ -393,6 +455,8 @@ class SwiftWebSocketRig(RigBase):
         self._worker_error = None
         self._ready_message = {}
         self._native_events = []
+        self._stage_events = []
+        self._stage_transcripts = {}
         self._transcripts = []
         self._assistant_text = []
         self._output_packets = queue.Queue()
@@ -477,6 +541,21 @@ class SwiftWebSocketRig(RigBase):
                 self._pcm[0][2] = consumed
         return output
 
+    def _drain_until(self, event: threading.Event, timeout: float) -> None:
+        """Keep the playback ACK clock running after the scored track freezes."""
+        deadline = time.monotonic() + timeout
+        period = self.chunk / SR
+        while not event.is_set() and not self._worker_done.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining < period:
+                if remaining > 0:
+                    event.wait(remaining)
+                return
+            # Consume at the usual playout rate without adding scored audio
+            # or sending additional microphone input to the native bridge.
+            if not event.wait(period) and not self._worker_done.is_set():
+                self._next_output(self.chunk)
+
     def _require_health(self, health: dict, *, idle: bool) -> None:
         if health.get("bridge") != "ready" or health.get("engine") != "native":
             raise RuntimeError("Swift benchmark target is not a ready native bridge")
@@ -512,9 +591,11 @@ class SwiftWebSocketRig(RigBase):
                     next_tick = time.monotonic()
             if not session.done.is_set():
                 raise TimeoutError("official benchmark trial exceeded its declared max_duration")
+            scored_stage_events = list(self._stage_events)
+            capture_acks = self._packet_acknowledgements
             if active and session.bot_starts:
-                self._terminal.wait(timeout=3)
-                self._latency.wait(timeout=2)
+                self._drain_until(self._terminal, timeout=3)
+                self._drain_until(self._latency, timeout=2)
         finally:
             with self._sess_lock:
                 self._sess = None
@@ -543,6 +624,10 @@ class SwiftWebSocketRig(RigBase):
         reset_verified = isinstance(current_session, str) and current_session != reset_from_session
         if not reset_verified:
             raise RuntimeError("Swift did not create a fresh session after the benchmark reset")
+        if self.marks is not None:
+            _publish_stage_marks(
+                self.marks, scored_stage_events, self._stage_transcripts, src=self.base_url
+            )
         rec.notes.update(
             {
                 "rig": self.name,
@@ -576,6 +661,7 @@ class SwiftWebSocketRig(RigBase):
                 "provider_usage_scope": "bridge ledger delta across this isolated trial; unrelated concurrent background requests may contribute",
                 "output_pcm_bytes": self._output_bytes,
                 "output_packets_acknowledged": self._packet_acknowledgements,
+                "post_capture_packets_acknowledged": self._packet_acknowledgements - capture_acks,
                 "input_ingress": {
                     "frames_sent": self._input_frames_sent,
                     "bytes_sent": self._input_bytes_sent,
@@ -599,7 +685,7 @@ class SwiftWebSocketRig(RigBase):
         return rec
 
 
-def verify_benchmark_checkout(root: Path) -> None:
+def verify_benchmark_checkout(root: Path, *, stage_only: bool = False) -> None:
     root = root.resolve()
     if not root.is_relative_to(PROJECT_ROOT / "var"):
         raise ValueError("Pinned AI231 checkout must remain under ignored project var/")
@@ -609,14 +695,29 @@ def verify_benchmark_checkout(root: Path) -> None:
         capture_output=True,
         text=True,
     ).stdout.strip()
-    if actual != PINNED_BENCHMARK:
-        raise RuntimeError(f"Expected pinned AI231 benchmark {PINNED_BENCHMARK}; found {actual}")
+    expected = PINNED_STAGE_BENCHMARK if stage_only else PINNED_BENCHMARK
+    if actual != expected:
+        raise RuntimeError(f"Expected pinned AI231 benchmark {expected}; found {actual}")
     if not (root / "datasets/manifest.json").is_file():
         raise FileNotFoundError("Pinned AI231 dataset manifest is missing")
 
 
-def _install_official_runner(root: Path, bridge_url: str, output_root: Path) -> None:
-    verify_benchmark_checkout(root)
+def _validate_resume_run(resume_dir: Path, output_root: Path) -> Path:
+    run = resume_dir.resolve()
+    root = output_root.resolve()
+    if (
+        not run.is_relative_to(root)
+        or not (run / "session.json").is_file()
+        or not (run / "queue.json").is_file()
+    ):
+        raise ValueError("resume is limited to a saved run under this ignored output root")
+    return run
+
+
+def _install_official_runner(
+    root: Path, bridge_url: str, output_root: Path, *, stage_only: bool = False
+) -> None:
+    verify_benchmark_checkout(root, stage_only=stage_only)
     if not output_root.resolve().is_relative_to(PROJECT_ROOT / "var"):
         raise ValueError("Benchmark runs and recordings must stay under ignored project var/")
     import fdbench.cli as cli
@@ -629,7 +730,14 @@ def _install_official_runner(root: Path, bridge_url: str, output_root: Path) -> 
     cli.load_dotenv = lambda: (
         None
     )  # provider credentials belong to the ME3 bridge, not fdbench/.env
-    cli._direct_rig = lambda _args, _run_dir=None: SwiftWebSocketRig(bridge_url)
+    if stage_only:
+        from fdbench.marks import MarksStore
+
+        cli._direct_rig = lambda _args, _run_dir=None: SwiftWebSocketRig(
+            bridge_url, marks=MarksStore()
+        )
+    else:
+        cli._direct_rig = lambda _args, _run_dir=None: SwiftWebSocketRig(bridge_url)
     original_run_trial = Runner._run_trial
 
     def run_trial_once(self, *args, **kwargs):
@@ -663,7 +771,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmark-root", type=Path, default=BENCHMARK_ROOT)
     parser.add_argument("--bridge-url", default="http://127.0.0.1:18770")
-    parser.add_argument("--runs-root", type=Path, default=DEFAULT_RUNS_ROOT)
+    parser.add_argument("--runs-root", type=Path)
+    parser.add_argument(
+        "--stage-only", action="store_true", help="run the official 10 × 3 stage test"
+    )
     options, official_args = parser.parse_known_args(argv)
     if official_args and official_args[0] == "run":
         official_args = official_args[1:]
@@ -678,7 +789,6 @@ def main(argv=None) -> int:
         "--recordings",
         "--port",
         "--reset-cmd",
-        "--resume",
     )
     if any(
         flag == item or flag.startswith(item + "=")
@@ -698,7 +808,38 @@ def main(argv=None) -> int:
             parser.error("one bounded official batch is limited to the harness's first round")
         if value.startswith("--rounds=") and value.split("=", 1)[1] != "1":
             parser.error("one bounded official batch is limited to the harness's first round")
-    _install_official_runner(root, options.bridge_url, options.runs_root)
+    if options.stage_only:
+        if official_args:
+            parser.error("Stage-only mode fixes the official plan at 10 phrases × 3 runs, seed 1")
+        official_args = [
+            "--rounds",
+            "0",
+            "--phrases",
+            "10",
+            "--runs",
+            "3",
+            "--seed",
+            "1",
+            "--judge-provider",
+            "none",
+            "--marks-port",
+            "0",
+        ]
+    output_root = options.runs_root or (
+        STAGE_RUNS_ROOT if options.stage_only else DEFAULT_RUNS_ROOT
+    )
+    for index, value in enumerate(official_args):
+        if value == "--resume" and index + 1 < len(official_args):
+            try:
+                _validate_resume_run(Path(official_args[index + 1]), output_root)
+            except ValueError:
+                parser.error("resume is limited to a saved run under this ignored output root")
+        elif value.startswith("--resume="):
+            try:
+                _validate_resume_run(Path(value.split("=", 1)[1]), output_root)
+            except ValueError:
+                parser.error("resume is limited to a saved run under this ignored output root")
+    _install_official_runner(root, options.bridge_url, output_root, stage_only=options.stage_only)
     sys.argv = [
         "fdbench",
         "run",

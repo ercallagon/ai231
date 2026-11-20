@@ -17,6 +17,29 @@ def test_full_duplex_and_stage_adapters_use_professor_revision_57eaddbc():
     assert fdbench_swift.PINNED_STAGE_BENCHMARK == expected
 
 
+def test_resume_is_limited_to_complete_saved_run_under_output_root(tmp_path):
+    import pytest
+
+    output = tmp_path / "runs"
+    run = output / "SwiftME3" / "saved-round"
+    run.mkdir(parents=True)
+    (run / "session.json").write_text("{}")
+    (run / "queue.json").write_text("{}")
+    assert fdbench_swift._validate_resume_run(run, output) == run.resolve()
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "session.json").write_text("{}")
+    (outside / "queue.json").write_text("{}")
+    with pytest.raises(ValueError, match="ignored output root"):
+        fdbench_swift._validate_resume_run(outside, output)
+
+    incomplete = output / "incomplete"
+    incomplete.mkdir()
+    with pytest.raises(ValueError, match="ignored output root"):
+        fdbench_swift._validate_resume_run(incomplete, output)
+
+
 def _health(run_id="fixture-run", *, usage=0, session="idle"):
     return {
         "bridge": "ready",
@@ -223,3 +246,171 @@ def test_pcm16_encoding_preserves_float_audio_level():
     samples = np.array([-1.0, -0.5, 0.5, 1.0], dtype=np.float32)
     encoded = np.frombuffer(fdbench_swift.encode_pcm16_mono(samples), dtype="<i2")
     assert encoded.tolist() == [-32768, -16384, 16384, 32767]
+
+
+def test_stage_cli_builds_official_thirty_item_plan_without_running(monkeypatch):
+    import pytest
+
+    pytest.importorskip("fdbench.marks")
+    from fdbench import cli
+    from fdbench.datasets import Dataset
+    from fdbench.queue import build_plan
+
+    def inspect_launch(args):
+        assert (args.rounds, args.phrases, args.runs, args.seed) == (0, 10, 3, 1)
+        assert args.judge_provider == "none" and args.marks_port == 0
+        ds = Dataset(Path(args.datasets))
+        plan = build_plan(
+            ds, rounds=args.rounds, seed=args.seed, phrases=args.phrases, runs=args.runs
+        )
+        assert len(plan.items) == 30
+        assert {item.group for item in plan.items} == {"stage_latency"}
+        clips = [{item.clip_id for item in plan.items if item.round == r} for r in (1, 2, 3)]
+        assert len(clips[0]) == 10 and clips[0] == clips[1] == clips[2]
+        assert all(
+            clip.meta.get("text") for clip in ds.clips("stage_latency") if clip.id in clips[0]
+        )
+        assert cli._direct_rig(args).marks is not None
+        assert cli.RUNS_DIR == fdbench_swift.STAGE_RUNS_ROOT
+        return 0
+
+    # Capture the real upstream parser's launch plan without I/O to a bridge.
+    monkeypatch.setattr(cli, "cmd_run", inspect_launch)
+    monkeypatch.setattr(sys, "argv", ["fdbench_swift"])
+    monkeypatch.setattr(cli, "_direct_rig", cli._direct_rig)
+    monkeypatch.setattr(cli, "cmd_check", cli.cmd_check)
+    monkeypatch.setattr(cli, "load_dotenv", cli.load_dotenv)
+    monkeypatch.setattr(cli, "RUNS_DIR", cli.RUNS_DIR)
+    import fdbench.util as util
+    from fdbench.runner import Runner
+
+    monkeypatch.setattr(util, "RUNS_DIR", util.RUNS_DIR)
+    monkeypatch.setattr(Runner, "_run_trial", Runner._run_trial)
+    assert fdbench_swift.main(["--stage-only"]) == 0
+
+
+def test_stage_marks_align_transcript_and_emit_official_artifacts(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    marks = pytest.importorskip("fdbench.marks")
+    from fdbench.report.files import write_results
+    from fdbench.runner import Runner
+    from fdbench.score import stages
+
+    store = marks.MarksStore()
+    rig = fdbench_swift.SwiftWebSocketRig("http://fixture.invalid", marks=store)
+    events = [
+        ("vad_speech_stopped", 1.0, {}),
+        ("asr_final", 1.2, {}),
+        ("llm_provider_request_started", 1.3, {"request_id": "answered"}),
+        ("llm_first_token", 1.4, {}),  # local synthetic token
+        ("llm_first_token", 1.8, {"request_id": "answered"}),
+        ("tts_start", 2.0, {}),
+        ("tts_pcm", 2.4, {}),
+        ("playback_packet", 2.5, {}),
+        ("llm_usage", 2.6, {"prompt_tokens": 101}),
+    ]
+    for event, ts, fields in events:
+        monkeypatch.setattr(fdbench_swift.time, "monotonic", lambda ts=ts: 100 + ts)
+        rig._receive_json({"type": "runtime_event", "data": {"event": event, "at": ts, **fields}})
+
+    transcript = {
+        "id": "1:user",
+        "role": "user",
+        "status": "final",
+        "delivery": "asr_final",
+        "text": "Open the red door.",
+    }
+    snapshot = {"type": "transcript", "data": {"messages": [transcript]}}
+    # Neither arrival order nor repeat snapshots change the Pi ASR timestamp.
+    rig._receive_json(snapshot)
+    rig._receive_json(snapshot)
+    fdbench_swift._publish_stage_marks(
+        store, rig._stage_events, rig._stage_transcripts, src=rig.base_url
+    )
+    assert (
+        Runner._trial_marks(
+            SimpleNamespace(marks=store), tmp_path, SimpleNamespace(mono0=100.0, duration=4.0)
+        )
+        == 8
+    )
+    rows = stages.read_marks(tmp_path)
+    result = stages.turn_stages(rows, 0.9, 2.5, "Open the blue door.")
+    assert result["transcript"] == transcript["text"]
+    assert result["wer"]["wer"] == pytest.approx(0.25)
+    assert result["asr_final"] == 0.2
+    assert result["llm_ttft"] == 0.6
+    assert result["tts_ttfb"] == 0.4
+    assert result["e2e"] == 1.5
+    assert result["context_tokens"] == 101
+    trial = {
+        "trial": "r01_stage_latency_fixture",
+        "group": "stage_latency",
+        "clip": "fixture",
+        "clip_meta": {"text": "Open the blue door."},
+        "final": {"stages": result},
+    }
+    metrics = stages.aggregate([trial], tmp_path)
+    write_results(tmp_path, {"metrics": metrics, "trials": 1}, {}, None, None)
+    for name in ("stage_latency.json", "results.json", "summary.md", "latency_chart.svg"):
+        assert (tmp_path / name).stat().st_size > 0
+    assert json.loads((tmp_path / "results.json").read_text())["metrics"]["course.wer"]["n"] == 1
+
+    ambiguous = marks.MarksStore()
+    fdbench_swift._publish_stage_marks(
+        ambiguous, rig._stage_events, {"1:user": "first", "2:user": "second"}, src=rig.base_url
+    )
+    assert "asr_final" not in ambiguous.stages_seen
+    assert "llm_first_token" not in ambiguous.stages_seen
+
+
+def test_post_capture_drains_acks_for_completion_and_failure_recovery(monkeypatch):
+    rig = fdbench_swift.SwiftWebSocketRig("http://fixture.invalid")
+    script = TrialScript(play_first=np.zeros(rig.chunk, dtype=np.float32))
+    score = rig._Session(rig, script)
+    score.next_out(rig.chunk)
+    score.feed_in(np.zeros(rig.chunk, dtype=np.float32))
+    before = score.finish()
+    acks = []
+    next_terminal = "turn_failed"
+
+    def bridge_after_ack(message):
+        assert message["type"] == "audio_ack"
+        acks.append(message["id"])
+        # The bridge can emit its terminal outcome only after receiving the
+        # final ACK, including when a response fails after partial playback.
+        if message["id"] in (2, 3):
+            rig._receive_json({"type": "runtime_event", "data": {"event": next_terminal}})
+
+    monkeypatch.setattr(rig, "_send_control", bridge_after_ack)
+    rig._output_packets.put((1, np.ones(rig.chunk, dtype=np.float32)))
+    rig._output_packets.put((2, np.ones(rig.chunk, dtype=np.float32)))
+    assert not rig._terminal.is_set()
+    rig._drain_until(rig._terminal, timeout=0.5)
+    assert rig._terminal.is_set()
+    assert acks == [1, 2]
+    assert rig._native_events[-1]["event"] == "turn_failed"
+
+    # The next observation can complete, and the previously scored track
+    # still contains none of the PCM drained after its cutoff.
+    rig._terminal.clear()
+    next_terminal = "turn_completed"
+    rig._output_packets.put((3, np.ones(rig.chunk, dtype=np.float32)))
+    rig._drain_until(rig._terminal, timeout=0.5)
+    assert rig._terminal.is_set()
+    assert acks == [1, 2, 3]
+    assert rig._native_events[-1]["event"] == "turn_completed"
+    after = score.finish()
+    assert before.duration == after.duration
+    np.testing.assert_array_equal(before.played, after.played)
+    np.testing.assert_array_equal(before.heard, after.heard)
+
+
+def test_post_capture_drain_is_bounded_when_bridge_never_settles():
+    rig = fdbench_swift.SwiftWebSocketRig("http://fixture.invalid")
+    rig._drain_until(rig._terminal, timeout=0)
+    assert not rig._terminal.is_set()
+    assert rig._packet_acknowledgements == 0
