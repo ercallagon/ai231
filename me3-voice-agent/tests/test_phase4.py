@@ -2547,7 +2547,10 @@ async def test_openrouter_requires_retrieval_before_answering_from_search(
         await llm._client.close()
 
 
-async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatch, tmp_path):
+@pytest.mark.parametrize("primary_fails", [False, True])
+async def test_native_current_research_fetches_ranked_lead_without_extra_model_call(
+    monkeypatch, tmp_path, primary_fails
+):
     from openai.resources.chat.completions import AsyncCompletions
     from me3_voice.request_budget import conservative_input_token_estimate
     from me3_voice.speech import SpeechClient
@@ -2564,6 +2567,7 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
     ]
     url = "https://elections.example/michigan"
     alternate = "https://news.example/alternate"
+    cited_url = alternate if primary_fails else url
     snippet = (
         "Abdul El-Sayed won Michigan's 2026 Senate election, according to the statewide vote "
         "totals and county returns. The Senate results page lists the other candidates."
@@ -2571,7 +2575,7 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
     retained = {
         "kind": "untrusted_retrieved_source",
         "source_id": "S2",
-        "url": url,
+        "url": cited_url,
         "title": "Michigan Senate results",
         "fetched": True,
         "text": answers[1] + ".",
@@ -2586,11 +2590,10 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
             patch.setenv("ME3_REQUEST_LEDGER", str(private / "requests.sqlite"))
             patch.setenv("ME3_REQUEST_RUN_ID", f"research-projection-replay-{int(optimize)}")
             if not optimize:
-                patch.setattr(
-                    NativeLLM, "_omit_fetched_lead_snippets", staticmethod(lambda _: None)
-                )
+                patch.setattr(NativeApplication, "_initial_research_lead", lambda *_: None)
 
             requests = []
+            fetches = []
             tools = [
                 ("web_search", {"query": "Michigan 2026 Senate election winner"}),
                 ("retrieve_source", {"url": url}),
@@ -2601,7 +2604,7 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
                 step = len(requests)
 
                 async def stream():
-                    if step in (2, 3):
+                    if step == 2 or (step == 3 and not optimize):
                         name, args = tools[step - 2]
                         yield chunk(
                             {
@@ -2617,8 +2620,11 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
                         )
                         yield chunk({}, "tool_calls")
                         return
-                    answer = {1: answers[0], 4: answers[1], 5: answers[2]}[step]
-                    if step == 4:
+                    answer_step = 3 if optimize else 4
+                    answer = {1: answers[0], answer_step: answers[1], answer_step + 1: answers[2]}[
+                        step
+                    ]
+                    if step == answer_step:
                         answer = json.dumps(
                             {
                                 "claims": [
@@ -2652,7 +2658,11 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
                 return result
 
             async def retrieve(source_url, *, allow_extract_fallback=True):
-                assert source_url == url
+                fetches.append(source_url)
+                if primary_fails and source_url == url:
+                    research.failed_retrieval_urls.add(url)
+                    raise ResearchError("research_http_failure")
+                assert source_url == cited_url
                 source = dict(retained)
                 research.sources["S2"] = source
                 return source
@@ -2684,7 +2694,7 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
                     native.llm.clock = lambda: datetime(2026, 11, 20, tzinfo=timezone.utc)
                     for _ in questions:
                         await native.utterance(b"\1\0" * 1024)
-                    assert state.budget.requests == 5
+                    assert state.budget.requests == (4 if optimize else 5)
                     assert [
                         event["tool_name"]
                         for event in native.events
@@ -2696,42 +2706,49 @@ async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatc
                     )
                     assert citation["evidence_valid"]
                     assert [(s["url"], s["fetched"]) for s in citation["citation_sources"]] == [
-                        (url, True)
+                        (cited_url, True)
                     ]
                     history = state.context.get_messages()
-                    assert "statewide vote totals and county returns" in repr(history)
                     assistant = [
                         row["content"]
                         for row in history
                         if row["role"] == "assistant" and row.get("content")
                     ]
                     assert assistant == [answers[0], answers[1] + " [S2]", answers[2]]
-                    assert answers[1] + " [S2]" in repr(requests[4]["messages"])
+                    assert answers[1] + " [S2]" in repr(requests[-1]["messages"])
+                    assert native.llm.research_retrievals == 0  # reset by contextual follow-up
+                    assert sum(
+                        event["event"] == "research_alternate_source_succeeded"
+                        for event in native.events
+                    ) == int(primary_fails)
             finally:
                 await state.close()
-            assert len(requests) == 5
-            assert "statewide vote totals and county returns" in repr(requests[2]["messages"])
-            for request in requests[3:]:
+            assert fetches == ([url, alternate] if primary_fails else [url])
+            assert len(requests) == (4 if optimize else 5)
+            if not optimize:
+                assert "statewide vote totals and county returns" in repr(requests[2]["messages"])
+            for request in requests[-2:]:
                 tool_results = [
                     json.loads(row["content"])
                     for row in request["messages"]
                     if row["role"] == "tool"
                 ]
-                search_result, source = tool_results
-                assert ("text" in search_result["results"][0]) is not optimize
-                assert ("passage_ids" in search_result["results"][0]) is not optimize
-                assert search_result["results"][0]["url"] == url
-                assert search_result["results"][1]["snippet"] == "An unfetched lead."
+                if optimize:
+                    [source] = tool_results
+                    assert [lead["url"] for lead in source["search_leads"]] == [
+                        url if primary_fails else alternate
+                    ]
+                else:
+                    search_result, source = tool_results
+                    assert ("text" in search_result["results"][0]) is primary_fails
+                    assert ("passage_ids" in search_result["results"][0]) is primary_fails
                 assert source["passage_ids"] == ["S2-P1"] and answers[1] in source["text"]
             comparison.append([conservative_input_token_estimate(body) for body in requests])
 
     before, after = comparison
     print(f"offline estimate and serialized bytes before={before} after={after}")
-    assert before[:3] == after[:3]
-    assert all(
-        old_tokens > new_tokens
-        for (old_tokens, _), (new_tokens, _) in zip(before[3:], after[3:], strict=True)
-    )
+    assert before[:2] == after[:2]
+    assert sum(tokens for tokens, _ in before[1:4]) > sum(tokens for tokens, _ in after[1:3])
 
 
 async def test_openrouter_structured_output_is_added_only_after_retrieved_evidence():
@@ -3295,7 +3312,9 @@ async def test_native_retrieves_alternate_lead_before_research_continues(
                 event for event in native.events if event["event"] == "tts_progress_segment_summary"
             )
             assert progress_audio["status"] == "completed"
-            assert progress_audio["at"] < search_timing["finished"]
+            assert search_timing["started"] < progress_audio["native_first_pcm_monotonic"] < (
+                search_timing["finished"]
+            )
             assert event_names.count("turn_completed") == 1
             assert native.research_recovery_active
             available = native.available_tool_schemas(

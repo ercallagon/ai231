@@ -2178,6 +2178,31 @@ class NativeApplication:
             result.append(schema)
         return result
 
+    def _initial_research_lead(self, result):
+        """Select the first eligible URL from this search's ranked results."""
+        if (
+            self.llm.research_searches != 1
+            or self.llm.research_retrievals
+            or len(self.llm.response_tool_indices) != 1
+            or self.llm.calls >= self.llm.max_model_calls_per_turn
+            or not isinstance(result, dict)
+            or result.get("kind") != "untrusted_search_leads"
+            or not isinstance(result.get("results"), list)
+        ):
+            return None
+        research = self.resources.research
+        eligible = {lead["url"] for lead in research.alternative_leads(limit=20)}
+        return next(
+            (
+                row["url"]
+                for row in result["results"]
+                if isinstance(row, dict)
+                and isinstance(row.get("url"), str)
+                and row["url"] in eligible
+            ),
+            None,
+        )
+
     def register_tools(self):
         from .task_runtime import validate_control_arguments
 
@@ -2196,11 +2221,21 @@ class NativeApplication:
 
         refresh_tools(self.resources.context)
         self.llm.refresh_tools = refresh_tools
-        for schema in all_schemas:
 
-            async def execute(params):
+        def register(schema):
+            combined_search = (
+                schema.name == "web_search" and self.llm._supports_structured_research_output()
+            )
+
+            async def execute(params, *, auto_fetch_url=None):
                 epoch = self.llm.dispatch_epoch.get()
-                call = ToolCall(params.tool_call_id, params.function_name, params.arguments)
+                call = (
+                    ToolCall(
+                        params.tool_call_id + "-fetch", "retrieve_source", {"url": auto_fetch_url}
+                    )
+                    if auto_fetch_url is not None
+                    else ToolCall(params.tool_call_id, params.function_name, params.arguments)
+                )
                 action_row = (
                     self._fast_action_row(call, max(1, self.turn_id))
                     if call.name in {"run_device_action", "control_music"}
@@ -2297,12 +2332,17 @@ class NativeApplication:
                                     "reused_existing_leads": True,
                                 }
                             else:
-                                result = await self.research_operation_with_ack(
+                                operation = self.research_operation_with_ack(
                                     call,
                                     self.resources.research.search(
                                         args["query"], args.get("max_results", 5)
                                     ),
                                 )
+                                if combined_search:
+                                    async with asyncio.timeout(8):
+                                        result = await operation
+                                else:
+                                    result = await operation
                             if self.resources.research.options.answer_mode == "tavily":
                                 # Keep the provider answer as a ranking hint only.
                                 # GPT-OSS must compose from retained snippets so
@@ -2600,6 +2640,33 @@ class NativeApplication:
                     and result.get("status") in {"queued", "running"}
                 ):
                     self.llm.pending_task_acceptance = (self.llm.epoch,)
+                if auto_fetch_url is not None:
+                    return result
+                if call.name == "web_search" and not failed:
+                    url = self._initial_research_lead(result) if combined_search else None
+                    if url:
+                        self.event("research_auto_retrieval_selected", tool_call_id=call.call_id)
+                        try:
+                            async with asyncio.timeout(8):
+                                fetched = await execute(params, auto_fetch_url=url)
+                        except TimeoutError:
+                            self.llm.record_retrieval_result(
+                                failed=True, error_code="research_timeout"
+                            )
+                            fetched = {"ok": False, "error": "research_timeout"}
+                        if epoch != self.llm.epoch:
+                            return
+                        if isinstance(fetched, dict) and fetched.get("fetched") is True:
+                            result = {
+                                **fetched,
+                                "search_leads": [
+                                    row
+                                    for row in result["results"]
+                                    if row.get("url") != fetched["url"]
+                                ],
+                            }
+                        elif isinstance(fetched, dict) and fetched.get("ok") is False:
+                            result = {**result, "retrieval_error": fetched}
                 await params.result_callback(result)
                 self.event(
                     "tool_result_callback_returned",
@@ -2612,8 +2679,11 @@ class NativeApplication:
                 schema.name,
                 execute,
                 cancel_on_interruption=schema.name in READ_ONLY,
-                timeout_secs=8,
+                timeout_secs=16 if combined_search else 8,
             )
+
+        for schema in all_schemas:
+            register(schema)
 
     async def dispatch_task_tool(self, call, args):
         runtime = self.resources.task_runtime
