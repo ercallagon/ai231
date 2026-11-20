@@ -1510,9 +1510,46 @@ class NativeApplication:
             r"how(?:'s| is) (?:the )?(?:website )?task going|status of (?:the )?(?:website )?task)[?.! ]*",
             text.strip(),
         )
-        if progress_question and self.resources.task_runtime is not None:
+        github_status_pattern = (
+            r"(?:what(?:'s| is) the )?(?:status of|progress on) "
+            r"(?:the |my )?github(?: pages)? task"
+        )
+        phrase = text.casefold().replace("’", "'").strip(" ?!.")
+        github_progress = bool(re.fullmatch(github_status_pattern, phrase))
+        if not github_progress and re.fullmatch(
+            r"(?:(?:it was )?the task about (?:my )?(?:personal )?website"
+            r"(?:[.,]? i don't have the task id)?|is it (?:done|finished)(?: yet)?)",
+            phrase,
+        ):
+            previous = [
+                row["content"].casefold().replace("’", "'").strip(" ?!.")
+                for row in history
+                if row["role"] == "user"
+            ][-3:-1]
+            if previous and previous[-1] == "it was the":
+                previous.pop()
+            github_progress = bool(previous and re.fullmatch(github_status_pattern, previous[-1]))
+        if github_progress or progress_question:
             runtime = self.resources.task_runtime
-            rows = list(runtime.store.rows.values())
+            self.event("route_selected", route="fast_task_progress")
+            if runtime is None or runtime.store is None:
+                return "Background task status is unavailable right now."
+            rows = [
+                row
+                for task_id in runtime.store.rows
+                if (row := self._voice_owned_task(task_id)) is not None
+            ]
+            if github_progress:
+                rows = [
+                    row
+                    for row in rows
+                    if row["call_id"].startswith("voice-github-task-")
+                    or re.search(r"\bgithub\b", row.get("goal") or "", re.I)
+                ]
+                if len(rows) > 1:
+                    return "This conversation has more than one GitHub task. Which one do you mean?"
+                if not rows:
+                    return "I couldn't find a GitHub task in this conversation."
             active = [
                 row
                 for row in rows
@@ -1527,13 +1564,13 @@ class NativeApplication:
                 }
             ]
             if len(active) > 1:
-                self.event("route_selected", route="fast_task_progress")
                 return "More than one background task is active. Which task do you mean?"
             selected = (
-                active[0] if active else max(rows, key=lambda row: row["updated"], default=None)
+                rows[0]
+                if len(rows) == 1
+                else max(active or rows, key=lambda row: row["updated"], default=None)
             )
             if selected is None:
-                self.event("route_selected", route="fast_task_progress")
                 return "There isn't a background task to report on."
             snapshot = await runtime.status(selected["task_id"])
             stage_row = next(
@@ -1544,26 +1581,33 @@ class NativeApplication:
                 ),
                 None,
             )
-            stage = stage_row["payload"].get("stage") if stage_row else None
-            message = stage_row["payload"].get("message") if stage_row else None
-            if not isinstance(message, str) or not message.strip():
-                message = {
-                    "succeeded": "The task is complete.",
-                    "completed_unverified": "The task finished, but its result needs review.",
-                    "failed": "The task failed.",
-                    "cancelled": "The task was cancelled.",
-                    "paused": "The task is paused.",
-                    "waiting_approval": "The task is waiting for approval.",
-                    "cancel_requested": "The task is stopping.",
-                }.get(snapshot["status"], "The task is in progress.")
-            self.event("route_selected", route="fast_task_progress", stage=stage)
+            status = snapshot["status"]
+            stage = stage_row["payload"].get("stage") if stage_row and status == "running" else None
+            message = {
+                "queued": "The task is queued.",
+                "pausing": "The task is pausing.",
+                "succeeded": "The task is complete.",
+                "completed_unverified": "The task finished, but its result needs review.",
+                "failed": "The task failed.",
+                "cancelled": "The task was cancelled.",
+                "paused": "The task is paused.",
+                "waiting_approval": "The task is waiting for approval.",
+                "cancel_requested": "The task is stopping.",
+            }.get(status)
+            if status == "running":
+                stage_message = stage_row["payload"].get("message") if stage_row else None
+                message = (
+                    stage_message
+                    if isinstance(stage_message, str) and stage_message.strip()
+                    else ("The task is in progress.")
+                )
             self.event(
                 "task_progress_read",
                 task_id=selected["task_id"],
-                task_status=snapshot["status"],
+                task_status=status,
                 stage=stage,
             )
-            return message
+            return message or "I couldn't confirm the task's current state."
         # Exact explicit task control shares the existing local fast-action
         # boundary; no provider round trip is needed just to request cancellation.
         cancel = re.fullmatch(

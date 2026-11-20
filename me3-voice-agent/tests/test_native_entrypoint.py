@@ -2185,6 +2185,119 @@ async def test_first_github_request_starts_background_task_without_remote_write(
         await state.close()
 
 
+async def test_native_github_task_status_replay_uses_session_task_without_reasoning():
+    from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
+    from me3_voice.playback import MemorySink
+    from me3_voice.speech import SpeechClient
+
+    questions = [
+        "Can you create my personal website based on my available details and push to GitHub.io?",
+        "What's the status of the GitHub task?",
+        "It was the task about personal website. I don't have the task ID.",
+    ]
+    task_id = "task_" + "a" * 24
+    foreign_id = "task_" + "b" * 24
+    website_id = "task_" + "c" * 24
+    state = NativeState(speech_factory=lambda: SpeechClient(transcript=questions))
+    state.session_id = "github-status-replay"
+
+    class Runtime:
+        github_writer = object()
+
+        def __init__(self):
+            from types import SimpleNamespace
+
+            self.store = SimpleNamespace(rows={}, pending_approvals={})
+            self.status_reads = []
+            self.starts = []
+
+        async def start(self, goal, *, request_id, turn_id, call_id):
+            self.starts.append((goal, request_id, turn_id, call_id))
+            self.store.rows[task_id] = {
+                "task_id": task_id,
+                "goal": goal,
+                "request_id": request_id,
+                "call_id": call_id,
+                "status": "queued",
+            }
+            return {"task_id": task_id, "status": "queued"}
+
+        async def status(self, requested_id):
+            self.status_reads.append(requested_id)
+            return {
+                "task_id": requested_id,
+                "status": self.store.rows[requested_id]["status"],
+                "progress": [
+                    {
+                        "kind": "stage_update",
+                        "payload": {
+                            "stage": "build",
+                            "message": "The site files are being prepared.",
+                        },
+                    }
+                ],
+            }
+
+        async def close(self):
+            pass
+
+    class ModelSpy:
+        calls = 0
+
+        async def respond(self, _history):
+            self.calls += 1
+            yield "Could you tell me the task ID?"
+
+    runtime = state.task_runtime = Runtime()
+    model = ModelSpy()
+    try:
+        async with NativeApplication(state, MemorySink(), annotated=True, upstream=model) as app:
+            await app.utterance(b"\1\0" * 1024)
+            [(goal, request_id, _, call_id)] = runtime.starts
+            assert goal == questions[0]
+            assert request_id == _voice_task_request_id(state.session_id, call_id)
+            runtime.store.rows[task_id]["status"] = "running"
+            runtime.store.rows[foreign_id] = {
+                "task_id": foreign_id,
+                "goal": "Build and publish a GitHub website",
+                "call_id": "voice-github-task-foreign",
+                "request_id": _voice_task_request_id("other-session", "voice-github-task-foreign"),
+                "status": "running",
+            }
+            runtime.store.rows[website_id] = {
+                "task_id": website_id,
+                "goal": "Build a local website",
+                "call_id": "voice-fast-task-local",
+                "request_id": _voice_task_request_id(state.session_id, "voice-fast-task-local"),
+                "status": "running",
+            }
+            await app.utterance(b"\1\0" * 1024)
+            runtime.store.rows[task_id]["status"] = "completed_unverified"
+            # Preserve the short intervening fragment from the Pi transcript.
+            state.context.add_message({"role": "user", "content": "It was the"})
+            await app.utterance(b"\1\0" * 1024)
+            assert model.calls == 0
+            assert runtime.status_reads == [task_id, task_id]
+            assert [
+                (row["task_id"], row["task_status"])
+                for row in app.events
+                if row["event"] == "task_progress_read"
+            ] == [(task_id, "running"), (task_id, "completed_unverified")]
+            replies = [
+                row["content"]
+                for row in state.context.get_messages()
+                if row["role"] == "assistant" and row.get("content")
+            ]
+            assert "nothing will be pushed until you approve" in replies[0]
+            assert replies[1:] == [
+                "The site files are being prepared.",
+                "The task finished, but its result needs review.",
+            ]
+            assert sum(row["event"] == "turn_completed" for row in app.events) == 3
+    finally:
+        await state.close()
+
+
 def test_private_demo_owner_profile_persists_only_approved_facts(tmp_path):
     from me3_voice.native_bridge import _load_private_demo_owner_profile
 
