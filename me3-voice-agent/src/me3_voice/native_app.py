@@ -54,6 +54,7 @@ from .tools import MockTaskExecutor
 NATIVE_REPLAY_SETTLE_TIMEOUT_SECONDS = 60
 NATIVE_REPLAY_EVENT_HISTORY_LIMIT = 4096
 RESEARCH_ACK_DELAY_SECONDS = 0.65
+RESEARCH_AUTO_SOURCE_SECONDS = 3.5
 _TERMINAL_TURN_EVENTS = {"turn_completed", "turn_failed", "turn_error", "turn_interrupted"}
 
 
@@ -2426,10 +2427,27 @@ class NativeApplication:
                                 and remaining_http is not None
                                 and remaining_http <= 2
                             )
+
+                            async def fetch_source(url, *, allow_extract_fallback=True):
+                                # Leave time for the existing alternate inside the
+                                # eight-second automatic retrieval window.
+                                timeout = RESEARCH_AUTO_SOURCE_SECONDS if auto_fetch_url else None
+                                try:
+                                    async with asyncio.timeout(timeout):
+                                        return await research.retrieve(
+                                            url, allow_extract_fallback=allow_extract_fallback
+                                        )
+                                except TimeoutError:
+                                    research.failed_retrieval_urls.add(url)
+                                    raise ResearchError(
+                                        "research_timeout", host=urlsplit(url).hostname,
+                                        stage="transport", failure_class="timeout",
+                                    ) from None
+
                             try:
                                 source = await self.research_operation_with_ack(
                                     call,
-                                    research.retrieve(
+                                    fetch_source(
                                         safe_url,
                                         allow_extract_fallback=allow_extract_fallback,
                                     ),
@@ -2473,7 +2491,7 @@ class NativeApplication:
                                     ),
                                 )
                                 try:
-                                    source = await research.retrieve(alternate_url)
+                                    source = await fetch_source(alternate_url)
                                 except ResearchError as alternate_error:
                                     self.event(
                                         "research_alternate_source_failed",
@@ -2701,6 +2719,7 @@ class NativeApplication:
                         if epoch != self.llm.epoch:
                             return
                         if isinstance(fetched, dict) and fetched.get("fetched") is True:
+                            self.llm.automatic_research_result = (epoch, True)
                             result = {
                                 **fetched,
                                 "search_leads": [
@@ -2709,8 +2728,10 @@ class NativeApplication:
                                     if row.get("url") != fetched["url"]
                                 ],
                             }
-                        elif isinstance(fetched, dict) and fetched.get("ok") is False:
-                            result = {**result, "retrieval_error": fetched}
+                        else:
+                            self.llm.automatic_research_result = (epoch, False)
+                            if isinstance(fetched, dict) and fetched.get("ok") is False:
+                                result = {**result, "retrieval_error": fetched}
                 await params.result_callback(result)
                 self.event(
                     "tool_result_callback_returned",

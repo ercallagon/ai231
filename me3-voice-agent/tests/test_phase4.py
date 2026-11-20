@@ -1899,6 +1899,69 @@ async def test_fetched_election_citation_must_support_the_result(claim, supporte
         await llm._client.close()
 
 
+async def test_unsupported_research_capture_is_private_and_preserves_decision(
+    monkeypatch, tmp_path
+):
+    import stat
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ME3_CAPTURE_REJECTED_RESEARCH", raising=False)
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "offline-capture-fixture")
+    target = tmp_path / "var/results/research-rejections"
+    passage = "Abdul El-Sayed won Michigan's 2026 Senate election."
+    source = {
+        "source_id": "S2",
+        "url": "https://example.com/michigan",
+        "title": "Michigan results",
+        "fetched": True,
+        "extraction_method": "tavily_basic_extract",
+        "evidence_passages": {"S2-P4": passage},
+        "private_field": "must-not-appear-in-capture",
+    }
+    events = []
+    llm = NativeLLM(
+        BackendSpec(),
+        source_ids=lambda: {"S2"},
+        source_lookup=lambda _: source,
+        evidence_passage_ids=lambda: {"S2-P4"},
+        evidence_passage_lookup=lambda _: {"source_id": "S2", "text": passage},
+        on_event=lambda name, **data: events.append((name, data)),
+    )
+    question = "Who won Michigan's 2026 U.S. Senate election?"
+    wrong = "Elissa Slotkin won Michigan's 2026 Senate election"
+    draft = json.dumps({"claims": [{"text": wrong, "passage_id": "S2-P4"}]}, indent=2)
+    accepted = json.dumps({"claims": [{"text": passage, "passage_id": "S2-P4"}]})
+    try:
+        baseline = llm._validate_structured_research_answer(draft, question=question)
+        assert baseline == (None, "unsupported_claim", ["S2"], False)
+        assert not target.exists()
+        monkeypatch.setenv("ME3_CAPTURE_REJECTED_RESEARCH", "1")
+        assert llm._validate_structured_research_answer(draft, question=question) == baseline
+        [capture] = target.glob("*.json")
+        assert stat.S_IMODE(target.stat().st_mode) == 0o700
+        assert stat.S_IMODE(capture.stat().st_mode) == 0o600
+        data = json.loads(capture.read_text())
+        assert data["run_id"] == "offline-capture-fixture"
+        assert data["question"] == question
+        assert data["draft"] == draft and data["claim"]["text"] == wrong
+        assert data["passage"] == {"source_id": "S2", "passage_id": "S2-P4", "text": passage}
+        assert data["source"]["url"] == source["url"] and data["source"]["fetched"] is True
+        assert data["decision"]["code"] == "unsupported_claim"
+        assert data["decision"]["rule"] == "election_result_support"
+        assert data["decision"]["contradiction_codes"] == []
+        assert "must-not-appear-in-capture" not in capture.read_text()
+        assert llm._validate_structured_research_answer(accepted, question=question)[0] == (
+            passage[:-1] + " [S2]."
+        )
+        assert list(target.glob("*.json")) == [capture]
+        assert all(value not in json.dumps(events) for value in (wrong, passage, source["url"]))
+        target.chmod(0o755)
+        assert llm._validate_structured_research_answer(draft, question=question) == baseline
+        assert list(target.glob("*.json")) == [capture]
+    finally:
+        await llm._client.close()
+
+
 async def test_native_michigan_research_long_passage_delivers_one_cited_answer():
     from me3_voice.providers import ToolCall
     from me3_voice.speech import SpeechClient
@@ -2597,9 +2660,17 @@ async def test_openrouter_requires_retrieval_before_answering_from_search(
         await llm._client.close()
 
 
-@pytest.mark.parametrize("primary_fails", [False, True])
+@pytest.mark.parametrize(
+    ("primary_fails", "election_scope"),
+    [
+        pytest.param(False, None, id="primary"),
+        pytest.param(True, None, id="fallback"),
+        pytest.param(False, "yearless", id="yearless"),
+        pytest.param(False, "historical", id="historical"),
+    ],
+)
 async def test_native_current_research_fetches_ranked_lead_without_extra_model_call(
-    monkeypatch, tmp_path, primary_fails
+    monkeypatch, tmp_path, primary_fails, election_scope
 ):
     from openai.resources.chat.completions import AsyncCompletions
     from me3_voice.request_budget import conservative_input_token_estimate
@@ -2615,12 +2686,23 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
         "Abdul El-Sayed won Michigan's 2026 Senate election",
         "El-Sayed won a seat in the U.S. Senate.",
     ]
+    draft_query = "Michigan 2026 Senate election winner"
+    expected_query = draft_query
+    if election_scope:
+        draft_query = "2024 Michigan U.S. Senate election winner"
+        questions[1] = "Who won the U.S. Senate election in Michigan?"
+        expected_query = "latest completed U.S. Senate election result in Michigan as of 2026-11-20"
+    if election_scope == "historical":
+        questions[1] = "Who won the U.S. Senate election in Michigan in 2024?"
+        answers[1] = "Elissa Slotkin won Michigan's 2024 Senate election"
+        answers[2] = "Slotkin won a seat in the U.S. Senate."
+        expected_query = draft_query
     url = "https://elections.example/michigan"
     alternate = "https://news.example/alternate"
     cited_url = alternate if primary_fails else url
     snippet = (
-        "Abdul El-Sayed won Michigan's 2026 Senate election, according to the statewide vote "
-        "totals and county returns. The Senate results page lists the other candidates."
+        answers[1] + ", according to the statewide vote totals and county returns. "
+        "The Senate results page lists the other candidates."
     )
     retained = {
         "kind": "untrusted_retrieved_source",
@@ -2631,7 +2713,7 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
         "text": answers[1] + ".",
     }
     comparison = []
-    for optimize in (False, True):
+    for optimize in ((True,) if election_scope else (False, True)):
         with monkeypatch.context() as patch:
             private = tmp_path / str(optimize)
             private.mkdir(mode=0o700)
@@ -2644,8 +2726,12 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
 
             requests = []
             fetches = []
+            fetch_times = []
+            searches = []
+            if optimize:
+                patch.setattr("me3_voice.native_app.RESEARCH_AUTO_SOURCE_SECONDS", 0.05)
             tools = [
-                ("web_search", {"query": "Michigan 2026 Senate election winner"}),
+                ("web_search", {"query": draft_query}),
                 ("retrieve_source", {"url": url}),
             ]
 
@@ -2694,6 +2780,7 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
             research = ResearchClient(ResearchOptions(True, 8))
 
             async def search(query, max_results=5):
+                searches.append(query)
                 result = {
                     "kind": "untrusted_search_leads",
                     "query": query,
@@ -2709,13 +2796,20 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
 
             async def retrieve(source_url, *, allow_extract_fallback=True):
                 fetches.append(source_url)
-                if primary_fails and source_url == url:
-                    research.failed_retrieval_urls.add(url)
-                    raise ResearchError("research_http_failure")
-                assert source_url == cited_url
-                source = dict(retained)
-                research.sources["S2"] = source
-                return source
+                started = time.monotonic()
+                try:
+                    if primary_fails and source_url == url:
+                        if optimize:
+                            await asyncio.Event().wait()
+                        research.failed_retrieval_urls.add(url)
+                        raise ResearchError("research_http_failure")
+                    await asyncio.sleep(0.01)
+                    assert source_url == cited_url
+                    source = dict(retained)
+                    research.sources["S2"] = source
+                    return source
+                finally:
+                    fetch_times.append(round(time.monotonic() - started, 4))
 
             patch.setattr(research, "search", search)
             patch.setattr(research, "retrieve", retrieve)
@@ -2771,10 +2865,22 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
                         event["event"] == "research_alternate_source_succeeded"
                         for event in native.events
                     ) == int(primary_fails)
+                    if optimize and primary_fails:
+                        alternate_start = next(
+                            event for event in native.events
+                            if event["event"] == "research_alternate_source_started"
+                        )
+                        assert alternate_start["primary_error_code"] == "research_timeout"
+                        assert url in research.failed_retrieval_urls
             finally:
                 await state.close()
             assert fetches == ([url, alternate] if primary_fails else [url])
             assert len(requests) == (4 if optimize else 5)
+            assert searches == [expected_query]
+            assert expected_query in repr(requests[-2]["messages"])
+            if optimize:
+                assert requests[-2]["tool_choice"] == "none"
+                print(f"offline automatic fetch durations (seconds): {fetch_times}")
             if not optimize:
                 assert "statewide vote totals and county returns" in repr(requests[2]["messages"])
             for request in requests[-2:]:
@@ -2795,6 +2901,8 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
                 assert source["passage_ids"] == ["S2-P1"] and answers[1] in source["text"]
             comparison.append([conservative_input_token_estimate(body) for body in requests])
 
+    if election_scope:
+        return
     before, after = comparison
     print(f"offline estimate and serialized bytes before={before} after={after}")
     assert before[:2] == after[:2]

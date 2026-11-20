@@ -7,12 +7,16 @@ selected BackendSpec. SDK and framework retries are disabled, not hidden calls.
 import asyncio
 from copy import deepcopy
 from contextvars import ContextVar
+from dataclasses import replace
 from email.utils import parsedate_to_datetime
 import hashlib
 import json
 import math
 import os
+from pathlib import Path
 import re
+import stat
+import tempfile
 import time
 from urllib.parse import parse_qsl, urlsplit
 import uuid
@@ -22,7 +26,8 @@ from loguru import logger
 from pipecat.services.openai.llm import OpenAILLMService
 from .providers import MockLLM, ToolCall
 from .remote import LiveTransport, ProviderError
-from .conversation_context import prepare_context
+from .conversation_context import prepare_context, runtime_time
+from .conversation_tools import validate_arguments
 from .request_budget import RequestBudgetError, conservative_input_token_estimate
 from .research import public_url
 
@@ -371,6 +376,7 @@ class NativeLLM(OpenAILLMService):
         self.tool_operation_counts = {}
         self.research_tool_calls = 0
         self.research_searches = 0
+        self.automatic_research_result = None
         self.research_retrievals = 0
         self.research_evidence_texts = []
         self.research_evidence_tokens = 0
@@ -477,6 +483,7 @@ class NativeLLM(OpenAILLMService):
         self.tool_operation_counts.clear()
         self.research_tool_calls = 0
         self.research_searches = 0
+        self.automatic_research_result = None
         self.research_retrievals = 0
         self.research_evidence_texts.clear()
         self.research_evidence_tokens = 0
@@ -719,6 +726,8 @@ class NativeLLM(OpenAILLMService):
             return
         if function_calls:
             self.response_has_tools = True
+        if not self.research_searches:
+            function_calls = [self._ground_yearless_senate_search(call) for call in function_calls]
         # Framework-created tasks inherit immutable dispatch context, even when
         # their handlers start after an interruption/new user turn.
         token = self.dispatch_epoch.set(self.response_epoch)
@@ -726,6 +735,31 @@ class NativeLLM(OpenAILLMService):
             await super().run_function_calls(function_calls)
         finally:
             self.dispatch_epoch.reset(token)
+
+    def _ground_yearless_senate_search(self, call):
+        """Keep an unrequested year out of a narrowly scoped election lookup."""
+        if call.function_name != "web_search":
+            return call
+        question = self._latest_user_question(call.context).strip()
+        match = re.fullmatch(
+            r"Who won the (?:U\.S\. |US |United States )?Senate election in "
+            r"([A-Za-z]+(?:[ -][A-Za-z]+){0,3})[?.!]?",
+            question,
+            flags=re.I,
+        )
+        if not match or re.search(
+            r"\b(?:in|on|during|for|after|before|last|previous|nineteen|twenty|thousand)\b",
+            match[1],
+            re.I,
+        ):
+            return call
+        try:
+            args = validate_arguments("web_search", call.arguments)
+            day = runtime_time(self.timezone_name, self.clock)["local"][:10]
+        except (TypeError, ValueError):
+            return call
+        query = f"latest completed U.S. Senate election result in {match[1]} as of {day}"
+        return replace(call, arguments={**args, "query": query})
 
     async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
         if direction == FrameDirection.DOWNSTREAM:
@@ -903,6 +937,11 @@ class NativeLLM(OpenAILLMService):
             return self._terminal_response("turn_deadline_reached")
         if self.calls >= self.max_model_calls_per_turn:
             return self._terminal_response("model_call_budget_exhausted")
+        automatic_result = self.automatic_research_result
+        self.automatic_research_result = None
+        auto_fetched = automatic_result == (self.epoch, True)
+        if automatic_result == (self.epoch, False):
+            return self._terminal_response("insufficient_verified_evidence")
         repair_context_id = id(context)
         if repair_context_id not in self._research_repair_contexts:
             # Pipecat may deliver the repair tool result in a different context
@@ -935,6 +974,8 @@ class NativeLLM(OpenAILLMService):
         dropped, instruction, request_context = prepare_context(
             context, clock=self.clock, timezone_name=self.timezone_name
         )
+        if auto_fetched:
+            request_context.set_tool_choice("none")
         # The first post-search call should fetch a lead while there is
         # room for both retrieval and a grounded final.
         if (
@@ -1620,7 +1661,48 @@ class NativeLLM(OpenAILLMService):
             key=lambda value: tuple(int(part) for part in re.findall(r"\d+", value)),
         )
 
-    def _validate_structured_research_answer(self, raw, *, question="", strict_support=False):
+    def _capture_unsupported_claim(self, *, draft, claim, passage, question, decision):
+        if os.environ.get("ME3_CAPTURE_REJECTED_RESEARCH") != "1":
+            return
+        if len(draft) > 32000 or len(passage["text"]) > 8000 or len(question) > 4000:
+            return
+        directory = Path("var/results/research-rejections").absolute()
+        try:
+            if directory.resolve() != directory:
+                return
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            info = directory.stat()
+            if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                return
+            run_id = os.environ.get("ME3_REQUEST_RUN_ID", "")
+            payload = {
+                "run_id": run_id if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", run_id) else None,
+                "turn": self.turn_number,
+                "recorded_monotonic": time.monotonic(),
+                "question": question,
+                "draft": draft,
+                "claim": claim,
+                "passage": passage,
+                "source": next(iter(self.citation_sources([passage["source_id"]])), None),
+                "decision": decision,
+            }
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                prefix="unsupported-",
+                suffix=".json",
+                dir=directory,
+                delete=False,
+            ) as stream:
+                json.dump(payload, stream, ensure_ascii=False)
+                stream.write("\n")
+        except (OSError, RuntimeError, UnicodeError):
+            # Diagnostics are optional and must never affect the response.
+            return
+
+    def _validate_structured_research_answer(
+        self, raw, *, question="", strict_support=False, diagnostic_draft=None
+    ):
         """Resolve source-owned IDs, screen explicit conflicts, and report lexical fit."""
         try:
             payload = json.loads(raw)
@@ -1696,6 +1778,22 @@ class NativeLLM(OpenAILLMService):
                 text, original
             ):
                 self._rejected_research_passage = passage_id
+                self._capture_unsupported_claim(
+                    draft=raw if diagnostic_draft is None else diagnostic_draft,
+                    claim=claim,
+                    passage={"source_id": source_id, "passage_id": passage_id, "text": original},
+                    question=question,
+                    decision={
+                        "code": "unsupported_claim",
+                        "rule": "strict_lexical_support"
+                        if strict_support and lexical_mismatch
+                        else "election_result_support",
+                        "strict_support_required": bool(strict_support),
+                        "claim_term_count": len(claim_terms),
+                        "matched_term_count": len(matched_terms),
+                        "contradiction_codes": conflicts,
+                    },
+                )
                 return None, "unsupported_claim", used + [source_id], False
             used.append(source_id)
             # Source IDs are rendered by the application, not supplied inside
@@ -1767,6 +1865,7 @@ class NativeLLM(OpenAILLMService):
                 json.dumps({"claims": [{"text": claim, "passage_id": passage_id}]}),
                 question=question,
                 strict_support=strict_support,
+                diagnostic_draft=raw,
             )
             if failure:
                 return None, failure, used_sources + citations, invalid
