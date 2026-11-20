@@ -11,6 +11,12 @@ from fdbench import SR  # noqa: E402
 from fdbench.rig.base import TrialScript  # noqa: E402
 
 
+def test_full_duplex_and_stage_adapters_use_professor_revision_57eaddbc():
+    expected = "57eaddbc188ce9a19b8fd002b575f703426956f4"
+    assert fdbench_swift.PINNED_BENCHMARK == expected
+    assert fdbench_swift.PINNED_STAGE_BENCHMARK == expected
+
+
 def _health(run_id="fixture-run", *, usage=0, session="idle"):
     return {
         "bridge": "ready",

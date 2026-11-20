@@ -25,7 +25,8 @@ from urllib.parse import urlsplit
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PINNED_BENCHMARK = "293ba44e1a65645ed8f2bb6c8832e6564475e8e3"
+PINNED_BENCHMARK = "57eaddbc188ce9a19b8fd002b575f703426956f4"
+PINNED_STAGE_BENCHMARK = PINNED_BENCHMARK
 DEFAULT_BENCHMARK_ROOT = PROJECT_ROOT / "var/cache/fd-benchmark-reference"
 DEFAULT_RUNS_ROOT = PROJECT_ROOT / "var/results/fdbench-swift"
 BENCHMARK_ROOT = Path(os.environ.get("SWIFT_FDBENCH_ROOT", DEFAULT_BENCHMARK_ROOT))
