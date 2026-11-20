@@ -99,7 +99,8 @@ def test_live_dashboard_embeds_the_bounded_native_audio_prebuffer():
     assert "class SwiftAudioPrebuffer" in html
     assert "new SwiftAudioPrebuffer(.12,16)" in html
     assert "runtime.prebuffer?.take()" in html
-    assert "The previous voice session has ended." in html
+    assert "showNotice(resumeMismatch?" in html
+    assert "The previous conversation ended when its bridge restarted." in html
 
 
 def test_provider_health_check_does_not_block_voice_start():

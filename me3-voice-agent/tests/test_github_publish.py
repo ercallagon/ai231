@@ -13,6 +13,7 @@ from me3_voice.github_publish import (
     ARTIFACT_BRANCH,
     GitHubPublishError,
     GitHubPublisher,
+    GALLERY_TIMESTAMPS,
     load_github_writer,
     render_pages_index,
 )
@@ -333,13 +334,17 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
     base_tree = "e" * 40
     branch = GitHubPublisher.branch_for("task_" + "1" * 24, "publish-000002")
     pages_source = {"branch": "gh-pages", "path": "/"}
+    existing_path = "me3-voice-agent/artifacts/existing-site"
+    metadata_sha = "f" * 40
+    stamp = base64.b64encode(json.dumps({existing_path: "2026-11-19T03:30:58Z"}).encode())
     client = Client(
         [
             (200, {"object": {"sha": review_commit}}),
             (200, {"source": pages_source}),
             (200, {"object": {"sha": page_parent}}),
             (200, {"tree": {"sha": base_tree}}),
-            (200, {"tree": [{"path": "me3-voice-agent/artifacts/existing-site/index.html"}]}),
+            (200, {"tree": [{"path": existing_path + "/index.html"}, {"path": GALLERY_TIMESTAMPS, "sha": metadata_sha}]}),
+            (200, {"encoding": "base64", "content": stamp.decode()}),
             (404, {}),
             (404, {}),
             (200, {"object": {"sha": page_parent}}),
@@ -427,8 +432,8 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
     )
     assert result["branch"] == "gh-pages"
     assert result["review_branch"] == branch
-    assert len(client.calls) == 15
-    tree_call = client.calls[9]
+    assert len(client.calls) == 16
+    tree_call = client.calls[10]
     assert tree_call[2]["base_tree"] == base_tree
     assert {item["path"] for item in tree_call[2]["tree"]} == set(files) | {"index.html"}
     assert "artemis" in tree_call[2]["tree"][-1]["content"].lower() or any(
@@ -438,6 +443,7 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
     root_index = next(row["content"] for row in tree_call[2]["tree"] if row["path"] == "index.html")
     assert "existing site" in root_index.casefold()
     assert "nasa artemis" in root_index.casefold()
+    assert '<time class="site-action" datetime="2026-11-19T11:30:58+08:00">' in root_index
     assert not any(method == "PUT" and url.endswith("/pages") for method, url, _ in client.calls)
     assert not any(method == "POST" and url.endswith("/pages") for method, url, _ in client.calls)
 
@@ -618,12 +624,16 @@ def test_pages_root_index_lists_only_sanitized_published_site_paths():
     rendered = render_pages_index(
         [
             "me3-voice-agent/artifacts/demos/site-one",
+            "me3-voice-agent/artifacts/demos/ai231-class-demo",
             "me3-voice-agent/artifacts/trials/site-two",
             "unpublished/draft",
-        ]
+        ],
+        published_at={"unpublished/draft": "2026-11-19T03:30:58Z"},
     )
     assert "Site One" in rendered
     assert "From conversation to live web projects" in rendered
+    assert "AI231 Class Demo" in rendered
+    assert "<time" not in rendered
     assert "Site Two" in rendered
     assert "Demos" in rendered
     assert "Trials" in rendered

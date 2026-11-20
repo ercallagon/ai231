@@ -74,6 +74,19 @@ A new website with no explicit destination goes under
 files, then separately to publish them on Pages. The task card links to the
 GitHub branch and adds the Pages link when the deployment has been verified.
 
+For the AI231 class demo, ask Swift to create the site under
+`me3-voice-agent/artifacts/demos/ai231-class-demo/` in create mode. The
+gallery displays **AI231 Class Demo** only once real site files are deployed.
+Scope the demo to the configured repository, that one directory, and the
+reviewed file list. Approve the `swift-artifacts` push and public Pages
+deployment separately when Swift shows their task-specific summaries.
+Use GitHub's successful deployment timestamp for the site when refreshing
+the gallery's `swift-gallery-published.json` on the Pages branch.
+
+Install Node.js separately if you want the dashboard JavaScript checks to
+run. Node is a test dependency. The Pi launcher uses the locked Python
+environment and opens the desktop browser when available.
+
 The Python package/module remains `me3_voice`; moving the checkout does not rename it. Run commands from the project root. All credentials, models, logs, recordings and outputs stay in ignored `var/`; source code never implicitly reads ME2 or another coursework checkout. Preserve the original recordings on the development machine rather than publishing them.
 
 ## Intended experience

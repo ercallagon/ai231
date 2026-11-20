@@ -964,7 +964,7 @@ def test_live_service_health_uses_plain_labels_and_live_timestamp():
     )
     assert "Bridge live ·" in html
     assert "updated ${stamp.toLocaleTimeString()}" in html
-    assert "Configured · not checked" in html
+    assert "Configured · connects on use" in html
     assert "Set up needed" in html
 
 

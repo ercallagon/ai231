@@ -429,7 +429,9 @@
     const offline=rows.filter(([, ,row])=>row.status==='DISCONNECTED').length;
     const setup=rows.filter(([, ,row])=>row.status==='UNCONFIGURED').length;
     const attention=offline?`${offline} offline`:setup?`${setup} integrations need setup`:counts.DEGRADED?`${counts.DEGRADED} integrations connect on use`:'all configured integrations available';
-    summary.textContent=`Bridge live · ${voiceWarmed?'voice pipeline warmed':'voice services need attention'} · ${attention}`;
+    const stamp=new Date(snapshot.checked_at_utc||NaN);
+    const updated=Number.isFinite(stamp.getTime())?` · updated ${stamp.toLocaleTimeString()}`:'';
+    summary.textContent=`Bridge live · ${voiceWarmed?'voice pipeline warmed':'voice services need attention'} · ${attention}${updated}`;
     list.replaceChildren();
     for(const [key,label,row] of rows){
       const item=document.createElement('li');item.dataset.status=row.status.toLowerCase();

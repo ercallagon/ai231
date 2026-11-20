@@ -31,6 +31,7 @@ SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. -]{0,119}$")
 MAX_FILES = 20
 MAX_TOTAL_BYTES = 512 * 1024
 ARTIFACT_BRANCH = "swift-artifacts"
+GALLERY_TIMESTAMPS = "swift-gallery-published.json"
 
 
 def _pages_published_at(value):
@@ -39,9 +40,9 @@ def _pages_published_at(value):
         return None
     try:
         stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        return stamp.astimezone(ZoneInfo("Asia/Manila")).isoformat() if stamp.tzinfo else None
+    except (ValueError, OverflowError):
         return None
-    return stamp.astimezone(ZoneInfo("Asia/Manila")).isoformat() if stamp.tzinfo else None
 
 
 def new_pages_artifact_paths(files, task_id):
@@ -52,7 +53,7 @@ def new_pages_artifact_paths(files, task_id):
     return {_path(prefix + _path(path)): content for path, content in files.items()}
 
 
-def render_pages_index(site_paths):
+def render_pages_index(site_paths, *, published_at=None):
     """Render a responsive gallery from site paths on the published Pages branch."""
     paths = sorted({_path(path) for path in site_paths if isinstance(path, str)})
     groups = {"Demos": [], "Trials": [], "Other published sites": []}
@@ -72,10 +73,18 @@ def render_pages_index(site_paths):
             PurePosixPath(path).name.replace("-", " ").replace("_", " ").strip().title()
             or "Website"
         )
+        label = re.sub(r"\bAi(\d+)\b", r"AI\1", label)
         # Project Pages sites live below /<repository>/; a root-absolute URL
         # would drop that prefix. Keep links relative to the Pages root index.
         href = "/".join(quote(part, safe="-._~") for part in path.split("/")) + "/"
         kind = "Demo" if group == "Demos" else "Trial" if group == "Trials" else "Website"
+        stamp = _pages_published_at((published_at or {}).get(path))
+        timestamp = (
+            f'<time class="site-action" datetime="{stamp}">Published '
+            f'{stamp[:19].replace("T", " ")} PHT</time>'
+            if stamp
+            else ""
+        )
         groups[group].append(
             '<a class="site-card" href="'
             + html.escape(href, quote=True)
@@ -83,7 +92,9 @@ def render_pages_index(site_paths):
             + kind
             + '</span><span class="site-name">'
             + html.escape(label)
-            + '</span><span class="site-action">Visit site <span aria-hidden="true">↗</span></span></a>'
+            + "</span>"
+            + timestamp
+            + '<span class="site-action">Visit site <span aria-hidden="true">↗</span></span></a>'
         )
     count = sum(len(items) for items in groups.values())
     sections = []
@@ -565,12 +576,12 @@ class GitHubPublisher:
                 raise GitHubPublishError("github_pages_source_is_base_branch")
             prefix = "docs/" if source_folder == "/docs" else ""
             deployed_files = {(prefix + name): content for name, content in files.items()}
-            site_paths = set()
+            site_paths, published_at = set(), {}
             if not configure:
-                site_paths = await self._pages_site_paths(client, source_branch, prefix)
+                site_paths, published_at = await self._pages_site_paths(client, source_branch, prefix)
             site_paths.add(site_path)
             pages_index_path = prefix + "index.html"
-            deployed_files[pages_index_path] = render_pages_index(site_paths)
+            deployed_files[pages_index_path] = render_pages_index(site_paths, published_at=published_at)
             site_deployed_paths = {prefix + name for name in files}
             existing_paths = set()
             for name in site_deployed_paths:
@@ -697,7 +708,7 @@ class GitHubPublisher:
         branch_path = quote(branch, safe="/")
         status, ref = await self._request(client, "GET", f"/git/ref/heads/{branch_path}")
         if status == 404:
-            return set()
+            return set(), {}
         if status != 200 or not isinstance(ref, dict):
             raise GitHubPublishError("github_pages_source_unavailable")
         parent = ref.get("object", {}).get("sha")
@@ -709,15 +720,34 @@ class GitHubPublisher:
             raise GitHubPublishError("github_pages_source_tree_invalid")
         status, tree = await self._request(client, "GET", f"/git/trees/{tree_sha}?recursive=1")
         entries = tree.get("tree") if status == 200 and isinstance(tree, dict) else None
-        if not isinstance(entries, list) or len(entries) > 10000:
+        if not isinstance(entries, list) or len(entries) > 10000 or tree.get("truncated") is True:
             raise GitHubPublishError("github_pages_source_tree_unavailable")
         prefix = source_prefix + "me3-voice-agent/artifacts/"
         output = set()
+        stamps_blob = None
         for entry in entries:
             path = entry.get("path") if isinstance(entry, dict) else None
             if isinstance(path, str) and path.startswith(prefix) and path.endswith("/index.html"):
                 output.add(path[len(source_prefix) : -len("/index.html")])
-        return output
+            elif path == source_prefix + GALLERY_TIMESTAMPS:
+                stamps_blob = entry.get("sha")
+        if stamps_blob is None:
+            return output, {}
+        if not isinstance(stamps_blob, str) or not re.fullmatch(r"[a-f0-9]{40}", stamps_blob):
+            raise GitHubPublishError("github_pages_gallery_timestamps_invalid")
+        status, blob = await self._request(client, "GET", f"/git/blobs/{stamps_blob}")
+        if status != 200 or not isinstance(blob, dict) or blob.get("encoding") != "base64":
+            raise GitHubPublishError("github_pages_gallery_timestamps_unavailable")
+        try:
+            encoded = blob["content"]
+            if not isinstance(encoded, str) or len(encoded) > 48_000:
+                raise ValueError
+            stamps = json.loads(base64.b64decode("".join(encoded.split()), validate=True))
+            if not isinstance(stamps, dict):
+                raise ValueError
+        except (KeyError, ValueError, TypeError):
+            raise GitHubPublishError("github_pages_gallery_timestamps_invalid") from None
+        return output, {path: stamps[path] for path in output if path in stamps}
 
     async def publish(
         self,
