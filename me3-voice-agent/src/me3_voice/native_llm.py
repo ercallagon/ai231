@@ -316,11 +316,14 @@ def _research_claim_conflicts(claim, passage, question=""):
     return conflicts
 
 
+MAX_RESEARCH_ANSWER_CLAIMS = 2
 RESEARCH_ANSWER_SCHEMA = {
     "type": "object",
     "properties": {
         "claims": {
             "type": "array",
+            "maxItems": MAX_RESEARCH_ANSWER_CLAIMS,
+            "description": "Select at most two well-supported claims. Use an empty array to abstain.",
             "items": {
                 "type": "object",
                 "properties": {
@@ -1729,7 +1732,7 @@ class NativeLLM(OpenAILLMService):
         # not a rejected draft that warrants another model or retrieval call.
         if isinstance(claims, list) and not claims:
             return None, "research_abstained", [], False
-        if not isinstance(claims, list) or not 1 <= len(claims) <= 2:
+        if not isinstance(claims, list) or not 1 <= len(claims) <= MAX_RESEARCH_ANSWER_CLAIMS:
             trace["rejection_rule"] = (
                 "claim_count_out_of_bounds" if isinstance(claims, list) else "claims_not_list"
             )

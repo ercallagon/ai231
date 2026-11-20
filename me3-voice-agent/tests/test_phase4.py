@@ -2929,6 +2929,8 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
 
 
 async def test_openrouter_structured_output_is_added_only_after_retrieved_evidence():
+    from jsonschema import Draft202012Validator
+
     from me3_voice.native_llm import RESEARCH_ANSWER_SCHEMA
 
     spec = BackendSpec(
@@ -2975,6 +2977,13 @@ async def test_openrouter_structured_output_is_added_only_after_retrieved_eviden
             "type": "string",
             "enum": ["S1-P1"],
         }
+        validator = Draft202012Validator(schema)
+        claim = {"text": "Example attended the meeting.", "passage_id": "S1-P1"}
+        for count in (0, 1, 2):
+            assert validator.is_valid({"claims": [claim] * count})
+        for count in (3, 5, 6):
+            assert not validator.is_valid({"claims": [claim] * count})
+        assert not validator.is_valid({"claims": [{**claim, "passage_id": "S9-P1"}]})
         assert structured["extra_body"]["provider"]["require_parameters"] is True
 
         # A recovered alternate becomes a retained source before the final
