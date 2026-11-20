@@ -840,6 +840,28 @@ class NativeLLM(OpenAILLMService):
         dropped, instruction, request_context = prepare_context(
             context, clock=self.clock, timezone_name=self.timezone_name
         )
+        # The first post-search call should fetch a lead while there is
+        # room for both retrieval and a grounded final.
+        if (
+            not repair_context
+            and self._supports_structured_research_output()
+            and self.research_searches
+            and not self.research_retrievals
+            and self.tool_calls < self.max_tool_calls_per_turn
+            and self.calls + 2 <= self.max_model_calls_per_turn
+            and self.research_alternatives()
+        ):
+            from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+            retrieve_tools = [
+                tool
+                for tool in getattr(request_context.tools, "standard_tools", ())
+                if tool.name == "retrieve_source"
+            ]
+            if retrieve_tools:
+                request_context.set_tools(ToolsSchema(standard_tools=retrieve_tools))
+                request_context.set_tool_choice("required")
+                self.on_event("llm_research_retrieval_required")
         self.on_event("llm_context_ready", **self.context_diagnostics(request_context, dropped))
         await self._update_settings(self.Settings(system_instruction=instruction))
         self.calls += 1
@@ -849,7 +871,9 @@ class NativeLLM(OpenAILLMService):
         self.on_event("route_selected", route="llm", request_id=request_id)
         self.on_event("llm_request", context_groups_dropped=dropped, request_id=request_id)
         research_question = self._latest_user_question(request_context)
-        structured_research = self._uses_structured_research_output()
+        structured_research = self._uses_structured_research_output() and (
+            request_context.tool_choice != "required"
+        )
         strict_research_support = structured_research and self._requires_strict_research_support(
             request_context
         )
@@ -1048,9 +1072,8 @@ class NativeLLM(OpenAILLMService):
                         "The verifier found that the retained passages do not support your draft. "
                         f"Use exactly this different, untried URL with retrieve_source: {alternatives[0]['url']}. "
                         "Do not choose a different URL. "
-                        "Do not search again or reuse a retained/failed URL. Only a snippet explicitly labeled "
-                        "search_result_snippet with a source-owned passage ID can support a claim; other search "
-                        "snippets are discovery only. "
+                        "Do not search again or reuse a retained/failed URL. Search snippets "
+                        "are discovery only and cannot support a final answer. "
                         "After the tool result, give one concise grounded "
                         "answer in the required JSON schema using only a retained passage ID. If no "
                         "available source supports the answer, return an empty claims array."
@@ -1342,7 +1365,7 @@ class NativeLLM(OpenAILLMService):
         params = self.build_chat_completion_params(params_from_context)
         if not isinstance(params, dict):
             raise RequestBudgetError("framework request parameters are unavailable")
-        if self._uses_structured_research_output():
+        if self._uses_structured_research_output() and context.tool_choice != "required":
             passage_ids = self._structured_research_passage_ids()
             schema = deepcopy(RESEARCH_ANSWER_SCHEMA)
             schema["properties"]["claims"]["items"]["properties"]["passage_id"]["enum"] = (
@@ -1365,11 +1388,16 @@ class NativeLLM(OpenAILLMService):
             params["extra_body"] = extra_body
         return params
 
-    def _uses_structured_research_output(self):
+    def _supports_structured_research_output(self):
         return (
             self.spec.backend == "external"
             and urlsplit(self.spec.endpoint).hostname == "openrouter.ai"
             and self.spec.model == "openai/gpt-oss-120b"
+        )
+
+    def _uses_structured_research_output(self):
+        return (
+            self._supports_structured_research_output()
             and self.research_tool_calls > 0
             and bool(self._structured_research_passage_ids())
         )
@@ -1404,8 +1432,11 @@ class NativeLLM(OpenAILLMService):
         return sorted(valid, key=lambda value: (int(value[1:]), value))
 
     def _structured_research_passage_ids(self):
-        """Only expose projected passage IDs whose owning source is retained."""
-        source_ids = set(self._structured_research_source_ids())
+        """Only expose projected passage IDs with a fetched, citable owner."""
+        source_ids = {
+            source["source_id"]
+            for source in self.citation_sources(self._structured_research_source_ids())
+        }
         values = self.evidence_passage_ids()
         if not isinstance(values, (set, list, tuple, frozenset)):
             return []

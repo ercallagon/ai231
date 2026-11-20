@@ -1958,6 +1958,7 @@ async def test_native_structured_research_recovers_once_from_irrelevant_retained
             "text": passage,
             "text_sha256": source_id.lower() * 32,
             "evidence_status": "retrieved_unverified",
+            "fetched": True,
         }
         research.sources[source_id] = source
         return source
@@ -2010,7 +2011,7 @@ async def test_native_structured_research_recovers_once_from_irrelevant_retained
         await state.close()
 
 
-async def test_native_relevant_search_snippet_answers_without_page_fetch(monkeypatch, tmp_path):
+async def test_native_relevant_search_snippet_cannot_answer_without_page_fetch(monkeypatch, tmp_path):
     from me3_voice.providers import ToolCall
     from me3_voice.speech import SpeechClient
 
@@ -2122,47 +2123,10 @@ async def test_native_relevant_search_snippet_answers_without_page_fetch(monkeyp
                 "search_result_snippet",
                 "discovery_only",
             ]
-            assert not any(event["event"] == "turn_failed" for event in events), failure_diagnostics
-            assert sum(event["event"] == "turn_completed" for event in events) == 1
-            assert not any(event["event"] == "turn_failed" for event in events)
-            assert [
-                event["tool_name"] for event in events if event["event"] == "tool_completed"
-            ] == ["web_search"]
-            assert sum(event["event"] == "tts_start" for event in events) == 1
-            assert sum(event["event"] == "tts_segment_summary" for event in events) == 1
-            evidence = research.sources["S1"]
-            assert evidence["kind"] == "untrusted_search_result"
-            assert evidence["evidence_status"] == "search_result_snippet"
-            assert evidence["extraction_method"] == "tavily_search_snippet"
-            assert evidence["fetched"] is False
-            assert set(native.llm.evidence_passage_ids()) == {"S1-P1"}
-            assert any(
-                event["event"] == "llm_citation_check" and event.get("evidence_valid")
-                for event in events
-            )
-            citation_check = next(
-                event
-                for event in events
-                if event["event"] == "llm_citation_check" and event.get("evidence_valid")
-            )
-            assert citation_check["citation_ids"] == ["S1"]
-            assert citation_check["citation_sources"] == [
-                {
-                    "source_id": "S1",
-                    "title": "2026 World Cup final result",
-                    "url": "https://sports.example/world-cup-2026-final",
-                    "evidence_status": "search_result_snippet",
-                    "source_type": "untrusted_search_result",
-                    "fetched": False,
-                    "truncated": False,
-                }
-            ]
-            assistant = [
-                message.get("content")
-                for message in state.context.get_messages()
-                if message.get("role") == "assistant" and isinstance(message.get("content"), str)
-            ]
-            assert assistant == ["Spain won the 2026 FIFA World Cup [S1]"]
+            assert any(event["event"] == "turn_failed" for event in events)
+            assert not any(event["event"] == "llm_grounding_check" for event in events)
+            assert research.sources["S1"]["fetched"] is False
+            assert native.llm._structured_research_passage_ids() == []
             assert sink.chunks
     finally:
         await state.close()
@@ -2298,6 +2262,7 @@ async def test_openrouter_research_format_repair_uses_ledger_and_finishes_once(
             "source_id": "S1",
             "url": "https://example.org/pm",
             "text": evidence_text,
+            "fetched": True,
             "evidence_passages": {"S1-P1": evidence_text},
         }
         passage = {"passage_id": "S1-P1", "source_id": "S1", "text": evidence_text}
@@ -2369,6 +2334,137 @@ async def test_openrouter_research_format_repair_uses_ledger_and_finishes_once(
             await llm._client.close()
 
 
+@pytest.mark.parametrize("outcome", ["fetched", "fetch_failed", "contradictory"])
+async def test_openrouter_requires_retrieval_before_answering_from_search(
+    monkeypatch, tmp_path, outcome
+):
+    from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "search-to-retrieval-offline-01")
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(tmp_path / "requests.sqlite"))
+    monkeypatch.setenv("ME3_DISABLE_PROVIDER_RETRIES", "1")
+    url = "https://elections.example/michigan"
+    evidence = "Example Candidate won the 2024 Senate election in Michigan."
+    sources = {
+        "S1": {
+            "source_id": "S1",
+            "url": url,
+            "fetched": False,
+            "evidence_passages": {"S1-P1": evidence},
+        }
+    }
+    requests = []
+
+    async def completion(**params):
+        requests.append(params)
+
+        async def stream():
+            if len(requests) == 1:
+                # Reproduce the premature snippet draft unless retrieval is
+                # required in the actual serialized provider request.
+                if params.get("tool_choice") == "required":
+                    yield chunk(
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "fetch-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "retrieve_source",
+                                        "arguments": json.dumps({"url": url}),
+                                    },
+                                }
+                            ]
+                        }
+                    )
+                    yield chunk({}, "tool_calls")
+                    return
+                yield chunk({"content": f"{evidence} [S1]"})
+            elif outcome == "fetch_failed":
+                yield chunk({"content": f"{evidence} [S1]"})
+            else:
+                claim = evidence.replace("2024", "2026") if outcome == "contradictory" else evidence
+                yield chunk(
+                    {
+                        "content": json.dumps(
+                            {"claims": [{"text": claim, "passage_id": "S2-P1"}]}
+                        )
+                    }
+                )
+            yield chunk({}, "stop")
+
+        return stream()
+
+    llm = NativeLLM(
+        BackendSpec(
+            backend="external",
+            protocol="chat-completions-v1",
+            endpoint="https://openrouter.ai/api/v1/chat/completions",
+            auth_env="ME3_OPENROUTER_API_KEY",
+            model="openai/gpt-oss-120b",
+            allow_live=True,
+            request_limit=2,
+            max_input_tokens=32000,
+            max_input_tokens_total=64000,
+        ),
+        credentials={"ME3_OPENROUTER_API_KEY": "offline-fixture"},
+        source_ids=lambda: set(sources),
+        source_lookup=sources.get,
+        evidence_passage_ids=lambda: {p for s in sources.values() for p in s["evidence_passages"]},
+        evidence_passage_lookup=lambda p: {
+            "source_id": p.split("-")[0], "text": sources[p.split("-")[0]]["evidence_passages"][p]
+        },
+        research_alternatives=lambda: [{"url": url}] if len(requests) == 0 else [],
+        max_model_calls_per_turn=2,
+    )
+    monkeypatch.setattr(llm._client.chat.completions, "create", completion)
+    context = LLMContext(
+        messages=[{"role": "user", "content": "Who won the Michigan Senate election?"}],
+        tools=ToolsSchema(standard_tools=NativeApplication.registered_tool_schemas()),
+    )
+    llm.new_turn()
+    try:
+        assert llm.claim_tool_operation("web_search", {"query": "Michigan Senate"})[2] is None
+        output = await _collect(await llm.get_chat_completions(context))
+        assert requests[0]["tool_choice"] == "required"
+        assert [tool["function"]["name"] for tool in requests[0]["tools"]] == ["retrieve_source"]
+        assert "response_format" not in requests[0]
+        assert output[0].choices[0].delta.tool_calls[0].function.name == "retrieve_source"
+        assert context.tool_choice != "required"
+
+        assert llm.claim_tool_operation("retrieve_source", {"url": url})[2] is None
+        llm.response_tool_indices.clear()
+        if outcome == "fetch_failed":
+            llm.record_retrieval_result(failed=True)
+        else:
+            sources["S2"] = {
+                "source_id": "S2",
+                "url": url,
+                "fetched": True,
+                "evidence_passages": {"S2-P1": evidence},
+            }
+        output = await _collect(await llm.get_chat_completions(context))
+        answer = "".join(item.choices[0].delta.content or "" for item in output)
+        if outcome == "fetch_failed":
+            assert "response_format" not in requests[1]
+            assert llm.response_failure_reason == "unavailable_citation_url"
+        else:
+            schema = requests[1]["response_format"]["json_schema"]["schema"]
+            claim_schema = schema["properties"]["claims"]["items"]["properties"]
+            assert claim_schema["passage_id"]["enum"] == ["S2-P1"]
+            assert llm.response_failure_reason == (
+                "contradictory_claim" if outcome == "contradictory" else None
+            )
+        if outcome == "fetched":
+            assert answer == evidence[:-1] + " [S2]."
+        else:
+            assert "won't guess" in answer and "Example Candidate" not in answer
+        assert (llm.research_searches, llm.research_retrievals, llm.calls) == (1, 1, 2)
+    finally:
+        await llm._client.close()
+
+
 async def test_openrouter_structured_output_is_added_only_after_retrieved_evidence():
     from me3_voice.native_llm import RESEARCH_ANSWER_SCHEMA
 
@@ -2389,6 +2485,11 @@ async def test_openrouter_structured_output_is_added_only_after_retrieved_eviden
         spec,
         credentials={"ME3_OPENROUTER_API_KEY": "offline-fixture"},
         source_ids=lambda: retained_sources,
+        source_lookup=lambda source_id: {
+            "source_id": source_id,
+            "url": f"https://example.org/{source_id}",
+            "fetched": True,
+        },
         evidence_passage_ids=lambda: retained_passages,
     )
     try:
@@ -2868,6 +2969,7 @@ async def test_native_retrieves_alternate_lead_before_research_continues(
             "text": "The statewide result was certified on November 12, and this source identifies the completed Senate election and winner.",
             "text_sha256": "a" * 64,
             "evidence_status": "retrieved_unverified",
+            "fetched": True,
         }
         research.sources["S1"] = source
         return source

@@ -5376,3 +5376,10 @@ The TTS sanitizer now removes standalone and attached citation IDs before synthe
 The pi-primary runtime sets `research.answer_mode=tavily`, which permits direct quick answers after explicit WebSocket designation. Automatic selection is a separate environment opt-in and the tracked profile does not set it. The quick-answer path now keeps all sentences within its existing 35-word bound and safely abstains when the complete answer exceeds it. Normal fetched-source verification and citation rules are unchanged.
 
 Offline verification in WSL: 23 focused tests passed, including the prior 17 and the local profile and quick-answer regressions. Both TTS sanitization checks passed again after testing citations between words with no spaces. Ruff lint and diff checks passed. Added tracked lines had zero matches for credential or private profile value patterns. Existing reviewed source changes remain in WSL for approval, with an empty staged diff. No providers, benchmark, commit, push or Pi deployment occurred. After approval, publish the reviewed source through GitHub, fast-forward the Pi, and run the bounded baseline.
+
+
+### 2026-11-20 search-to-retrieval regression
+
+In Pi trace `native-2a89a13ff7c640d8a25c2971b566c65f.jsonl`, the Mississippi and Michigan turns searched successfully, made no retrieval, and stopped with `unavailable_citation_url`. The prior successful Michigan turn retrieved source S5 before answering. The GPT-OSS answer schema still advertised snippet passage IDs after citations began requiring fetched sources.
+
+The first post-search GPT-OSS request now requires the existing retrieval tool when a lead and enough turn budget are available. The answer schema lists only projected passages with fetched, citable owners. The existing retrieval handler still owns alternate-source fallback and request limits. Eleven focused offline regressions passed, covering the serialized retrieval request, a fetched answer, failed fetch, alternate recovery, and claim conflicts. No live providers were called. After approval and deployment, retest one Michigan question and check the fetch, fetched citation, final audio, and request counts.
