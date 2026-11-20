@@ -506,6 +506,10 @@ def test_music_volume_command_uses_explicit_percent_slot():
         validate_arguments("control_music", {"action": "volume_set", "value": "30"})
     with pytest.raises(ValueError):
         validate_arguments("control_music", {"action": "volume_set", "volume_percent": 101})
+    with pytest.raises(ValueError):
+        validate_arguments(
+            "control_music", {"action": "volume_set", "volume_percent": 40, "market": "US"}
+        )
 
 
 async def test_music_volume_tool_executes_normalized_slot_in_mock_adapter():
@@ -528,6 +532,52 @@ async def test_music_volume_tool_executes_normalized_slot_in_mock_adapter():
         assert music.mock_volume == 30
     finally:
         await tasks.close()
+
+
+@pytest.mark.parametrize(
+    ("utterance", "model_calls"),
+    [
+        ("music volume set to forty percent", 0),
+        ("can you set spotify volume to forty percent", 0),
+        ("I'd like the Spotify volume at forty percent", 2),
+    ],
+)
+async def test_native_volume_forwards_percent_to_music_executor(utterance, model_calls):
+    from me3_voice.music import MusicController
+    from me3_voice.providers import ToolCall
+    from me3_voice.speech import SpeechClient
+    from me3_voice.tools import MockTaskExecutor
+
+    class Model:
+        calls = 0
+
+        async def respond(self, _history):
+            self.calls += 1
+            if self.calls == 1:
+                yield ToolCall(
+                    "volume-40", "control_music", {"action": "volume_set", "volume_percent": 40}
+                )
+            else:
+                yield "Music volume is set to forty percent."
+
+    model = Model()
+    music = MusicController()
+    state = NativeState(
+        tasks=MockTaskExecutor(music=music),
+        speech_factory=lambda: SpeechClient(transcript=utterance),
+    )
+    try:
+        async with NativeApplication(state, MemorySink(), annotated=True, upstream=model) as app:
+            await app.utterance(b"\1\0" * 1024)
+            assert not any(
+                event.get("error_code") == "invalid_arguments_or_tool_budget" for event in app.events
+            )
+            assert music.mock_volume == 40
+            assert model.calls == model_calls
+            assert any(event["event"] == "turn_completed" for event in app.events)
+    finally:
+        await state.close()
+        await music.close()
 
 
 def test_native_llm_debug_log_does_not_emit_conversation_text():

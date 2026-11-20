@@ -2185,6 +2185,48 @@ async def test_first_github_request_starts_background_task_without_remote_write(
         await state.close()
 
 
+async def test_native_saved_red_light_and_timer_use_controller_without_reasoning():
+    from me3_voice.devices import DeviceActions, MockDeviceOutput
+    from me3_voice.native_app import NativeApplication, NativeState
+    from me3_voice.playback import MemorySink
+    from me3_voice.speech import SpeechClient
+    from me3_voice.tools import MockTaskExecutor
+
+    questions = ["Can you turn the lights on to red?", "Can you set a ten second timer?"]
+    actions = DeviceActions(backend="pi", output=MockDeviceOutput())
+    state = NativeState(
+        tasks=MockTaskExecutor(actions=actions),
+        speech_factory=lambda: SpeechClient(transcript=questions),
+    )
+
+    class NoLLM:
+        async def respond(self, _history):
+            raise AssertionError("these controller turns must not use the LLM")
+            yield "unreachable"
+
+    try:
+        async with NativeApplication(state, MemorySink(), annotated=True, upstream=NoLLM()) as app:
+            for _ in questions:
+                await app.utterance(b"\1\0" * 1024)
+            assert actions.effects == 2
+            assert actions.light and actions.color == "red"
+            assert actions.schedule["label"] == "10 seconds"
+            assert actions.schedule["kind"] == "timer"
+            assert app.llm.calls == 0
+            assert [row["status"] for row in app.fast_action_rows] == ["accepted", "accepted"]
+            assert "no sensor" in app.fast_action_rows[0]["summary"]
+            assert "no buzzer" in app.fast_action_rows[1]["summary"]
+            assert [
+                row["content"]
+                for row in state.context.get_messages()
+                if row["role"] == "assistant" and row.get("content")
+            ] == ["Light set to red.", "Timer set for 10 seconds on the display."]
+            assert sum(event["event"] == "turn_completed" for event in app.events) == 2
+    finally:
+        await state.close()
+        await actions.close()
+
+
 async def test_native_github_task_status_replay_uses_session_task_without_reasoning():
     from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
     from me3_voice.playback import MemorySink

@@ -2540,7 +2540,7 @@ class NativeApplication:
                                     session_id=self.resources.session_id,
                                     turn_id=max(1, self.turn_id),
                                 ),
-                                call,
+                                ToolCall(call.call_id, call.name, args),
                             )
                     except (ResearchError, ValueError) as exc:
                         # Symbolic policy errors only; never return exception payloads from I/O.

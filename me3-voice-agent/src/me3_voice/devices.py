@@ -897,9 +897,16 @@ class DeviceActions:
                     if self.mode == "mock"
                     else f"Pi LED command accepted: {self.color}, {self.brightness}% brightness, {'on' if self.light else 'off'}; no sensor confirms the output."
                 )
+                spoken_summary = {
+                    "set_color": f"Light set to {self.color}.",
+                    "set_brightness": f"Brightness set to {self.brightness} percent.",
+                }.get(action, summary)
+                if self.mode == "mock" and action in {"set_color", "set_brightness"}:
+                    spoken_summary = "Simulated " + spoken_summary[0].lower() + spoken_summary[1:]
                 return self._base_result(
                     result_status=status,
                     summary=summary,
+                    spoken_summary=spoken_summary,
                     display="on" if self.light else "off",
                     action=action,
                     widget={
@@ -979,9 +986,15 @@ class DeviceActions:
                 self.effects += 1
                 if replaced:
                     summary = "A new timer/alarm replaced the previous schedule. " + summary
+                speech = None
+                if action == "set_timer":
+                    verb = "replaced" if replaced else "set"
+                    noun = "Simulated timer" if self.mode == "mock" else "Timer"
+                    speech = f"{noun} {verb} for {value} on the display."
                 return self._base_result(
                     result_status="simulated" if self.mode == "mock" else "accepted",
                     summary=("Simulated schedule; " + summary if self.mode == "mock" else summary),
+                    spoken_summary=speech,
                     display=display,
                     action=action,
                     widget=widget,

@@ -521,6 +521,48 @@ async def test_missing_ambiguous_or_wrong_receiver_never_searches_or_plays(rows,
     await music.close()
 
 
+@pytest.mark.parametrize("soloist_available", [True, False])
+async def test_named_soloist_is_only_target_for_playback_and_volume(soloist_available):
+    soloist = {**player("soloist", active=True), "name": "Swift Soloist"}
+    other = player("other", active=True)
+    active = soloist if soloist_available else other
+    active.update(supports_volume=True, volume_percent=60)
+    writes = []
+
+    async def peer(method, path, *, params=None, body=None):
+        if (method, path) == ("GET", "/me/player/devices"):
+            return {"devices": [other, soloist] if soloist_available else [other]}
+        if (method, path) == ("GET", "/search"):
+            assert soloist_available
+            return {"tracks": {"items": [{"uri": "spotify:track:123", "name": "Test track"}]}}
+        if (method, path) == ("GET", "/me/player"):
+            assert soloist_available
+            return {"device": active, "is_playing": True}
+        assert soloist_available and method == "PUT" and params["device_id"] == "soloist"
+        writes.append((path, params))
+        if path == "/me/player/volume":
+            active["volume_percent"] = int(params["volume_percent"])
+        return {}
+
+    music = MusicController(token="fixture", device_name="Swift Soloist", request=peer)
+    try:
+        if soloist_available:
+            await music.execute("play", "play", "Dance With Me Bruno Mars")
+            await music.execute("volume", "volume_set", "40")
+            assert writes == [
+                ("/me/player/play", {"device_id": "soloist"}),
+                ("/me/player/volume", {"device_id": "soloist", "volume_percent": "40"}),
+            ]
+        else:
+            for action, query in (("play", "Dance With Me Bruno Mars"), ("volume_set", "40")):
+                with pytest.raises(MusicUnavailable) as error:
+                    await music.execute(action, action, query)
+                assert error.value.code == "music_device_unavailable"
+            assert writes == [] and other["volume_percent"] == 60
+    finally:
+        await music.close()
+
+
 async def test_correction_during_device_discovery_cannot_start_obsolete_music():
     started, release = asyncio.Event(), asyncio.Event()
     calls = []

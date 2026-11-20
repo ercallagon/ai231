@@ -14,7 +14,7 @@ def direct_music_control(text, turn_id, history=()):
     """Route bounded, unambiguous music controls without an LLM request."""
     normalized = re.sub(r"\s+", " ", text.strip().casefold()).strip(" .!?")
     volume = re.fullmatch(
-        r"(?:(?:can|could) you )?(?:please )?(?:set )?(?:the )?(?:music )?volume(?: to)? (\d{1,3}|zero|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|(?:one )?hundred)(?: percent|%)(?: please)?",
+        r"(?:(?:can|could) you )?(?:please )?(?:set )?(?:the )?(?:(?:music|spotify) )?volume(?: (?:set )?to)? (\d{1,3}|zero|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|(?:one )?hundred)(?: percent|%)(?: please)?",
         normalized,
     )
     if volume is None:
@@ -365,7 +365,11 @@ def direct_me2_command(text, turn_id):
                 "get_weather",
                 r"(?:what(?:'s| is) the weather(?: like)?|check the weather) in (.{2,80})",
             ),
-            ("set_timer", r"(?:set|start) (?:a |the )?timer (?:for )?(.+)"),
+            (
+                "set_timer",
+                r"(?:(?:can|could) you )?(?:set|start) (?:a |the )?"
+                r"(?:timer (?:for )?(.+?)|(.+?) timer)(?: please)?",
+            ),
             ("set_alarm", r"set (?:an |the )?alarm (?:for |at )?(.+)"),
             ("set_temperature", r"(?:set|show) (?:the )?temperature (?:to )?(.+)"),
             ("create_reminder", r"(?:remind me to|create a reminder to) (.+)"),
@@ -376,9 +380,14 @@ def direct_me2_command(text, turn_id):
                 continue
             value = match.group(1)
             if candidate == "set_timer":
+                value = (value or match.group(2)).replace("-", " ")
                 value = {
+                    "ten second": "10 seconds",
                     "ten seconds": "10 seconds",
+                    "10 second": "10 seconds",
+                    "thirty second": "30 seconds",
                     "thirty seconds": "30 seconds",
+                    "30 second": "30 seconds",
                     "one minute": "1 minute",
                 }.get(value, value)
             elif candidate == "set_alarm":
@@ -465,7 +474,8 @@ def direct_light_command(text, turn_id):
         return ToolCall(f"local-light-{turn_id}", "run_device_action", {"action": action})
 
     color = re.fullmatch(
-        requester + r"(?:set|change|make) (?:the )?lights?(?: color)?(?: to)? "
+        requester + r"(?:(?:set|change|make) (?:the )?lights?(?: color)?(?: to)?|"
+        r"(?:turn|switch) (?:the )?lights? on to) "
         r"(#[0-9a-f]{6}|warm white|orange|purple|pink|yellow|cyan|magenta|white|teal|amber|violet|lime|navy|coral|red|green|blue)(?: please)?",
         normalized,
     )
