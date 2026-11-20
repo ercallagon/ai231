@@ -1184,7 +1184,13 @@
       ws.onmessage=event=>{
         if(event.data instanceof ArrayBuffer){receiveAudio(event.data);return;}
         let message;try{message=JSON.parse(event.data);}catch(_){return;}
-        if(message.type==='audio_stop'){stopPlayback();runtime.interrupting=false;return;}
+        if(message.type==='audio_stop'){
+          stopPlayback();runtime.interrupting=false;
+          if(Number.isSafeInteger(message.id)&&runtime.ws===ws&&ws.readyState===WebSocket.OPEN){
+            ws.send(JSON.stringify({type:'audio_stop_ack',id:message.id}));
+          }
+          return;
+        }
         if(message.type==='task_control_result'){
           if(message.error)showNotice('Task control failed: '+String(message.error).replace(/[^a-z0-9_-]/gi,''),'error');
           else showNotice('Task '+String(message.result?.status||'updated').replace(/[^a-z0-9_-]/gi,''));

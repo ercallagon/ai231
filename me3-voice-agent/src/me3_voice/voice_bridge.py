@@ -186,7 +186,7 @@ def local_request(request):
 class BrowserSink:
     """At most sixteen browser-scheduled chunks; confirm playback by ACK."""
 
-    def __init__(self, ws):
+    def __init__(self, ws, *, track_audio_stops=False):
         self.delivery = "sink_confirmed"
         self.ws = ws
         self.send_lock = asyncio.Lock()
@@ -196,6 +196,7 @@ class BrowserSink:
         self.sequence = 0
         self.generation = 0
         self.closed = False
+        self.stop_ack_times = {} if track_audio_stops else None
 
     async def send(self, value):
         async with self.send_lock:
@@ -253,12 +254,31 @@ class BrowserSink:
 
     async def stop(self):
         self.generation += 1
+        stop_id = self.generation
         self.pending.clear()
         self.pending_responses.clear()
         self.changed.set()
         if not self.ws.closed:
             with suppress(ConnectionError, RuntimeError):
-                await self.send({"type": "audio_stop"})
+                if self.stop_ack_times is None:
+                    await self.send({"type": "audio_stop"})
+                    return True
+                async with self.send_lock:
+                    self.stop_ack_times[stop_id] = time.monotonic()
+                    if len(self.stop_ack_times) > 16:
+                        del self.stop_ack_times[next(iter(self.stop_ack_times))]
+                    try:
+                        await self.ws.send_json({"type": "audio_stop", "id": stop_id})
+                    except BaseException:
+                        self.stop_ack_times.pop(stop_id, None)
+                        raise
+                return stop_id
+        return False
+
+    def acknowledge_stop(self, stop_id):
+        if type(stop_id) is int and self.stop_ack_times is not None:
+            return self.stop_ack_times.pop(stop_id, None)
+        return None
 
     async def close(self):
         self.closed = True

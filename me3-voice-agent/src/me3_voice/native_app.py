@@ -399,14 +399,23 @@ class NativeOutput(BaseOutputTransport):
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self.event("output_speaking_stopped")
 
-    async def stop_delivery(self):
+    async def stop_delivery(self, response_id=None, *, interruption_id=None):
         self.generation += 1
         if hasattr(self.sink, "stop"):
-            await self.sink.stop()
+            sent = await self.sink.stop()
+            if type(sent) is int:
+                self.event(
+                    "audio_stop_sent",
+                    response_id=response_id,
+                    stop_id=sent,
+                    interruption_id=interruption_id,
+                )
+            elif sent is True:
+                self.event("audio_stop_sent", response_id=response_id)
 
     async def stop_response(self, response_id):
         self.suppress_response(response_id)
-        await self.stop_delivery()
+        await self.stop_delivery(response_id)
         self.event("playback_stopped_browser", response_id=response_id)
 
     def suppress_response(self, response_id):
@@ -417,7 +426,7 @@ class NativeOutput(BaseOutputTransport):
 
     async def process_frame(self, frame, direction):
         if isinstance(frame, InterruptionFrame):
-            await self.stop_delivery()
+            await self.stop_delivery(interruption_id=frame.id)
             self.event("playback_stopped_browser")
         await super().process_frame(frame, direction)
 
@@ -2053,11 +2062,25 @@ class NativeApplication:
             supersedes_pending = bool(previous and previous.get("response_state") == "pending")
             self.llm.new_turn()
             if supersedes_pending:
-                self.output.suppress_response(previous.get("response_id"))
+                response_id = previous.get("response_id")
+                self.event(
+                    "barge_in_decided",
+                    response_id=response_id,
+                    utterance_id=self.parts.stt.turn,
+                    start_evidence=start_evidence,
+                )
+                self.output.suppress_response(response_id)
                 # Stop only the old assistant branch. A framework broadcast
                 # would travel upstream and abort the ASR stream carrying the
                 # newly recognized user turn.
-                await self.llm.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
+                interruption = InterruptionFrame()
+                self.event(
+                    "barge_in_cancel_dispatched",
+                    response_id=response_id,
+                    utterance_id=self.parts.stt.turn,
+                    interruption_id=interruption.id,
+                )
+                await self.llm.process_frame(interruption, FrameDirection.DOWNSTREAM)
             if self.tavily_quick_research_designated:
                 self.tavily_quick_research_designated = False
                 self.llm.designate_tavily_quick_research()
@@ -2867,6 +2890,7 @@ class NativeApplication:
         self.followup_timer = asyncio.create_task(expire())
 
     async def feed(self, pcm, sequence):
+        ingress_at = time.monotonic()
         async with self.admission:
             if self.error:
                 if self.pending:
@@ -2887,9 +2911,9 @@ class NativeApplication:
                     error_stage=getattr(error, "error_stage", None),
                 )
             for frame in self.frames.push(self.pre.push(pcm, sequence)):
-                await self.queue_audio(frame)
+                await self.queue_audio(frame, ingress_at=ingress_at, ingress_sequence=sequence)
 
-    async def queue_audio(self, pcm):
+    async def queue_audio(self, pcm, *, ingress_at=None, ingress_sequence=None):
         now = time.monotonic()
         self.audio_frames += 1
         previous = self.last_audio_delivery_at
@@ -2897,6 +2921,8 @@ class NativeApplication:
         self.event(
             "audio_frame_delivered",
             audio_sequence=self.audio_delivery_sequence,
+            ingress_at=ingress_at,
+            ingress_sequence=ingress_sequence,
             bytes=len(pcm),
             inter_frame_gap_seconds=now - previous if previous is not None else None,
             pending_frames=len(self.pending),

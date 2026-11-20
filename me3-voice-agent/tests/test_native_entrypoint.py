@@ -613,6 +613,11 @@ async def test_native_browser_writes_private_sanitized_session_events(
         assert all(row["session_id"] == ready["session_id"] for row in rows)
         assert sum(row["event"] == "wake_detected" for row in rows) == 1
         assert any(row["event"] == "turn_completed" for row in rows)
+        ingress = next(row for row in rows if row["event"] == "audio_frame_delivered")
+        assert ingress["ingress_sequence"] == 0
+        assert ingress["ingress_at"] <= ingress["at"]
+        final = next(row for row in rows if row["event"] == "asr_final")
+        assert final["has_recognized_text"] is True
         playback = next(row for row in rows if row["event"] == "playback_ack")
         assert playback["schedule_gap_seconds"] == 0.012
         assert playback["queued_audio_seconds"] == 0.16
@@ -876,10 +881,11 @@ async def test_unclear_vad_does_not_start_or_interrupt_until_asr_text_exists():
     assert starts == []
 
     assert (
-        await strategy.process_frame(InterimTranscriptionFrame("Michigan", "user", ""))
+        await strategy.process_frame(InterimTranscriptionFrame("Stop", "user", ""))
         is ProcessFrameResult.STOP
     )
     assert starts == [{"enable_interruptions": False}]
+    assert strategy.start_evidence == "asr_interim"
 
     # A provider that emits no interim but returns a final transcript must
     # retain that already-aggregated text instead of broadcasting a reset.
@@ -914,6 +920,7 @@ async def test_final_only_asr_turn_stops_stale_audio_without_replaying_it():
 
         async def stop(self):
             self.stopped += 1
+            return True
 
         async def send_audio(self, audio, *, response_id):
             self.sent.append((audio, response_id))
@@ -929,7 +936,10 @@ async def test_final_only_asr_turn_stops_stale_audio_without_replaying_it():
     )
     assert await output.write_audio_frame(SimpleNamespace(audio=b"new", context_id="new-response"))
     assert sink.sent == [(b"new", "new-response")]
-    assert events[0] == ("playback_stopped_browser", {"response_id": "old-response"})
+    assert events[:2] == [
+        ("audio_stop_sent", {"response_id": "old-response"}),
+        ("playback_stopped_browser", {"response_id": "old-response"}),
+    ]
 
 
 def test_tool_error_code_preserves_only_safe_symbolic_provider_codes():
@@ -1787,7 +1797,16 @@ async def test_barge_in_before_ack_rejects_old_text_and_late_ack(
                         old_id = struct.unpack("<I", message.data[:4])[0]
                         break
             await ws.send_json({"type": "interrupt"})
-            await next_json(ws, "audio_stop", acknowledge=False)
+            stop = await next_json(ws, "audio_stop", acknowledge=False)
+            assert type(stop["id"]) is int
+            await ws.send_json({"type": "audio_stop_ack", "id": stop["id"]})
+            async with asyncio.timeout(5):
+                while True:
+                    mark = (await next_json(ws, "runtime_event", acknowledge=False))["data"]
+                    if mark["event"] == "audio_queue_cleared_ack":
+                        break
+            assert mark["stop_id"] == stop["id"]
+            assert mark["audio_stop_send_started_at"] <= mark["at"]
             await ws.send_json({"type": "audio_ack", "id": old_id})
             await send_turn(ws)
             view = await wait_answer(ws)

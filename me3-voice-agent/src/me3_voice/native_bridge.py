@@ -65,6 +65,7 @@ _SAFE_EVENT_TEXT = {
     "call_id",
     "owner_id",
     "audio_context_state",
+    "start_evidence",
 }
 
 
@@ -1584,7 +1585,7 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
         session_stage = "websocket_prepare"
         try:
             await ws.prepare(request)
-            sink = BrowserSink(ws)
+            sink = BrowserSink(ws, track_audio_stops=True)
             session_stage = "websocket_hello"
             message = await asyncio.wait_for(ws.receive(), 10)
             if message.type != WSMsgType.TEXT:
@@ -1792,6 +1793,18 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
                     elif message.type == WSMsgType.TEXT:
                         value = json.loads(message.data)
                         if (
+                            isinstance(value, dict)
+                            and set(value) == {"type", "id"}
+                            and value["type"] == "audio_stop_ack"
+                        ):
+                            sent_at = sink.acknowledge_stop(value["id"])
+                            if sent_at is not None:
+                                application.event(
+                                    "audio_queue_cleared_ack",
+                                    stop_id=value["id"],
+                                    audio_stop_send_started_at=sent_at,
+                                )
+                        elif (
                             isinstance(value, dict)
                             and value.get("type") == "audio_ack"
                             and set(value).issubset(

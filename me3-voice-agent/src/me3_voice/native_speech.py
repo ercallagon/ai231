@@ -213,7 +213,12 @@ class McpSTTService(STTService):
         ):
             raise ValueError("invalid native ASR partial")
         self.revision = result["revision"]
-        self.event("asr_partial", revision=self.revision)
+        self.event(
+            "asr_partial",
+            revision=self.revision,
+            utterance_id=self.turn,
+            has_recognized_text=bool(result["text"].strip()),
+        )
         return InterimTranscriptionFrame(result["text"], "user", "")
 
     async def emit_partial(self, row, identifier, generation):
@@ -676,7 +681,12 @@ class McpSTTService(STTService):
             ):
                 raise ValueError("invalid native ASR final")
             trace_key = {"stream_id": self.stream_ref(identifier), "utterance_id": key.turn_id}
-            self.event("asr_final", seconds=time.monotonic() - started, **trace_key)
+            self.event(
+                "asr_final",
+                seconds=time.monotonic() - started,
+                has_recognized_text=bool(row["text"].strip()),
+                **trace_key,
+            )
             if self.on_partial:
                 self.on_partial(None)
             # Finalized is an ASR-completion marker, not a second turn endpoint.

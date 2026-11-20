@@ -207,6 +207,20 @@ async def test_browser_sink_ack_preserves_response_and_packet_identity():
 
 
 @pytest.mark.asyncio
+async def test_browser_stop_ack_is_correlated_and_consumed_once():
+    socket = FakeSocket()
+    sink = BrowserSink(socket, track_audio_stops=True)
+    old_packet = await sink(b"\0\0")
+    stop_id = await sink.stop()
+    assert socket.control[-1] == {"type": "audio_stop", "id": stop_id}
+    assert sink.acknowledge(old_packet) is None
+    assert sink.acknowledge_stop(stop_id + 1) is None
+    assert sink.acknowledge_stop(True) is None
+    assert isinstance(sink.acknowledge_stop(stop_id), float)
+    assert sink.acknowledge_stop(stop_id) is None
+
+
+@pytest.mark.asyncio
 async def test_music_duck_coordinator_keeps_duck_on_barge_in_and_restores_after_turn_or_stop():
     from me3_voice.voice_bridge import MusicDuckingCoordinator
 
