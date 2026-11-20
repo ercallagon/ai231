@@ -85,6 +85,13 @@ if (!rejected) throw new Error('Invalid confirmed prefix was accepted');
     )
 
 
+def test_live_dashboard_citation_label_does_not_claim_source_verification():
+    html = render(
+        {"schema_version": 1, "reports": [], "warnings": [], "generated_utc": ""}, live=True
+    )
+    assert 'aria-label="Cited sources"' in html
+
+
 def test_live_dashboard_embeds_the_bounded_native_audio_prebuffer():
     html = render(
         {"schema_version": 1, "reports": [], "warnings": [], "generated_utc": ""}, live=True

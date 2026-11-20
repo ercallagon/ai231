@@ -315,6 +315,32 @@ async def test_native_composite_website_request_hands_off_to_task_runtime_first(
     )
 
 
+def test_request_projection_drops_orphan_tool_result_and_keeps_action_receipt():
+    messages = [
+        {"role": "user", "content": "Set Spotify volume to 40 percent."},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "volume",
+                    "type": "function",
+                    "function": {
+                        "name": "control_music",
+                        "arguments": '{"action":"volume_set","volume_percent":40}',
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "volume", "content": '{"ok":true,"mode":"mock"}'},
+        {"role": "user", "content": "Actually, make it 30 percent."},
+        {"role": "tool", "tool_call_id": "stale", "content": '{"ok":true}'},
+    ]
+    context = LLMContext(messages)
+    _, _, projection = prepare_context(context)
+    assert projection.get_messages() == messages[:-1]
+    assert context.get_messages() == messages
+
+
 async def test_research_citations_resolve_only_retained_public_source_urls():
     research = ResearchClient()
     long_snippet = (
@@ -345,21 +371,33 @@ async def test_research_citations_resolve_only_retained_public_source_urls():
         assert projection["truncated"] is True
 
         citation = llm.citation_sources(["S1", "S99", "invalid"])
+        assert citation == []  # search snippets cannot be presented as source citations
+        retrieved = {
+            "source_id": "S4",
+            "title": "Retrieved report",
+            "url": "https://elections.example/retrieved",
+            "evidence_status": "retrieved_unverified",
+            "kind": "untrusted_retrieved_source",
+            "fetched": True,
+            "truncated": False,
+        }
+        research.sources["S4"] = retrieved
+        citation = llm.citation_sources(["S4", "S99", "invalid"])
         assert citation == [
             {
-                "source_id": "S1",
-                "title": "Official election result",
-                "url": lead["url"],
-                "evidence_status": "search_result_snippet",
-                "source_type": "untrusted_search_result",
-                "fetched": False,
-                "truncated": True,
+                "source_id": "S4",
+                "title": "Retrieved report",
+                "url": retrieved["url"],
+                "evidence_status": "retrieved_unverified",
+                "source_type": "untrusted_retrieved_source",
+                "fetched": True,
+                "truncated": False,
             }
         ]
         llm.source_lookup = lambda source_id: (
-            {**source, "source_id": "S9"} if source_id == "S1" else None
+            {**retrieved, "source_id": "S9"} if source_id == "S4" else None
         )
-        assert llm.citation_sources(["S1"]) == []
+        assert llm.citation_sources(["S4"]) == []
         llm.source_lookup = lambda source_id: research.sources.get(source_id)
 
         # Missing or credential-bearing URLs never become browser citations.
@@ -511,6 +549,28 @@ def test_native_llm_debug_log_does_not_emit_conversation_text():
     assert "1 context messages" in output
 
 
+async def test_pi_primary_quick_answer_preserves_qualification_within_existing_limit():
+    from pathlib import Path
+
+    options = load_runtime(Path("configs/native-demo-runtime.json"), engine="native")
+    state = NativeState()
+    app = NativeApplication(state, MemorySink(), annotated=True, options=options)
+    llm = NativeLLM(BackendSpec())
+    try:
+        assert not app.tavily_quick_research_designated
+        app.designate_next_tavily_quick_research()
+        assert app.tavily_quick_research_designated
+        qualified = "The project opened today. This was a private preview only."
+        assert llm.queue_tavily_answer(qualified, "S1")
+        assert llm.pending_tavily_answer[1:] == (qualified + " [S1]", None)
+        assert not llm.queue_tavily_answer(qualified + " Extra detail." * 20, "S1")
+        assert llm.pending_tavily_answer[2] == "tavily_answer_unavailable"
+        assert qualified not in llm.pending_tavily_answer[1]
+    finally:
+        await llm._client.close()
+        await state.close()
+
+
 def test_clock_and_bounded_context_keep_complete_tool_groups():
     from copy import deepcopy
     from types import SimpleNamespace
@@ -556,7 +616,9 @@ def test_clock_and_bounded_context_keep_complete_tool_groups():
     turn_ids_before = [
         row["id"] for row in context_view(projected_state, projected_app)["messages"]
     ]
-    dropped, instruction, projection = prepare_context(context, clock=lambda: when, max_turns=1)
+    dropped, instruction, projection = prepare_context(
+        context, clock=lambda: when, timezone_name="Asia/Manila", max_turns=1
+    )
     assert dropped == 1
     messages = projection.get_messages()
     assert len(messages) == 3 and messages[0]["role"] == "user"
@@ -565,12 +627,15 @@ def test_clock_and_bounded_context_keep_complete_tool_groups():
         row["id"] for row in context_view(projected_state, projected_app)["messages"]
     ] == turn_ids_before
     assert "2031-01-01T23:58" in instruction
-    assert "latest relevant completed event" in instruction
-    assert "distinguish event" in instruction
-    assert "Search snippets are discovery leads only" in instruction
-    assert "about 30 words" in " ".join(instruction.split())
-    assert "Preserve essential qualifications" in instruction
-    assert "not merely" in instruction and "unrelated device or task receipts" in instruction
+    assert "2031-01-02T07:58" in instruction and "Asia/Manila" in instruction
+    policy = " ".join(instruction.split())
+    assert "latest relevant completed event" in policy
+    assert "Distinguish event, publication and current dates" in policy
+    assert "Search snippets are discovery leads only" in policy
+    assert "about 30 words" in policy
+    assert "Preserve essential qualifications" in policy
+    assert "Resolve references by topic and recency" in instruction
+    assert "Use action receipts to answer action" in instruction
     assert messages[-1]["tool_call_id"] == messages[-2]["tool_calls"][0]["id"]
     _, instruction, _ = prepare_context(
         context, clock=lambda: datetime(2031, 1, 2, tzinfo=timezone.utc)
@@ -631,6 +696,8 @@ async def test_original_source_redirect_provenance_and_quote(monkeypatch):
     monkeypatch.setattr(client, "read", read)
     source = await client.retrieve("https://lead.example/")
     assert source["url"] == "https://original.example/article"
+    assert source["fetched"] is True
+    assert source["evidence_status"] == "retrieved_unverified"
     assert "secret instructions" not in source["text"]
     assert source["text_sha256"] == hashlib.sha256(source["text"].encode()).hexdigest()
     assert client.verify(
@@ -794,6 +861,8 @@ async def test_retrieval_http_failure_uses_one_bounded_basic_extract_fallback(mo
     assert calls[-1][1] == "https://api.tavily.com/extract"
     assert source["url"] == "https://source.example/article"
     assert source["extraction_method"] == "tavily_basic_extract"
+    assert source["fetched"] is True
+    assert source["evidence_status"] == "retrieved_unverified"
     assert source["fallback_status"] == "succeeded"
     evidence = client.evidence_for_model(source, "certified election result November")
     assert evidence["source_id"] == "S1" and evidence["url"] == source["url"]
@@ -1298,6 +1367,8 @@ async def test_structured_research_answer_resolves_passages_and_keeps_chat_strea
 
     source = {
         "source_id": "S1",
+        "url": "https://example.com/meeting",
+        "fetched": True,
         "text": (
             "Prime Minister Takaichi Sanae attended the meeting on November 12, 2026. "
             "The nearby station serves lunch menus."
@@ -1309,6 +1380,8 @@ async def test_structured_research_answer_resolves_passages_and_keeps_chat_strea
     }
     second_source = {
         "source_id": "S2",
+        "url": "https://example.org/event",
+        "fetched": True,
         "text": "The event took place in Tokyo during 2026.",
         "evidence_passages": {"S2-P1": "The event took place in Tokyo during 2026."},
     }
@@ -1768,6 +1841,7 @@ async def test_native_michigan_research_long_passage_delivers_one_cited_answer()
             "text": passage,
             "text_sha256": "b" * 64,
             "evidence_status": "retrieved_unverified",
+            "fetched": True,
         }
         research.sources["S1"] = source
         return source
@@ -2140,6 +2214,8 @@ async def test_structured_research_accepts_cited_natural_paraphrase_but_not_miss
     passage_text = "Prime Minister Takaichi Sanae leads Japan's cabinet in November 2026."
     source = {
         "source_id": "S1",
+        "url": "https://example.com/cabinet",
+        "fetched": True,
         "text": passage_text,
         "evidence_passages": {"S1-P1": passage_text},
     }

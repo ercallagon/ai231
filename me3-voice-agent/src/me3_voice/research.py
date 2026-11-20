@@ -787,6 +787,8 @@ class ResearchClient:
             "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
             "extraction_method": extraction_method,
             "evidence_status": "retrieved_unverified",
+            # Retrieval records content availability, not factual verification.
+            "fetched": True,
             "local_extraction": local_extraction,
             "fallback_status": fallback_status,
             "fallback_error": fallback_error,

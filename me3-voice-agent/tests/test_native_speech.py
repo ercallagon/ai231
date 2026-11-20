@@ -418,15 +418,20 @@ async def test_spoken_tts_removes_markdown_without_changing_display_context():
 
             return stream()
 
-    source = "The lamp is now **red** with 30 % brightness.\n```python\nprint('hi')\n```"
+    source = (
+        "The lamp is now **red** with 30 % brightness[S1, S2]. "
+        "The result[S3]is preliminary.\n```python\nprint('hi')\n```"
+    )
     assert spoken_text(source) == (
-        "The lamp is now red with 30 percent brightness. Code is shown on screen."
+        "The lamp is now red with 30 percent brightness. "
+        "The result is preliminary. Code is shown on screen."
     )
     speech, events = Speech(), []
     tts = McpTTSService(speech, on_event=events.append)
     await tts.on_turn_context_created("response-context")
     frames = [frame async for frame in tts.run_tts(source, "response-context")]
     assert speech.text == [spoken_text(source)]
+    assert "[S" not in speech.text[0]
     assert all("**" not in text and "```" not in text for text in speech.text)
     assert all(frame.context_id == "response-context" for frame in frames)
     assert events[0]["response_id"] == "response-context"

@@ -2277,6 +2277,47 @@ async def test_personal_site_task_gets_only_scoped_profile_context():
         await state.close()
 
 
+async def test_local_owner_reply_stays_local_and_repeat_keeps_profile_context():
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from me3_voice.conversation_context import LOCAL_OWNER_TURN, prepare_context
+    from me3_voice.native_app import NativeApplication, NativeState
+    from me3_voice.native_llm import NativeLLM
+    from me3_voice.configuration import BackendSpec
+    from me3_voice.request_budget import serialized_request
+
+    state = NativeState()
+    state.owner_profile = {"display_name": "Fixture Owner", "current_role": "Fixture Role"}
+    app = NativeApplication(state, object(), annotated=True)
+    llm = NativeLLM(BackendSpec())
+    context = LLMContext()
+    try:
+        context.add_message({"role": "user", "content": "What is my current role?"})
+        original = await app.fast_action(context)
+        assert "Fixture Role" in original
+        context.add_message({"role": "assistant", "content": original})
+        context.add_message({"role": "user", "content": "Please say that again."})
+        assert await app.fast_action(context) == original
+        context.add_message({"role": "assistant", "content": original})
+        context.add_message({"role": "user", "content": "Tell me about telescopes."})
+        context.add_message({"role": "assistant", "content": "They collect light."})
+        context.add_message({"role": "user", "content": "Repeat that."})
+        assert await app.fast_action(context) is None
+        _, policy, projected = prepare_context(context)
+        await llm._update_settings(llm.Settings(system_instruction=policy))
+        payload = serialized_request(await llm._prepare_provider_params(projected))
+        assert b"Fixture Owner" not in payload and b"Fixture Role" not in payload
+        assert LOCAL_OWNER_TURN.encode() not in payload
+        assert b"They collect light." in payload
+        assert [m["content"] for m in context.get_messages() if m["role"] == "assistant"] == [
+            original,
+            original,
+            "They collect light.",
+        ]
+    finally:
+        await llm._client.close()
+        await state.close()
+
+
 async def test_spoken_github_approval_is_session_scoped_and_action_mismatch_rejected():
     from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
     from pipecat.processors.aggregators.llm_context import LLMContext

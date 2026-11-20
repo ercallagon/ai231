@@ -35,23 +35,6 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameDirection
 
 
-_NON_TERMINAL_ABBREVIATIONS = re.compile(
-    r"(?:\b(?:[A-Z]\.){2,}|\b(?:Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|e\.g|i\.e|vs|etc)\.)$",
-    re.IGNORECASE,
-)
-
-
-def _first_complete_sentence(text):
-    """Return the first sentence without splitting at common dotted abbreviations."""
-    for boundary in re.finditer(r"[.!?][\"'”’]?\s+", text):
-        prefix = text[: boundary.end()].rstrip()
-        stem = prefix.rstrip("\"'”’")
-        if stem.endswith(".") and _NON_TERMINAL_ABBREVIATIONS.search(stem):
-            continue
-        return prefix
-    return text.strip()
-
-
 MAX_RESEARCH_SEARCHES_PER_TURN = 3
 MAX_RESEARCH_RETRIEVALS_PER_TURN = 5
 MAX_RESEARCH_EVIDENCE_TOKENS_PER_TURN = 5000
@@ -293,6 +276,7 @@ class NativeLLM(OpenAILLMService):
         upstream=None,
         on_event=None,
         clock=None,
+        timezone_name="UTC",
         source_ids=None,
         source_lookup=None,
         evidence_passage_ids=None,
@@ -314,6 +298,7 @@ class NativeLLM(OpenAILLMService):
         self.response_has_tools = False
         self.response_tool_indices = set()
         self.clock = clock
+        self.timezone_name = timezone_name
         self.max_model_calls_per_turn = min(max_model_calls_per_turn, MAX_MODEL_CALLS_PER_TURN)
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
         self.max_repeated_tool_calls = max_repeated_tool_calls
@@ -586,6 +571,10 @@ class NativeLLM(OpenAILLMService):
             source = self.source_lookup(source_id)
             if not isinstance(source, dict) or source.get("source_id") != source_id:
                 continue
+            # Search-result snippets are discovery hints, not fetched evidence
+            # suitable for a user-facing research citation.
+            if source.get("fetched") is not True:
+                continue
             try:
                 url = public_url(source.get("url"))
             except (TypeError, ValueError):
@@ -610,7 +599,7 @@ class NativeLLM(OpenAILLMService):
                     "url": url,
                     "evidence_status": str(source.get("evidence_status", ""))[:48],
                     "source_type": str(source.get("kind", ""))[:48],
-                    "fetched": source.get("fetched") is True,
+                    "fetched": True,
                     "truncated": source.get("truncated") is True,
                 }
             )
@@ -685,9 +674,10 @@ class NativeLLM(OpenAILLMService):
         failure = None
         if isinstance(answer, str) and answer.strip() and re.fullmatch(r"S\d+", source_id or ""):
             text = answer.strip()
-            concise = _first_complete_sentence(text)
-            if concise and len(concise.split()) <= 35:
-                answer = f"{concise} [{source_id}]"
+            # A qualifier can be a separate sentence. Keep the whole bounded
+            # answer or abstain when it cannot fit the quick-answer limit.
+            if len(text.split()) <= 35:
+                answer = f"{text} [{source_id}]"
             else:
                 answer = None
         else:
@@ -847,7 +837,9 @@ class NativeLLM(OpenAILLMService):
             context.set_tool_choice("none")
         if self.refresh_tools is not None and not repair_context:
             self.refresh_tools(context)
-        dropped, instruction, request_context = prepare_context(context, clock=self.clock)
+        dropped, instruction, request_context = prepare_context(
+            context, clock=self.clock, timezone_name=self.timezone_name
+        )
         self.on_event("llm_context_ready", **self.context_diagnostics(request_context, dropped))
         await self._update_settings(self.Settings(system_instruction=instruction))
         self.calls += 1

@@ -343,7 +343,7 @@
       if(!user&&draft&&!m.generation_complete){content=escape(m.confirmed_text)+'<span class="message-draft">'+escape(m.text.slice(m.confirmed_text.length))+'</span>';}
       if(!m.text&&!user)content='<span class="message-empty">Response stopped before playback.</span>';
       const references=!user?(runtime.citations.get(m.turn_id)||[]):[];
-      const citationMarkup=references.length?`<nav class="message-citations" aria-label="Verified sources">${references.map(source=>`<a href="${escape(source.url)}" target="_blank" rel="noopener noreferrer">${escape(source.source_id)}${source.title?': '+escape(source.title):''}</a>`).join('')}</nav>`:'';
+      const citationMarkup=references.length?`<nav class="message-citations" aria-label="Cited sources">${references.map(source=>`<a href="${escape(source.url)}" target="_blank" rel="noopener noreferrer">${escape(source.source_id)}${source.title?': '+escape(source.title):''}</a>`).join('')}</nav>`:'';
       return `<article data-status="${escape(m.status)}" class="message ${user?'message-user':'message-assistant'}" data-message-id="${escape(m.id)}"><div class="message-header"><strong>${user?'You':'Swift'}</strong>${label?pill(label,m.status==='error'?'red':m.status==='interrupted'?'amber':'subtle'):''}</div><div class="message-text">${content}</div>${citationMarkup}</article>`;
     }).join('');
     const template=document.createElement('template');

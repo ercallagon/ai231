@@ -48,7 +48,7 @@ def spoken_text(text):
     value = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", value)
     # Research citations and bare URLs are useful in the UI but awkward and
     # often tokenized poorly by speech providers.
-    value = re.sub(r"(?<!\w)\[S\d+(?:\s*,\s*S\d+)*\]", "", value, flags=re.I)
+    value = re.sub(r"\[S\d+(?:\s*,\s*S\d+)*\]", " ", value, flags=re.I)
     value = re.sub(r"https?://\S+", "", value, flags=re.I)
     value = re.sub(r"\bwww\.\S+", "", value, flags=re.I)
     value = re.sub(r"^\s{0,3}#{1,6}\s+", "", value, flags=re.M)

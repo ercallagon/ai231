@@ -39,7 +39,7 @@ from pipecat.workers.runner import WorkerRunner
 from .configuration import load_backends, RuntimeOptions
 from .contracts import TurnKey
 from .conversation_tools import schemas, validate_arguments, READ_ONLY
-from .conversation_context import runtime_time
+from .conversation_context import LOCAL_OWNER_TURN, runtime_time
 from .research import ResearchClient, ResearchError, public_url
 from .native_llm import NativeLLM
 from .native_pipeline import make_native_pipeline
@@ -1343,6 +1343,7 @@ class NativeApplication:
 
         messages = context.get_messages()
         history, tool_requests = [], {}
+        previous_user = current_user = None
         history_turn = 0
         for message in messages:
             if not isinstance(message, dict):
@@ -1351,6 +1352,7 @@ class NativeApplication:
             if role == "user":
                 history_turn += 1
                 if isinstance(message.get("content"), str):
+                    previous_user, current_user = current_user, message
                     history.append(
                         {"role": "user", "content": message["content"], "turn_id": history_turn}
                     )
@@ -1476,7 +1478,16 @@ class NativeApplication:
                 return "The website task was not accepted, so I haven't claimed it is running."
             self.event("task_handoff_accepted", task_id=result["task_id"])
             return "I've started the research and website task in the background. You can keep talking to me."
-        if demo_owner_identity_query(text):
+        repeat_identity = (
+            previous_user is not None
+            and previous_user.get(LOCAL_OWNER_TURN) is True
+            and re.fullmatch(
+                r"(?:please )?(?:repeat that|repeat your answer|say that again)",
+                re.sub(r"\s+", " ", text.strip().casefold()).strip(" .!?"),
+            )
+        )
+        if demo_owner_identity_query(text) or repeat_identity:
+            current_user[LOCAL_OWNER_TURN] = True
             profile = getattr(self.resources, "owner_profile", {})
             name = (profile.get("display_name") if isinstance(profile, dict) else None) or getattr(
                 self.resources, "owner_name", ""
@@ -1866,12 +1877,14 @@ class NativeApplication:
             await self.resources.task_runtime.start_runtime()
         self.resources.task_runtime.on_event = self.task_event
         self.startup_stage = "model_and_tool_setup"
+        weather = getattr(self.resources.devices, "weather", None)
         self.llm = NativeLLM(
             self.resources.backends["llm"],
             credentials=self.resources.credentials,
             budget=self.resources.budget,
             upstream=self.upstream,
             clock=self.clock,
+            timezone_name=getattr(weather, "timezone_name", "UTC"),
             source_ids=lambda: set(self.resources.research.sources),
             source_lookup=lambda source_id: self.resources.research.sources.get(source_id),
             evidence_passage_ids=self.resources.research.evidence_passage_ids,
@@ -2265,7 +2278,9 @@ class NativeApplication:
                                 error_code="explicit_confirmation_required",
                             )
                         elif call.name == "get_runtime_time":
-                            result = runtime_time(args.get("timezone", "UTC"))
+                            result = runtime_time(
+                                args.get("timezone", self.llm.timezone_name), self.clock
+                            )
                         elif call.name == "web_search":
                             self.research_recovery_active = True
                             alternatives = (
