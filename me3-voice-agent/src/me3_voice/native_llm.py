@@ -90,6 +90,13 @@ _RESEARCH_NEGATION = re.compile(
 )
 _RESEARCH_NUMBER = re.compile(r"\b\d+(?:[,.]\d+)*(?:%|st|nd|rd|th)?\b", re.IGNORECASE)
 _RESEARCH_ENTITY = re.compile(r"\b[A-Z][a-z]{2,}\b")
+_ELECTION_EVENT = re.compile(r"\b(?:elections?|races?|primar(?:y|ies)|runoffs?)\b", re.I)
+_ELECTION_OFFICE = re.compile(r"\b(?:senate|house|governor|presiden\w*|mayor)\b", re.I)
+_ELECTION_WIN = re.compile(
+    r"\b(?:won|wins?|was the winner of|is the winner of|defeats?|defeated|beat|beats)\b",
+    re.I,
+)
+_ELECTION_DEFEAT = re.compile(r"\b(?:defeat(?:s|ed|ing)?|beat(?:s|ing)?)\b", re.I)
 _RESEARCH_NON_ENTITY = {
     "a",
     "an",
@@ -183,15 +190,17 @@ def _research_content_terms(text):
     }
 
 
+def _research_sentences(passage):
+    # Keep an office name such as U.S. Senate in the result sentence.
+    return re.split(r"(?<!\b[A-Z]\.[A-Z]\.)(?<=[.!?])\s+|\n+", passage)
+
+
 def _relevant_research_sentences(claim, passage):
     """Return the passage sentences most directly tied to a claim's wording."""
-    sentences = [
-        value.strip() for value in re.split(r"(?<=[.!?])\s+|\n+", passage) if value.strip()
-    ]
     claim_terms = _research_content_terms(claim)
     claim_entities = _research_entities(claim)
     scored = []
-    for sentence in sentences:
+    for sentence in _research_sentences(passage):
         shared_terms = len(claim_terms & _research_content_terms(sentence))
         shared_entities = len(claim_entities & _research_entities(sentence))
         if shared_terms or shared_entities:
@@ -200,6 +209,63 @@ def _relevant_research_sentences(claim, passage):
         return []
     best = max(score for score, _ in scored)
     return [sentence for score, sentence in scored if score == best]
+
+
+def _election_result_supported(claim, passage):
+    """Require a positive election result to anchor its participants and race together."""
+    win = _ELECTION_WIN.search(claim)
+    if (
+        not win
+        or not _ELECTION_EVENT.search(claim)
+        or (not _ELECTION_OFFICE.search(claim) and not re.search(r"\belections?\b", claim, re.I))
+    ):
+        return True
+
+    def names(text):
+        return _research_entities(text) - {"democrat", "democratic", "republican", "party"}
+
+    def subject(text):
+        participants = names(text)
+        return [
+            word.casefold()
+            for word in _RESEARCH_ENTITY.findall(text)
+            if word.casefold() in participants
+        ]
+
+    def opponent(text):
+        defeat = _ELECTION_DEFEAT.search(text)
+        return (
+            names(text[defeat.end() :].split(" in ", 1)[0].split(" for ", 1)[0])
+            if defeat
+            else set()
+        )
+
+    winner = subject(claim[: win.start()])
+    loser = opponent(claim)
+    entities = names(claim)
+    years = set(re.findall(r"\b(?:19|20)\d{2}\b", claim))
+    offices = set(_ELECTION_OFFICE.findall(claim.casefold()))
+    election_round = set(re.findall(r"\b(?:primary|runoff|general)\b", claim.casefold()))
+    for sentence in _research_sentences(passage):
+        result = _ELECTION_WIN.search(sentence)
+        if (
+            not result
+            or not _ELECTION_EVENT.search(sentence)
+            or _RESEARCH_NEGATION.search(sentence)
+        ):
+            continue
+        if (
+            winner
+            and winner == subject(sentence[: result.start()])[-len(winner) :]
+            and loser <= opponent(sentence)
+            and entities <= names(sentence)
+            and years <= set(re.findall(r"\b(?:19|20)\d{2}\b", sentence))
+            and offices <= set(_ELECTION_OFFICE.findall(sentence.casefold()))
+            and election_round
+            <= set(re.findall(r"\b(?:primary|runoff|general)\b", sentence.casefold()))
+        ):
+            return True
+    return False
 
 
 def _research_claim_conflicts(claim, passage, question=""):
@@ -317,6 +383,8 @@ class NativeLLM(OpenAILLMService):
         self._research_evidence_repair_active = False
         self._research_repair_contexts = set()
         self._research_repair_tool_rounds = {}
+        self._rejected_research_passage = None
+        self._repair_excluded_passages = set()
         self._last_request_started = 0.0
         self._last_prompt_tokens = 0
         self._token_limit = 0
@@ -419,6 +487,8 @@ class NativeLLM(OpenAILLMService):
         self._research_evidence_repair_active = False
         self._research_repair_contexts.clear()
         self._research_repair_tool_rounds.clear()
+        self._rejected_research_passage = None
+        self._repair_excluded_passages.clear()
         self.turn_deadline = time.monotonic() + self.turn_seconds
 
     def claim_tool(self):
@@ -479,6 +549,12 @@ class NativeLLM(OpenAILLMService):
         operation_hash = hashlib.sha256(canonical.encode()).hexdigest()[:16]
         count = self.tool_operation_counts.get(operation_hash, 0) + 1
         self.tool_operation_counts[operation_hash] = count
+        if name == "retrieve_source" and self._research_evidence_repair_active:
+            repair = next(iter(self._research_repair_tool_rounds.values()), None)
+            if repair and (
+                not isinstance(arguments, dict) or arguments.get("url") != repair["url"]
+            ):
+                return operation_hash, count, "research_repair_source_not_selected"
         if name in {"web_search", "retrieve_source"}:
             self.research_tool_calls += 1
         if name == "web_search" and self.research_searches >= MAX_RESEARCH_SEARCHES_PER_TURN:
@@ -828,13 +904,32 @@ class NativeLLM(OpenAILLMService):
         if self.calls >= self.max_model_calls_per_turn:
             return self._terminal_response("model_call_budget_exhausted")
         repair_context_id = id(context)
+        if repair_context_id not in self._research_repair_contexts:
+            # Pipecat may deliver the repair tool result in a different context
+            # object. The one active repair still owns that continuation.
+            repair_context_id = next(
+                (
+                    key
+                    for key, state in self._research_repair_tool_rounds.items()
+                    if state["retrieval_used"]
+                ),
+                repair_context_id,
+            )
         repair_context = repair_context_id in self._research_repair_contexts
         repair_tool_round = self._research_repair_tool_rounds.get(repair_context_id)
         if repair_tool_round and repair_tool_round.get("retrieval_used"):
             from pipecat.adapters.schemas.tools_schema import ToolsSchema
+            from pipecat.processors.aggregators.llm_context import LLMContext
 
-            context.set_tools(ToolsSchema(standard_tools=[]))
+            context = LLMContext(
+                messages=context.get_messages(), tools=ToolsSchema(standard_tools=[])
+            )
             context.set_tool_choice("none")
+            if not self._structured_research_passage_ids():
+                self._research_repair_tool_rounds.pop(repair_context_id, None)
+                self._research_repair_contexts.discard(repair_context_id)
+                self._finish_research_evidence_repair("insufficient_verified_evidence")
+                return self._terminal_response("insufficient_verified_evidence")
         if self.refresh_tools is not None and not repair_context:
             self.refresh_tools(context)
         dropped, instruction, request_context = prepare_context(
@@ -1009,15 +1104,14 @@ class NativeLLM(OpenAILLMService):
         async def chunks():
             held_failure = []
             repairable_failures = {"invalid_structured_answer", "missing_research_citation"}
-            evidence_recovery = False
+            evidence_failures = {
+                "contradictory_claim",
+                "unsupported_claim",
+                "insufficient_verified_evidence",
+            }
             if not structured_research:
                 repairable_failures = {"missing_research_citation"}
             else:
-                evidence_failures = {
-                    "contradictory_claim",
-                    "unsupported_claim",
-                    "insufficient_verified_evidence",
-                }
                 repairable_failures.update(evidence_failures)
             async for item in first_stream:
                 if self.response_failure_reason in repairable_failures:
@@ -1030,21 +1124,33 @@ class NativeLLM(OpenAILLMService):
             if not held_failure:
                 return
             repair_reason = self.response_failure_reason
-            alternatives = self.research_alternatives()
+            evidence_failure = structured_research and repair_reason in evidence_failures
+            if evidence_failure and self._rejected_research_passage:
+                self._repair_excluded_passages.add(self._rejected_research_passage)
+            rejected_source = (
+                self.source_lookup(self._rejected_research_passage.split("-")[0])
+                if evidence_failure and self._rejected_research_passage
+                else None
+            )
+            rejected_url = rejected_source.get("url") if isinstance(rejected_source, dict) else None
+            alternatives = [
+                lead for lead in self.research_alternatives() if lead["url"] != rejected_url
+            ]
             evidence_recovery = (
-                structured_research
-                and repair_reason
-                in {
-                    "contradictory_claim",
-                    "unsupported_claim",
-                    "insufficient_verified_evidence",
-                }
+                evidence_failure
                 and bool(alternatives)
+                and self.tool_calls < self.max_tool_calls_per_turn
+                and self.research_retrievals < MAX_RESEARCH_RETRIEVALS_PER_TURN
             )
             required_calls = 2 if evidence_recovery else 1
             can_repair = (
                 not self.research_format_repair_attempted
                 and epoch == self.epoch
+                and (
+                    not evidence_failure
+                    or evidence_recovery
+                    or self._structured_research_passage_ids()
+                )
                 and self.calls + required_calls <= self.max_model_calls_per_turn
                 and (
                     self.turn_deadline is None
@@ -1065,6 +1171,8 @@ class NativeLLM(OpenAILLMService):
                         tool for tool in tools if getattr(tool, "name", None) == "retrieve_source"
                     ]
                     if not retrieve_tools:
+                        self.response_failure_reason = repair_reason
+                        self._finish_research_evidence_repair(repair_reason)
                         for item in held_failure:
                             yield item
                         return
@@ -1081,12 +1189,16 @@ class NativeLLM(OpenAILLMService):
                     self.on_event(
                         "llm_research_evidence_repair_started",
                         reason=repair_reason,
-                        retrievals_available=len(self.research_alternatives()),
+                        retrievals_available=len(alternatives),
                         remaining_model_calls=max(0, self.max_model_calls_per_turn - self.calls),
                     )
                 else:
                     correction = (
-                        "Your previous research final did not match the required structured "
+                        "The draft was rejected. Use only other retained passages that support "
+                        "the answer and return the required JSON. Do not call tools. "
+                        "If no eligible passage supports the answer, return an empty claims array."
+                        if evidence_failure
+                        else "Your previous research final did not match the required structured "
                         "answer format. Make one format correction using only the already "
                         "retained evidence in this conversation. Return only the required "
                         "JSON schema, with one or two concise claims and their exact retained "
@@ -1125,7 +1237,8 @@ class NativeLLM(OpenAILLMService):
                 self._research_repair_contexts.add(id(repair_context))
                 if evidence_recovery:
                     self._research_repair_tool_rounds[id(repair_context)] = {
-                        "retrieval_used": False
+                        "retrieval_used": False,
+                        "url": alternatives[0]["url"],
                     }
                 try:
                     repair_stream = await self.get_chat_completions(repair_context)
@@ -1171,10 +1284,8 @@ class NativeLLM(OpenAILLMService):
     async def _prepare_provider_params_within_budget(self, context):
         """Fit the actual framework request to its configured hard input ceiling.
 
-        Preserve the current user turn and its research provenance. Under
-        pressure, discard oldest complete conversation turns first, then
-        compact discovery-only search snippets while retaining candidate URLs
-        and titles. Retrieved evidence is never altered by this compactor.
+        Omit discovery text for sources fetched within the same turn. Under
+        budget pressure, drop old turn groups before compacting tool results.
         """
         from pipecat.processors.aggregators.llm_context import LLMContext
 
@@ -1185,6 +1296,7 @@ class NativeLLM(OpenAILLMService):
             tools=context.tools,
             tool_choice=context.tool_choice,
         )
+        self._omit_fetched_lead_snippets(context)
         params = await self._prepare_provider_params(context)
         estimated, size = conservative_input_token_estimate(params)
         limit = self.spec.max_input_tokens
@@ -1231,6 +1343,58 @@ class NativeLLM(OpenAILLMService):
                 request_limit=limit,
             )
         return params, estimated, size
+
+    @staticmethod
+    def _omit_fetched_lead_snippets(context):
+        """Omit search-only text once same-turn fetched evidence is available."""
+        fetched_urls = set()
+        for message in reversed(context.get_messages()):
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "user":
+                fetched_urls.clear()
+                continue
+            if message.get("role") != "tool":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                try:
+                    result = json.loads(content)
+                except ValueError:
+                    continue
+            else:
+                result = content
+            if not isinstance(result, dict):
+                continue
+            kind = result.get("kind")
+            if (
+                kind == "untrusted_retrieved_source"
+                and result.get("fetched") is True
+                and isinstance(result.get("url"), str)
+                and result.get("passage_ids")
+                and isinstance(result.get("text"), str)
+                and result["text"].strip()
+            ):
+                fetched_urls.add(result["url"])
+            elif kind == "untrusted_search_leads" and isinstance(result.get("results"), list):
+                changed = False
+                for lead in result["results"]:
+                    if (
+                        isinstance(lead, dict)
+                        and isinstance(lead.get("url"), str)
+                        and lead["url"] in fetched_urls
+                    ):
+                        status = lead.get("evidence_status")
+                        if status == "discovery_only" and "snippet" in lead:
+                            del lead["snippet"]
+                            changed = True
+                        elif status == "search_result_snippet" and lead.get("fetched") is False:
+                            for key in ("text", "passage_ids", "citation", "evidence_chunks"):
+                                if key in lead:
+                                    del lead[key]
+                                    changed = True
+                if changed and isinstance(content, str):
+                    message["content"] = json.dumps(result, ensure_ascii=False)
 
     @staticmethod
     def _drop_oldest_context_group(context):
@@ -1399,7 +1563,7 @@ class NativeLLM(OpenAILLMService):
         return (
             self._supports_structured_research_output()
             and self.research_tool_calls > 0
-            and bool(self._structured_research_passage_ids())
+            and bool(self._structured_research_passage_ids() or self._repair_excluded_passages)
         )
 
     @staticmethod
@@ -1445,7 +1609,11 @@ class NativeLLM(OpenAILLMService):
             if not isinstance(value, str):
                 continue
             match = re.fullmatch(r"(S\d+)-P\d+", value)
-            if match and match.group(1) in source_ids:
+            if (
+                match
+                and match.group(1) in source_ids
+                and value not in self._repair_excluded_passages
+            ):
                 valid.add(value)
         return sorted(
             valid,
@@ -1519,11 +1687,15 @@ class NativeLLM(OpenAILLMService):
             if not claim_terms:
                 return None, "insufficient_verified_evidence", used + [source_id], False
             if conflicts:
+                self._rejected_research_passage = passage_id
                 return None, "contradictory_claim", used + [source_id], False
             # Ordinary research may use natural paraphrases. Lexical fit is
             # diagnostic there; high-risk queries retain the stricter existing
             # token-coverage rule. Neither branch claims semantic entailment.
-            if strict_support and lexical_mismatch:
+            if (strict_support and lexical_mismatch) or not _election_result_supported(
+                text, original
+            ):
+                self._rejected_research_passage = passage_id
                 return None, "unsupported_claim", used + [source_id], False
             used.append(source_id)
             # Source IDs are rendered by the application, not supplied inside
@@ -1547,9 +1719,7 @@ class NativeLLM(OpenAILLMService):
         """
         if not isinstance(raw, str) or "{" in raw or "}" in raw:
             return None, "invalid_structured_answer", [], False
-        sentences = [
-            part.strip() for part in re.split(r"(?<=[.!?])\s+", raw.strip()) if part.strip()
-        ]
+        sentences = [part.strip() for part in _research_sentences(raw) if part.strip()]
         if not 1 <= len(sentences) <= 2:
             return None, "invalid_structured_answer", [], False
 
@@ -2022,6 +2192,7 @@ class NativeLLM(OpenAILLMService):
                     ):
                         research_finalized = True
                         raw_answer = "".join(structured_text)
+                        self._rejected_research_passage = None
                         rendered, failure, citations, invalid_citation = (
                             self._validate_structured_research_answer(
                                 raw_answer,

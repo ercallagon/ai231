@@ -1558,14 +1558,14 @@ async def test_structured_research_answer_resolves_passages_and_keeps_chat_strea
         assert "won't guess" in wrong_date
         assert llm.response_failure_reason == "contradictory_claim"
 
-        # Low-risk unsupported relations are not semantically disproven by
-        # lexical mismatch alone; the diagnostic makes this limitation visible.
+        # An election result requires evidence of the outcome, even when the
+        # passage mentions the candidate and ordinary strict mode is off.
         llm.response_failure_reason = None
         unsupported_relation = await result(
             {"claims": [{"text": "Takaichi won the election.", "passage_id": "S1-P1"}]}
         )
-        assert "won't guess" not in unsupported_relation
-        assert llm.response_failure_reason is None
+        assert "won't guess" in unsupported_relation
+        assert llm.response_failure_reason == "unsupported_claim"
         assert any(
             event["event"] == "llm_claim_support_diagnostic"
             and event["lexical_mismatch"]
@@ -1794,6 +1794,61 @@ def test_research_conflicts_are_scoped_to_relevant_evidence_sentence():
     assert _research_claim_conflicts(reversed_polarity, passage) == ["polarity_conflict"]
 
 
+@pytest.mark.parametrize(
+    ("claim", "supported"),
+    [
+        (
+            "Elissa Slotkin (Democratic Party) defeated Mike Rogers (Republican Party) "
+            "in the 2024 United States Senate election in Michigan",
+            False,
+        ),
+        ("Abdul El‑Sayed won Michigan’s 2026 Senate race, defeating Mike Rogers", True),
+        ("Mike Rogers won Michigan’s 2026 Senate race, defeating Abdul El-Sayed", False),
+        ("Abdul El-Sayed won Michigan’s 2026 House race, defeating Mike Rogers", False),
+        ("Abdul El-Sayed won Michigan’s 2026 Senate primary, defeating Mike Rogers", False),
+        ("Abdul El-Sayed won Michigan’s 2026 Senate race, defeating Elissa Slotkin", False),
+        ("Abdul El-Sayed won Michigan’s 2024 Senate race, defeating Mike Rogers", False),
+        ("Elissa Slotkin won Michigan’s 2026 Senate race", False),
+    ],
+)
+async def test_fetched_election_citation_must_support_the_result(claim, supported):
+    # The Pi journal saves the answer, URL and passage ID but omits source
+    # text. Reconstruct the mismatch with a fetched 2026 result fixture.
+    passage = (
+        "Abdul El-Sayed defeated Mike Rogers in Michigan’s 2026 U.S. Senate election. "
+        "Elissa Slotkin discussed a 2024 campaign in a separate interview."
+    )
+    if claim.startswith("Elissa Slotkin"):
+        # A title can name the result without stating the event year. The date
+        # check alone cannot disprove a year missing from the matched sentence.
+        passage = "Abdul El-Sayed defeated Mike Rogers in the U.S. Senate election in Michigan."
+        if "2026" in claim:
+            passage = "According to Elissa Slotkin, Abdul El-Sayed won Michigan’s 2026 Senate race."
+    source = {
+        "source_id": "S2",
+        "url": "https://example.com/michigan-2026",
+        "fetched": True,
+        "evidence_passages": {"S2-P6": passage},
+    }
+    llm = NativeLLM(
+        BackendSpec(),
+        source_ids=lambda: {"S2"},
+        source_lookup=lambda _: source,
+        evidence_passage_ids=lambda: {"S2-P6"},
+        evidence_passage_lookup=lambda _: {"source_id": "S2", "text": passage},
+    )
+    try:
+        answer, reason, _, _ = llm._validate_structured_research_answer(
+            json.dumps({"claims": [{"text": claim, "passage_id": "S2-P6"}]})
+        )
+        assert bool(answer) is supported
+        assert reason in ({None} if supported else {"unsupported_claim", "contradictory_claim"})
+        if supported:
+            assert answer == claim + " [S2]"
+    finally:
+        await llm._client.close()
+
+
 async def test_native_michigan_research_long_passage_delivers_one_cited_answer():
     from me3_voice.providers import ToolCall
     from me3_voice.speech import SpeechClient
@@ -1883,8 +1938,9 @@ async def test_native_michigan_research_long_passage_delivers_one_cited_answer()
         await state.close()
 
 
+@pytest.mark.parametrize("repair", ["alternate", "repeated_url", "repeated_passage"])
 async def test_native_structured_research_recovers_once_from_irrelevant_retained_source(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, repair
 ):
     from me3_voice.providers import ToolCall
     from me3_voice.speech import SpeechClient
@@ -1919,13 +1975,20 @@ async def test_native_structured_research_recovers_once_from_irrelevant_retained
                 yield ToolCall(
                     "retrieve-alternate",
                     "retrieve_source",
-                    {"url": "https://source.example/result"},
+                    {
+                        "url": "https://source.example/old"
+                        if repair == "repeated_url"
+                        else "https://source.example/result"
+                    },
                 )
             else:
                 yield json.dumps(
                     {
                         "claims": [
-                            {"text": "Spain won the 2026 FIFA World Cup", "passage_id": "S2-P1"}
+                            {
+                                "text": "Spain won the 2026 FIFA World Cup",
+                                "passage_id": "S1-P1" if repair == "repeated_passage" else "S2-P1",
+                            }
                         ]
                     }
                 )
@@ -1945,7 +2008,10 @@ async def test_native_structured_research_recovers_once_from_irrelevant_retained
         research._remember_search_leads(result)
         return result
 
+    fetched_urls = []
+
     async def retrieve(url, *, allow_extract_fallback=True):
+        fetched_urls.append(url)
         source_id, passage = (
             ("S1", "Argentina won the 2022 World Cup.")
             if url.endswith("/old")
@@ -1955,6 +2021,7 @@ async def test_native_structured_research_recovers_once_from_irrelevant_retained
             "source_id": source_id,
             "url": url,
             "title": "World Cup result",
+            "kind": "untrusted_retrieved_source",
             "text": passage,
             "text_sha256": source_id.lower() * 32,
             "evidence_status": "retrieved_unverified",
@@ -1976,7 +2043,23 @@ async def test_native_structured_research_recovers_once_from_irrelevant_retained
             native.llm._uses_structured_research_output = lambda: bool(research.sources)
             await native.utterance(b"\1\0" * 1024)
             events = list(native.events)
+            if repair == "repeated_url":
+                assert model.calls == 4
+                assert fetched_urls == ["https://source.example/old"]
+                assert any(
+                    event.get("error_code") == "research_repair_source_not_selected"
+                    for event in events
+                    if event["event"] == "tool_operation_blocked"
+                )
+                assert any(event["event"] == "turn_failed" for event in events)
+                assert not any(event["event"] == "llm_grounding_check" for event in events)
+                return
             assert model.calls == 5
+            assert fetched_urls == ["https://source.example/old", "https://source.example/result"]
+            if repair == "repeated_passage":
+                assert any(event["event"] == "turn_failed" for event in events)
+                assert not any(event["event"] == "llm_grounding_check" for event in events)
+                return
             assert sum(event["event"] == "turn_completed" for event in events) == 1
             assert not any(event["event"] == "turn_failed" for event in events)
             assert sum(event["event"] == "tts_start" for event in events) == 1
@@ -2011,7 +2094,9 @@ async def test_native_structured_research_recovers_once_from_irrelevant_retained
         await state.close()
 
 
-async def test_native_relevant_search_snippet_cannot_answer_without_page_fetch(monkeypatch, tmp_path):
+async def test_native_relevant_search_snippet_cannot_answer_without_page_fetch(
+    monkeypatch, tmp_path
+):
     from me3_voice.providers import ToolCall
     from me3_voice.speech import SpeechClient
 
@@ -2386,11 +2471,7 @@ async def test_openrouter_requires_retrieval_before_answering_from_search(
             else:
                 claim = evidence.replace("2024", "2026") if outcome == "contradictory" else evidence
                 yield chunk(
-                    {
-                        "content": json.dumps(
-                            {"claims": [{"text": claim, "passage_id": "S2-P1"}]}
-                        )
-                    }
+                    {"content": json.dumps({"claims": [{"text": claim, "passage_id": "S2-P1"}]})}
                 )
             yield chunk({}, "stop")
 
@@ -2413,7 +2494,8 @@ async def test_openrouter_requires_retrieval_before_answering_from_search(
         source_lookup=sources.get,
         evidence_passage_ids=lambda: {p for s in sources.values() for p in s["evidence_passages"]},
         evidence_passage_lookup=lambda p: {
-            "source_id": p.split("-")[0], "text": sources[p.split("-")[0]]["evidence_passages"][p]
+            "source_id": p.split("-")[0],
+            "text": sources[p.split("-")[0]]["evidence_passages"][p],
         },
         research_alternatives=lambda: [{"url": url}] if len(requests) == 0 else [],
         max_model_calls_per_turn=2,
@@ -2463,6 +2545,193 @@ async def test_openrouter_requires_retrieval_before_answering_from_search(
         assert (llm.research_searches, llm.research_retrievals, llm.calls) == (1, 1, 2)
     finally:
         await llm._client.close()
+
+
+async def test_native_request_projection_saves_fetched_snippet_tokens(monkeypatch, tmp_path):
+    from openai.resources.chat.completions import AsyncCompletions
+    from me3_voice.request_budget import conservative_input_token_estimate
+    from me3_voice.speech import SpeechClient
+
+    questions = [
+        "What is machine learning?",
+        "Who won Michigan's 2026 U.S. Senate election?",
+        "What office did they win?",
+    ]
+    answers = [
+        "Machine learning finds patterns in data to make predictions.",
+        "Abdul El-Sayed won Michigan's 2026 Senate election",
+        "El-Sayed won a seat in the U.S. Senate.",
+    ]
+    url = "https://elections.example/michigan"
+    alternate = "https://news.example/alternate"
+    snippet = (
+        "Abdul El-Sayed won Michigan's 2026 Senate election, according to the statewide vote "
+        "totals and county returns. The Senate results page lists the other candidates."
+    )
+    retained = {
+        "kind": "untrusted_retrieved_source",
+        "source_id": "S2",
+        "url": url,
+        "title": "Michigan Senate results",
+        "fetched": True,
+        "text": answers[1] + ".",
+    }
+    comparison = []
+    for optimize in (False, True):
+        with monkeypatch.context() as patch:
+            private = tmp_path / str(optimize)
+            private.mkdir(mode=0o700)
+            patch.setenv("ME3_TASK_DATABASE", str(private / "tasks.sqlite"))
+            patch.setenv("ME3_TASK_WORKSPACE", str(private / "workspace"))
+            patch.setenv("ME3_REQUEST_LEDGER", str(private / "requests.sqlite"))
+            patch.setenv("ME3_REQUEST_RUN_ID", f"research-projection-replay-{int(optimize)}")
+            if not optimize:
+                patch.setattr(
+                    NativeLLM, "_omit_fetched_lead_snippets", staticmethod(lambda _: None)
+                )
+
+            requests = []
+            tools = [
+                ("web_search", {"query": "Michigan 2026 Senate election winner"}),
+                ("retrieve_source", {"url": url}),
+            ]
+
+            async def completion(self, **params):
+                requests.append(params)
+                step = len(requests)
+
+                async def stream():
+                    if step in (2, 3):
+                        name, args = tools[step - 2]
+                        yield chunk(
+                            {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": f"projection-{step}",
+                                        "type": "function",
+                                        "function": {"name": name, "arguments": json.dumps(args)},
+                                    }
+                                ]
+                            }
+                        )
+                        yield chunk({}, "tool_calls")
+                        return
+                    answer = {1: answers[0], 4: answers[1], 5: answers[2]}[step]
+                    if step == 4:
+                        answer = json.dumps(
+                            {
+                                "claims": [
+                                    {
+                                        "text": answer,
+                                        "passage_id": "S2-P1",
+                                    }
+                                ]
+                            }
+                        )
+                    yield chunk({"content": answer})
+                    yield chunk({}, "stop")
+
+                return stream()
+
+            patch.setattr(AsyncCompletions, "create", completion)
+            research = ResearchClient(ResearchOptions(True, 8))
+
+            async def search(query, max_results=5):
+                result = {
+                    "kind": "untrusted_search_leads",
+                    "query": query,
+                    "results": [
+                        {"url": url, "title": retained["title"], "snippet": snippet},
+                        {"url": alternate, "title": "Alternate", "snippet": "An unfetched lead."},
+                    ][:max_results],
+                }
+                for lead in result["results"]:
+                    lead["evidence_status"] = "discovery_only"
+                research._remember_search_leads(result)
+                return result
+
+            async def retrieve(source_url, *, allow_extract_fallback=True):
+                assert source_url == url
+                source = dict(retained)
+                research.sources["S2"] = source
+                return source
+
+            patch.setattr(research, "search", search)
+            patch.setattr(research, "retrieve", retrieve)
+            state = NativeState(
+                {
+                    "asr": BackendSpec(),
+                    "tts": BackendSpec(),
+                    "llm": BackendSpec(
+                        backend="external",
+                        protocol="chat-completions-v1",
+                        endpoint="https://openrouter.ai/api/v1/chat/completions",
+                        auth_env="ME3_OPENROUTER_API_KEY",
+                        model="openai/gpt-oss-120b",
+                        allow_live=True,
+                        request_limit=5,
+                        max_input_tokens=64000,
+                        max_input_tokens_total=320000,
+                    ),
+                },
+                {"ME3_OPENROUTER_API_KEY": "offline-fixture"},
+                research=research,
+                speech_factory=lambda: SpeechClient(transcript=questions),
+            )
+            try:
+                async with NativeApplication(state, MemorySink(), annotated=True) as native:
+                    native.llm.clock = lambda: datetime(2026, 11, 20, tzinfo=timezone.utc)
+                    for _ in questions:
+                        await native.utterance(b"\1\0" * 1024)
+                    assert state.budget.requests == 5
+                    assert [
+                        event["tool_name"]
+                        for event in native.events
+                        if event["event"] == "tool_completed"
+                    ] == ["web_search", "retrieve_source"]
+                    assert sum(event["event"] == "turn_completed" for event in native.events) == 3
+                    citation = next(
+                        event for event in native.events if event["event"] == "llm_citation_check"
+                    )
+                    assert citation["evidence_valid"]
+                    assert [(s["url"], s["fetched"]) for s in citation["citation_sources"]] == [
+                        (url, True)
+                    ]
+                    history = state.context.get_messages()
+                    assert "statewide vote totals and county returns" in repr(history)
+                    assistant = [
+                        row["content"]
+                        for row in history
+                        if row["role"] == "assistant" and row.get("content")
+                    ]
+                    assert assistant == [answers[0], answers[1] + " [S2]", answers[2]]
+                    assert answers[1] + " [S2]" in repr(requests[4]["messages"])
+            finally:
+                await state.close()
+            assert len(requests) == 5
+            assert "statewide vote totals and county returns" in repr(requests[2]["messages"])
+            for request in requests[3:]:
+                tool_results = [
+                    json.loads(row["content"])
+                    for row in request["messages"]
+                    if row["role"] == "tool"
+                ]
+                search_result, source = tool_results
+                assert ("text" in search_result["results"][0]) is not optimize
+                assert ("passage_ids" in search_result["results"][0]) is not optimize
+                assert search_result["results"][0]["url"] == url
+                assert search_result["results"][1]["snippet"] == "An unfetched lead."
+                assert source["passage_ids"] == ["S2-P1"] and answers[1] in source["text"]
+            comparison.append([conservative_input_token_estimate(body) for body in requests])
+
+    before, after = comparison
+    print(f"offline estimate and serialized bytes before={before} after={after}")
+    assert before[:3] == after[:3]
+    assert all(
+        old_tokens > new_tokens
+        for (old_tokens, _), (new_tokens, _) in zip(before[3:], after[3:], strict=True)
+    )
 
 
 async def test_openrouter_structured_output_is_added_only_after_retrieved_evidence():
