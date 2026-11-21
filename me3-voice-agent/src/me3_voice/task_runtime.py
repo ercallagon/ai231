@@ -497,9 +497,17 @@ class TaskGraphState(MessagesState):
     cancelled: bool
     demo_materialized: bool
     pages_artifact_paths: list[str]
+    public_repository: str
+    repository_readme: bool
+    repository_verified: bool
 
 
 PAGES_REQUEST_NOTE = "Public GitHub Pages publication was explicitly requested."
+GITHUB_CREATE_ACTION = "github_create_public_repository"
+REPOSITORY_README_TOOLS = {
+    "get_runtime_time", "web_search", "retrieve_source", "verify_evidence",
+    "write_artifact", "read_artifact",
+}
 
 
 class ToolArgs(BaseModel):
@@ -738,7 +746,8 @@ class TaskStore:
             async with self.conn.execute(
                 f"""SELECT task_id, action, result FROM me3_mock_effects
                     WHERE task_id IN ({placeholders})
-                    AND action IN ('github_publish', 'github_pages_deploy', 'github_publish_and_deploy')
+                    AND action IN ('github_publish', 'github_pages_deploy', 'github_publish_and_deploy',
+                                   'github_create_public_repository')
                     ORDER BY created""",
                 visible_ids,
             ) as cursor:
@@ -748,6 +757,11 @@ class TaskStore:
                         continue
                     links = self.rows[receipt["task_id"]].setdefault("_publication", {})
                     action = receipt["action"]
+                    if action == GITHUB_CREATE_ACTION and result.get("status") in {
+                        "repository_created", "repository_created_readme_unverified",
+                    }:
+                        links.update(task_publication_links({"repository_url": result.get("repository_url")}))
+                        continue
                     branch_result = result if action == "github_publish" else result.get("branch_result", {})
                     pages_result = result if action == "github_pages_deploy" else result.get("pages_result", {})
                     if branch_result.get("status") == "published":
@@ -1588,6 +1602,11 @@ class TaskStore:
                 or json.loads(effect_by_operation[row["operation_id"]]["result"]).get("status")
                 == "published_and_deployed"
             )
+            and (
+                effect_by_operation[row["operation_id"]]["action"] != GITHUB_CREATE_ACTION
+                or json.loads(effect_by_operation[row["operation_id"]]["result"]).get("status")
+                == "repository_created"
+            )
             for row in effects
         ]
         pending = [
@@ -1955,7 +1974,7 @@ class TaskRuntime:
 
         tools = self._build_tools()
         self._tools = tools
-        self._openai_tools = [convert_to_openai_tool(tool) for tool in tools]
+        self._openai_tools = [convert_to_openai_tool(tool) for tool in tools if tool.name != GITHUB_CREATE_ACTION]
         builder = StateGraph(TaskGraphState)
         builder.add_node("control_boundary", self._control_boundary)
         builder.add_node("agent", self._agent)
@@ -2100,6 +2119,8 @@ class TaskRuntime:
                 evidence = identity_words(f"{result.get('title', '')} {result.get('text', '')}")
                 if name and re.search(rf"\b{re.escape(name)}\b", evidence):
                     progress["owner_source_url"] = result["url"]
+            if state.get("repository_readme") and result.get("fetched") is True and isinstance(result.get("url"), str):
+                progress["readme_source_url"] = result["url"]
             result = self.research.evidence_for_model(result, state.get("requirements", ""))
             await self.store.event(state["task_id"], "progress", progress)
             return result
@@ -2711,6 +2732,52 @@ class TaskRuntime:
             receipt = result["result"]
             return {**receipt, "ok": receipt["status"] == "published_and_deployed"}
 
+        async def github_create_public_repository(name: str):
+            """Prepare creation of the exact public repository requested through native ingress."""
+            from .github_publish import GitHubPublishError, NEW_REPO_RE
+
+            state, _ = self._current_tool()
+            await self._tool_guard(state)
+            publisher = self.github_writer
+            if (
+                publisher is None or os.environ.get("ME3_GITHUB_CREATE_PUBLIC_REPO") != "1"
+                or name != state.get("public_repository") or not NEW_REPO_RE.fullmatch(name)
+            ):
+                raise TaskError("github_repository_create_unavailable")
+            target = f"{publisher.owner}/{name}"
+            readme = None
+            if state.get("repository_readme"):
+                readme = await self._verified_repository_readme(state["task_id"])
+                if readme is None:
+                    raise TaskError("github_repository_readme_not_reviewable")
+            details = f"Create the empty public GitHub repository {target}."
+            summary = f"Create an empty public GitHub repository called {name} under {publisher.owner}?"
+            if readme is not None:
+                digest = hashlib.sha256(readme.encode()).hexdigest()
+                local = self.artifact_root / state["task_id"] / "README.md"
+                details = f"Create public GitHub repository {target} and commit README.md. Review {local}. SHA-256: {digest}."
+                summary = f"Create public repository {name} under {publisher.owner} and publish the reviewed README?"
+
+            async def create(_operation_id):
+                try:
+                    if readme is not None:
+                        return await publisher.create_public_repository(name, readme=readme)
+                    return await publisher.create_public_repository(name)
+                except GitHubPublishError as exc:
+                    return {
+                        "status": "repository_creation_unconfirmed" if exc.unknown else "repository_not_created",
+                        "error": exc.code,
+                    }
+
+            return await request_approved_effect(
+                GITHUB_CREATE_ACTION,
+                details,
+                perform=create,
+                mode="github_repository_create_after_approval",
+                approval_suffix="create-repo",
+                spoken_summary=summary + " Say approve or cancel.",
+            )
+
         demo_tools = []
         if os.environ.get("ME3_DEMO_OUTPUT"):
             demo_tools.append(
@@ -2734,6 +2801,11 @@ class TaskRuntime:
                 )
             )
         if self.github_writer is not None:
+            if os.environ.get("ME3_GITHUB_CREATE_PUBLIC_REPO") == "1":
+                demo_tools.append(StructuredTool.from_function(
+                    coroutine=github_create_public_repository,
+                    name=GITHUB_CREATE_ACTION,
+                ))
             demo_tools.extend(
                 [
                     StructuredTool.from_function(
@@ -2836,6 +2908,13 @@ class TaskRuntime:
 
     async def _wrap_task_tool(self, request, execute):
         """Pass trusted graph state and tool ID to adapters, never model arguments."""
+        if request.runtime.state.get("repository_readme") and request.tool_call["name"] not in (
+            REPOSITORY_README_TOOLS | {GITHUB_CREATE_ACTION}
+        ):
+            return ToolMessage(
+                content="Tool unavailable for the repository README task.",
+                name=request.tool_call["name"], tool_call_id=request.tool_call["id"],
+            )
         token = self._tool_context.set((request.runtime.state, request.tool_call["id"]))
         try:
             return await execute(request)
@@ -2933,11 +3012,66 @@ class TaskRuntime:
             "pushed",
         }
 
+    async def _verified_repository_readme(self, task_id):
+        from .research import public_url
+
+        try:
+            record = await self.store.read_artifact(task_id, "README.md")
+            metadata = await self.store.artifact_metadata(task_id, "README.md")
+        except (OSError, TaskError):
+            return None
+        content = record["content"]
+        if not metadata or record["sha256"] != metadata["sha256"] or not content.strip():
+            return None
+        urls = set(re.findall(r'https?://[^\s<>()[\]"]+', content))
+        if not urls:
+            return None
+        try:
+            for url in urls:
+                public_url(url)
+        except ValueError:
+            return None
+        async with self.store.lock:
+            async with self.store.conn.execute(
+                "SELECT payload FROM me3_task_events WHERE task_id=? AND kind='progress'", (task_id,)
+            ) as cursor:
+                fetched = {json.loads(row[0]).get("readme_source_url") for row in await cursor.fetchall()}
+        return content if urls <= fetched else None
+
     async def _agent(self, state):
         task = await self.store.get(state["task_id"])
         if not task or task["status"] != "running":
             raise TaskError("task_not_running")
         last = state["messages"][-1]
+        if name := state.get("public_repository"):
+            if isinstance(last, ToolMessage) and last.name == GITHUB_CREATE_ACTION:
+                try:
+                    outer = json.loads(last.content)
+                    result = outer.get("result", {}) if isinstance(outer, dict) else {}
+                except (TypeError, ValueError):
+                    result = {}
+                answer = {
+                    "repository_created": f"The public repository is ready: {result.get('repository_url', '')}",
+                    "repository_created_readme_unverified": "The public repository was created. Swift could not verify its README.",
+                    "repository_creation_unconfirmed": "GitHub did not confirm creation. Check the named repository before trying again.",
+                    "repository_not_created": "GitHub did not create the public repository.",
+                }.get(result.get("status"), "The public repository was not created.")
+                if result.get("error") == "github_repository_exists":
+                    answer = "That GitHub repository already exists."
+                verified = result.get("status") == "repository_created"
+                if state.get("repository_readme") and verified:
+                    verified = bool(result.get("readme_commit"))
+                    if verified:
+                        answer = f"The public repository and its sourced README are ready: {result['repository_url']}"
+                return {"messages": [AIMessage(content=answer)], "repository_verified": verified}
+            if not state.get("repository_readme") or (
+                isinstance(last, ToolMessage) and await self._verified_repository_readme(task["task_id"])
+            ):
+                return {"messages": [AIMessage(content="", tool_calls=[{
+                    "name": GITHUB_CREATE_ACTION,
+                    "args": {"name": name},
+                    "id": f"create-public-repo-{state['revision']}",
+                }])]}
         if (
             isinstance(last, ToolMessage)
             and last.name == "publish_github_branch"
@@ -3017,12 +3151,25 @@ class TaskRuntime:
                 "model call. Do not polish, rewrite unrelated sections, or call materialize_demo to push Git."
             )
         messages = [SystemMessage(content=system), *state.get("messages", [])]
+        model_options = {}
+        if state.get("repository_readme"):
+            system += (
+                " For this task, write only README.md at the workspace root. "
+                "Use the runtime date and the requested period, state the actual date range, "
+                "and include only relevant, independently sourced public developments from that period. "
+                "Fetch original URLs and put a Markdown link to a fetched source next to each reported development. "
+                "Omit unverified claims, personal information, old developments, or placeholders. "
+                "Swift prepares publication after the file is verified. Never claim that you created the repository."
+            )
+            messages[0] = SystemMessage(content=system)
+            model_options["tool_names"] = REPOSITORY_README_TOOLS
         repair_messages = []
         try:
             answer = await self._call_model(
                 messages,
                 task_id=task["task_id"],
                 model_call_number=next_calls,
+                **model_options,
             )
         except TaskError as exc:
             if exc.code not in {"invalid_tool_json", "invalid_tool_call"} or next_calls >= min(
@@ -3048,6 +3195,7 @@ class TaskRuntime:
                 [*messages, repair_message],
                 task_id=task["task_id"],
                 model_call_number=next_calls,
+                **model_options,
             )
         if len(answer.tool_calls) > 1:
             raise TaskError("parallel_tool_calls_rejected")
@@ -3120,6 +3268,13 @@ class TaskRuntime:
                     )
                     return Command(update={"messages": [repair_message]}, goto="agent")
         verification = await self.store.verify(task["task_id"])
+        if state.get("repository_readme") and not state.get("repository_verified"):
+            verification.update(verified=False, level="unverified")
+            if not any(
+                isinstance(item, ToolMessage) and item.name == GITHUB_CREATE_ACTION
+                for item in state.get("messages", ())
+            ):
+                answer = "Swift could not verify a sourced README. No public repository was created."
         if interactive_requested and not verification["interactive_runtime_check_verified"]:
             answer = "The game has not passed its browser checks. The task card shows the saved files and their status."
         if personal_site_identity(task["requirements"]):
@@ -3284,9 +3439,12 @@ class TaskRuntime:
             "pages": outcomes,
         }
 
-    async def _call_model(self, messages, *, task_id=None, model_call_number=None):
+    async def _call_model(self, messages, *, task_id=None, model_call_number=None, tool_names=None):
+        tools = self._openai_tools if tool_names is None else [
+            tool for tool in self._openai_tools if tool["function"]["name"] in tool_names
+        ]
         if self.model is not None:
-            result = self.model(messages, self._openai_tools)
+            result = self.model(messages, tools)
             if asyncio.iscoroutine(result):
                 result = await result
             if not isinstance(result, AIMessage):
@@ -3307,7 +3465,7 @@ class TaskRuntime:
         params = {
             "model": self.spec.model,
             "messages": wire,
-            "tools": self._openai_tools,
+            "tools": tools,
             "tool_choice": "auto",
             "stream": True,
             "stream_options": {"include_usage": True},
@@ -3573,10 +3731,20 @@ class TaskRuntime:
             await self.store._refresh_locked()
 
     @serialized_control
-    async def start(self, goal, *, request_id=None, turn_id=1, call_id=None):
+    async def start(
+        self, goal, *, request_id=None, turn_id=1, call_id=None, public_repository=None, repository_readme=False
+    ):
         await self.start_runtime()
         if self._closed:
             raise TaskError("runtime_closed")
+        if public_repository is not None:
+            from .github_publish import NEW_REPO_RE
+
+            if (
+                self.github_writer is None or os.environ.get("ME3_GITHUB_CREATE_PUBLIC_REPO") != "1"
+                or not isinstance(public_repository, str) or not NEW_REPO_RE.fullmatch(public_repository)
+            ):
+                raise TaskError("github_repository_create_unavailable")
         request_id = request_id or uuid.uuid4().hex
         call_id = call_id or request_id
         row, created = await self.store.create(goal, request_id, turn_id, call_id)
@@ -3586,7 +3754,7 @@ class TaskRuntime:
                 await self._set_task_stage(
                     row["task_id"], "researching", "Swift is finding one relevant source."
                 )
-            self._spawn(row["task_id"], initial=True)
+            self._spawn(row["task_id"], initial=True, public_repository=public_repository, repository_readme=repository_readme)
         return {
             "task_id": row["task_id"],
             "status": self.store.rows[row["task_id"]]["status"],
@@ -3595,7 +3763,10 @@ class TaskRuntime:
             "durability": "sqlite_checkpointed",
         }
 
-    def _spawn(self, task_id, *, initial=False, resume=None, pages_artifact_paths=None):
+    def _spawn(
+        self, task_id, *, initial=False, resume=None, pages_artifact_paths=None,
+        public_repository=None, repository_readme=False,
+    ):
         active = self._jobs.get(task_id)
         if active and not active.done():
             if resume is not None:
@@ -3605,7 +3776,9 @@ class TaskRuntime:
             return active
         job = asyncio.create_task(
             self._drive(
-                task_id, initial=initial, resume=resume, pages_artifact_paths=pages_artifact_paths
+                task_id, initial=initial, resume=resume, pages_artifact_paths=pages_artifact_paths,
+                public_repository=public_repository,
+                repository_readme=repository_readme,
             ),
             name="me3-task-" + task_id,
         )
@@ -3634,7 +3807,10 @@ class TaskRuntime:
         if row and row["status"] == "running" and not self._closed:
             self._spawn(task_id, resume=resume)
 
-    async def _drive(self, task_id, *, initial=False, resume=None, pages_artifact_paths=None):
+    async def _drive(
+        self, task_id, *, initial=False, resume=None, pages_artifact_paths=None,
+        public_repository=None, repository_readme=False,
+    ):
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             config = {"configurable": {"thread_id": task_id}}
@@ -3653,6 +3829,8 @@ class TaskRuntime:
                         "cancelled": False,
                         "demo_materialized": False,
                         "pages_artifact_paths": pages_artifact_paths or [],
+                        "public_repository": public_repository or "",
+                        "repository_readme": repository_readme,
                     }
                     result = await self.graph.ainvoke(value, config=config)
                 else:

@@ -130,10 +130,93 @@ class Client:
         self.responses = iter(responses)
         self.calls = []
 
-    def request(self, method, url, json=None):
+    def request(self, method, url, json=None, **options):
+        if url == "https://api.github.com/user/repos":
+            assert options.get("allow_redirects") is False
         self.calls.append((method, url, json))
         status, payload = next(self.responses)
         return Response(status, payload)
+
+
+@pytest.mark.parametrize("outcome", ["created", "duplicate", "wrong_account", "unconfirmed"])
+async def test_create_public_repository_targets_only_authenticated_owner(outcome):
+    url = "https://github.com/demo-owner/new-site"
+    responses = [(200, {"login": "different" if outcome == "wrong_account" else "demo-owner"})]
+    if outcome != "wrong_account":
+        responses.append((200 if outcome == "duplicate" else 404, {}))
+    if outcome in {"created", "unconfirmed"}:
+        responses.append((201, {
+            "full_name": "demo-owner/new-site", "private": False,
+            "visibility": "public", "html_url": url if outcome == "created" else "https://example.com/",
+        }))
+    client = Client(responses)
+
+    class ApiSession:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return client
+
+        async def __aexit__(self, *_args):
+            return None
+
+    publisher = GitHubPublisher("fixture-token", "demo-owner", "demo-repo", "main", session_factory=ApiSession)
+    if outcome == "created":
+        assert await publisher.create_public_repository("new-site") == {
+            "status": "repository_created", "repository_url": url,
+        }
+    else:
+        code = {
+            "duplicate": "github_repository_exists", "wrong_account": "github_repository_owner_unverified",
+            "unconfirmed": "github_repository_create_unverified",
+        }[outcome]
+        with pytest.raises(GitHubPublishError, match=code) as error:
+            await publisher.create_public_repository("new-site")
+        assert error.value.unknown == (outcome == "unconfirmed")
+    attempted = [call for call in client.calls if call[0] != "GET"]
+    assert attempted == ([
+        ("POST", "https://api.github.com/user/repos", {"name": "new-site", "private": False, "auto_init": False})
+    ] if outcome in {"created", "unconfirmed"} else [])
+    assert publisher.repository_name == "demo-owner/demo-repo"
+
+
+@pytest.mark.parametrize("matching", [True, False])
+async def test_create_public_repository_checks_exact_readme_after_commit(matching):
+    readme = "# AI weekly\n- [Source](https://example.com/week)\n"
+    encoded = base64.b64encode(readme.encode()).decode()
+    commit = "e" * 40
+    url = "https://github.com/demo-owner/ai-weekly"
+    client = Client([
+        (200, {"login": "demo-owner"}),
+        (404, {}),
+        (201, {"full_name": "demo-owner/ai-weekly", "private": False, "visibility": "public", "html_url": url}),
+        (201, {"commit": {"sha": commit}}),
+        (200, {"encoding": "base64", "content": encoded if matching else "YXNkZg=="}),
+    ])
+
+    class ApiSession:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return client
+
+        async def __aexit__(self, *_args):
+            return None
+
+    publisher = GitHubPublisher("fixture-token", "demo-owner", "ai231", "main", session_factory=ApiSession)
+    receipt = await publisher.create_public_repository("ai-weekly", readme=readme)
+    assert receipt["repository_url"] == url
+    assert receipt.get("readme_commit") == (commit if matching else None)
+    assert receipt["status"] == ("repository_created" if matching else "repository_created_readme_unverified")
+    assert client.calls[-2:] == [
+        ("PUT", "https://api.github.com/repos/demo-owner/ai-weekly/contents/README.md", {
+            "message": "Add sourced weekly AI briefing", "content": encoded,
+        }),
+        ("GET", "https://api.github.com/repos/demo-owner/ai-weekly/contents/README.md?ref=" + commit, None),
+    ]
+    assert publisher.repository_name == "demo-owner/ai231"
 
 
 @pytest.mark.asyncio

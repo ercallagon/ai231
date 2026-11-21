@@ -98,6 +98,20 @@ the `swift-artifacts` push, and the public Pages deployment. The task card
 links to the branch and adds the Pages link after deployment verification.
 A GitHub-only push approval covers the branch write.
 
+Repository creation is opt-in. On a fresh bridge launch with
+`ME3_GITHUB_CREATE_PUBLIC_REPO=1`, say “Create a public GitHub repository
+named my-project.” Swift confirms the exact name, the configured GitHub account,
+and public visibility before creating an empty repository. The configured
+credential needs repository creation permission on that personal account.
+The new repository link is saved in the task card. The existing publishing
+target stays configured independently.
+
+To include a briefing, say “Create a public GitHub repo called ai-weekly and
+give it the latest AI updates for the past week.” Swift researches and saves a
+source-linked `README.md` before preparing one approval for the repository and
+the file. After approval, it checks the committed README against the saved
+copy. Review the file path shown in the approval card before making it public.
+
 On the Pi, `bash scripts/setup.sh --pi` installs the pinned browser
 verification driver. Interactive artifact checks run in the installed
 Chromium with external requests blocked. A personal website needs the approved

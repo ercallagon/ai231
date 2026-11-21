@@ -111,7 +111,15 @@ def _make_site_live(phrase):
     )
 
 
-_GITHUB_APPROVAL_ACTIONS = {"github_publish", "github_pages_deploy", "github_publish_and_deploy"}
+_PUBLIC_REPO_REQUEST = re.compile(
+    r"^(?:(?:please|can you|could you)\s+)*(?:create|make)\s+"
+    r"(?:(?:a|an|my|new|empty|public|private|internal|github)\s+)*repos?(?:itory)?\b",
+    re.I,
+)
+_GITHUB_APPROVAL_ACTIONS = {
+    "github_publish", "github_pages_deploy", "github_publish_and_deploy",
+    "github_create_public_repository",
+}
 
 
 def _github_approval_intent(text):
@@ -1151,10 +1159,72 @@ class NativeApplication:
             action=approval["action"],
         )
         if decision == "reject":
+            if approval["action"] == "github_create_public_repository":
+                return "Cancelled. No public repository was created."
             if approval["action"] == "github_pages_deploy":
                 return "Cancelled the Pages deployment. The previously approved branch is unchanged."
             return "Cancelled the GitHub branch push. No branch was pushed."
         return "Approval recorded for that exact GitHub action. Swift is proceeding and will report the result."
+
+    async def _handle_public_repository_request(self, text):
+        import os
+
+        from .github_publish import NEW_REPO_RE
+
+        text = text.strip().removesuffix(".")
+        request = _PUBLIC_REPO_REQUEST.match(text)
+        if request is None:
+            return None
+        words = set(request[0].casefold().split())
+        if "public" not in words or {"private", "internal"} & words:
+            return "To create a public repository, say create a public GitHub repository named, followed by its exact name."
+        remainder = text[request.end():].strip()
+        remainder = re.sub(r"^(?:named|called)\s+", "", remainder, flags=re.I)
+        repo_name, *brief_parts = re.split(
+            r"\s+and\s+|\s+(?=summarizing\b)", remainder, maxsplit=1, flags=re.I
+        )
+        readme_brief = brief_parts[0] if brief_parts else ""
+        if readme_brief and not re.match(
+            r"^(?:give it|add|include|write|summarize|summarizing|research|fill it with)\b", readme_brief, re.I
+        ):
+            return "I need the exact repository name to prepare its approval. I can also add a sourced README."
+        repo_name = repo_name.strip("\"'!? ")
+        target = re.fullmatch(
+            r"[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+|(?: [A-Za-z0-9]+){0,5})",
+            repo_name,
+        )
+        name = repo_name.rsplit("/", 1)[-1].replace(" ", "-") if target else ""
+        if not NEW_REPO_RE.fullmatch(name):
+            return "I need the exact repository name to prepare its approval."
+        runtime = self.resources.task_runtime
+        publisher = getattr(runtime, "github_writer", None)
+        if publisher is None or os.environ.get("ME3_GITHUB_CREATE_PUBLIC_REPO") != "1":
+            return "Public repository creation is disabled on this bridge."
+        if "/" in repo_name and repo_name.split("/", 1)[0].casefold() != publisher.owner.casefold():
+            return "Repository creation is limited to the configured GitHub account."
+        call_id = "voice-repo-create-" + uuid.uuid4().hex
+        try:
+            result = await runtime.start(
+                (
+                    f"Prepare a sourced README.md for public GitHub repository {publisher.owner}/{name}. "
+                    + readme_brief
+                    if readme_brief else f"Create empty public GitHub repository {publisher.owner}/{name}"
+                ),
+                request_id=_voice_task_request_id(self.resources.session_id, call_id),
+                turn_id=max(1, self.turn_id),
+                call_id=call_id,
+                public_repository=name,
+                repository_readme=bool(readme_brief),
+            )
+        except Exception as exc:
+            self.event("github_publish_request_not_prepared", reason=_safe_tool_error_code(exc))
+            return "I couldn't prepare the repository request. Nothing was created."
+        if result.get("status") not in {"queued", "running", "waiting_approval"}:
+            return "I couldn't prepare the repository request. Nothing was created."
+        return (
+            "I'll research the updates and prepare the README. One approval will cover the public repository and that file."
+            if readme_brief else "I'll prepare one approval for the exact public repository."
+        )
 
     async def _handle_github_publish_request(self, text):
         from .task_runtime import PAGES_REQUEST_NOTE
@@ -1562,6 +1632,10 @@ class NativeApplication:
         if status == "running" and "approved" in combined:
             return "The push and public deployment were approved. I'm waiting for the public link to be verified."
         if publication.get("repository_url") and status != "running":
+            if selected["call_id"].startswith("voice-repo-create-"):
+                if status != "succeeded":
+                    return "The public repository was created. Swift could not verify its README."
+                return "The public repository was created. The GitHub link is in the task card."
             return "The branch was pushed to GitHub. There is no verified public Pages URL for this task."
         message = {
             "queued": "The task is queued.",
@@ -1660,6 +1734,9 @@ class NativeApplication:
         github_control = await self._handle_github_voice_control(text)
         if github_control is not None:
             return github_control
+        repository_request = await self._handle_public_repository_request(text)
+        if repository_request is not None:
+            return repository_request
         github_publish_request = await self._handle_github_publish_request(text)
         if github_publish_request is not None:
             return github_publish_request

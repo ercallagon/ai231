@@ -811,6 +811,139 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
         await runtime.close()
 
 
+@pytest.mark.parametrize("decision", ["Approve", "Cancel", "Unconfirmed"])
+async def test_public_repository_voice_action_uses_existing_exact_approval(tmp_path, monkeypatch, decision):
+    from me3_voice.github_publish import GitHubPublishError
+    from me3_voice.native_app import NativeApplication, NativeState
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    calls = []
+
+    class Writer:
+        owner = "demo-owner"
+        repository_name = "demo-owner/original-repo"
+
+        async def create_public_repository(self, name):
+            calls.append(name)
+            if decision == "Unconfirmed":
+                raise GitHubPublishError("github_outcome_unknown", unknown=True)
+            return {"status": "repository_created", "repository_url": f"https://github.com/{self.owner}/{name}"}
+
+    monkeypatch.delenv("ME3_GITHUB_CREATE_PUBLIC_REPO", raising=False)
+    runtime = TaskRuntime(
+        load_backends()["llm"], database=tmp_path / "tasks.sqlite", artifact_root=tmp_path / "artifacts",
+        model=ScriptedModel([]),
+    )
+    runtime.github_writer = Writer()
+    state = NativeState()
+    state.task_runtime = runtime
+    app = NativeApplication(state, object(), annotated=True)
+
+    async def say(text):
+        return await app.fast_action(LLMContext(messages=[{"role": "user", "content": text}]))
+
+    try:
+        assert "disabled" in await say("Create a public GitHub repository named new-site")
+        monkeypatch.setenv("ME3_GITHUB_CREATE_PUBLIC_REPO", "1")
+        assert "To create a public repository" in await say("Create a private GitHub repository named new-site")
+        assert "limited" in await say("Create a public GitHub repository named someone-else/new-site")
+        assert "exact repository name" in await say("Create a public GitHub repository named new-site and publish it")
+        assert "one approval" in await say("Create a public GitHub repository named new-site.")
+        [task_id] = runtime.store.rows
+        waiting = await wait_for_status(runtime, task_id, {"waiting_approval"})
+        [approval] = waiting["approvals"]
+        assert approval["action"] == "github_create_public_repository"
+        assert "empty public GitHub repository demo-owner/new-site" in approval["details"]
+        assert not calls
+        assert not any(tool["function"]["name"] == approval["action"] for tool in runtime._openai_tools)
+        await say("Approve" if decision == "Unconfirmed" else decision)
+        result = await wait_for_status(runtime, task_id)
+        assert result["model_calls"] == 0
+        assert calls == ([] if decision == "Cancel" else ["new-site"])
+        if decision == "Approve":
+            assert result["status"] == "succeeded"
+            assert result["publication"] == {"repository_url": "https://github.com/demo-owner/new-site"}
+            assert "public repository was created" in await say("What’s the status?")
+        else:
+            assert result["status"] == "completed_unverified"
+            assert not result["publication"]
+        if decision == "Unconfirmed":
+            assert "Check the named repository" in result["result"]
+        assert runtime.github_writer.repository_name == "demo-owner/original-repo"
+    finally:
+        await state.close()
+
+
+@pytest.mark.parametrize("sourced", [True, False])
+async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(tmp_path, monkeypatch, sourced):
+    from me3_voice.native_app import NativeApplication, NativeState
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    articles = "https://example.com/week"
+    readme = f"# AI weekly\n- A verified announcement. [Source]({articles})\n"
+    saved_readme = readme.strip()
+    writes = []
+
+    class Research:
+        async def search(self, query, _count):
+            return {"results": [{"url": articles}]}
+
+        async def retrieve(self, url):
+            return {"source_id": "S1", "url": url, "fetched": sourced, "text": "A verified announcement."}
+
+        def evidence_for_model(self, result, _question):
+            return result
+
+    class Writer:
+        owner = "demo-owner"
+
+        async def create_public_repository(self, name, *, readme):
+            writes.append((name, readme))
+            return {
+                "status": "repository_created", "repository_url": f"https://github.com/{self.owner}/{name}",
+                "readme_commit": "f" * 40,
+            }
+
+    monkeypatch.setenv("ME3_GITHUB_CREATE_PUBLIC_REPO", "1")
+    runtime = TaskRuntime(
+        load_backends()["llm"], database=tmp_path / "tasks.sqlite", artifact_root=tmp_path / "artifacts",
+        research=Research(),
+        model=ScriptedModel([
+            call("web_search", {"query": "AI research news past week"}, "search"),
+            call("retrieve_source", {"url": articles}, "retrieve"),
+            call("write_artifact", {"path": "README.md", "content": readme}, "write"),
+            AIMessage(content="The report is ready."),
+        ]),
+    )
+    runtime.github_writer = Writer()
+    state = NativeState()
+    state.task_runtime = runtime
+    app = NativeApplication(state, object(), annotated=True)
+
+    async def say(text):
+        return await app.fast_action(LLMContext(messages=[{"role": "user", "content": text}]))
+
+    try:
+        assert "research the updates" in await say(
+            "Create a public GitHub repo called ai weekly and give it the latest AI updates for the past week."
+        )
+        [task_id] = runtime.store.rows
+        if sourced:
+            waiting = await wait_for_status(runtime, task_id, {"waiting_approval"})
+            [approval] = waiting["approvals"]
+            assert "demo-owner/ai-weekly and commit README.md" in approval["details"]
+            assert hashlib.sha256(saved_readme.encode()).hexdigest() in approval["details"]
+            assert not writes
+            await say("Approve")
+        result = await wait_for_status(runtime, task_id)
+        assert result["status"] == ("succeeded" if sourced else "completed_unverified")
+        assert writes == ([("ai-weekly", saved_readme)] if sourced else [])
+        assert bool(result["approvals"]) == sourced
+        assert bool(result["publication"]) == sourced
+    finally:
+        await state.close()
+
+
 async def test_github_publish_rejects_artifact_when_readback_no_longer_matches_record(
     tmp_path, monkeypatch
 ):

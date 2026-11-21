@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import datetime
+import hashlib
 import html
 import json
 import os
@@ -26,6 +27,7 @@ class GitHubPublishError(ValueError):
 
 OWNER_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+NEW_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 BRANCH_RE = re.compile(r"^[A-Za-z0-9._/-]{1,120}$")
 SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. -]{0,119}$")
 MAX_FILES = 20
@@ -228,6 +230,84 @@ class GitHubPublisher:
     def repository_name(self):
         return f"{self.owner}/{self.repository}"
 
+    async def create_public_repository(self, name, *, readme=None):
+        """Create one approved public repository and optionally add the reviewed README."""
+        if not isinstance(name, str) or not NEW_REPO_RE.fullmatch(name):
+            raise GitHubPublishError("github_invalid_repository_name")
+        if readme is not None and (
+            not isinstance(readme, str) or not readme.strip() or len(readme.encode()) > MAX_TOTAL_BYTES
+        ):
+            raise GitHubPublishError("github_invalid_repository_readme")
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": "Bearer " + self.token,
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        factory = self.session_factory or aiohttp.ClientSession
+        target = f"/repos/{quote(self.owner, safe='')}/{quote(name, safe='')}"
+        expected_url = f"https://github.com/{self.owner}/{name}"
+        async with factory(timeout=aiohttp.ClientTimeout(total=10), headers=headers, trust_env=False) as client:
+            status, account = await self._request(client, "GET", "/user", account_api=True)
+            if status != 200 or not isinstance(account, dict) or str(account.get("login", "")).casefold() != self.owner.casefold():
+                raise GitHubPublishError("github_repository_owner_unverified")
+            status, _ = await self._request(client, "GET", target, account_api=True)
+            if status == 200:
+                raise GitHubPublishError("github_repository_exists")
+            if status != 404:
+                raise GitHubPublishError("github_repository_availability_unknown")
+            status, result = await self._request(
+                client, "POST", "/user/repos",
+                {"name": name, "private": False, "auto_init": False},
+                account_api=True,
+            )
+            if status != 201:
+                raise GitHubPublishError(
+                    "github_repository_create_denied" if status in {401, 403} else "github_repository_create_failed",
+                    unknown=status >= 500,
+                )
+            if (
+                not isinstance(result, dict)
+                or str(result.get("full_name", "")).casefold() != f"{self.owner}/{name}".casefold()
+                or result.get("private") is not False
+                or result.get("visibility") != "public"
+                or str(result.get("html_url", "")).casefold() != expected_url.casefold()
+            ):
+                raise GitHubPublishError("github_repository_create_unverified", unknown=True)
+            receipt = {"status": "repository_created", "repository_url": expected_url}
+            if readme is None:
+                return receipt
+            return await self._publish_new_readme(client, target, readme, receipt)
+
+    async def _publish_new_readme(self, client, target, readme, receipt):
+        data = readme.encode("utf-8")
+        payload = {
+            "message": "Add sourced weekly AI briefing",
+            "content": base64.b64encode(data).decode("ascii"),
+        }
+        path = target + "/contents/README.md"
+        commit_sha = None
+        try:
+            status, response = await self._request(client, "PUT", path, payload, account_api=True)
+            if status == 201 and isinstance(response, dict) and isinstance(response.get("commit"), dict):
+                sha = response["commit"].get("sha")
+                if isinstance(sha, str) and re.fullmatch(r"[a-f0-9]{40}", sha):
+                    commit_sha = sha
+            if commit_sha is None:
+                raise GitHubPublishError("github_repository_readme_write_unverified")
+            status, result = await self._request(client, "GET", path + "?ref=" + commit_sha, account_api=True)
+            if (
+                status != 200 or not isinstance(result, dict)
+                or result.get("encoding") != "base64" or not isinstance(result.get("content"), str)
+                or base64.b64decode("".join(result["content"].split()), validate=True) != data
+            ):
+                raise GitHubPublishError("github_repository_readme_content_unverified")
+        except (GitHubPublishError, ValueError) as exc:
+            return {
+                **receipt, "status": "repository_created_readme_unverified",
+                "error": getattr(exc, "code", "github_repository_readme_content_unverified"),
+            }
+        return {**receipt, "readme_commit": commit_sha, "readme_sha256": hashlib.sha256(data).hexdigest()}
+
     async def repository_visibility(self):
         """Read verified repository visibility before asking for a write approval."""
         timeout = aiohttp.ClientTimeout(total=10, connect=5)
@@ -386,16 +466,14 @@ class GitHubPublisher:
             raise GitHubPublishError("github_invalid_operation")
         return _branch(f"swift/{task_id[5:]}-{operation_id[-12:]}")
 
-    async def _request(self, client, method, path, payload=None):
-        url = (
-            "https://api.github.com/repos/"
-            + quote(self.owner, safe="")
-            + "/"
-            + quote(self.repository, safe="")
-            + path
-        )
+    async def _request(self, client, method, path, payload=None, *, account_api=False):
+        base = "https://api.github.com"
+        if not account_api:
+            base += "/repos/" + quote(self.owner, safe="") + "/" + quote(self.repository, safe="")
+        url = base + path
         try:
-            async with client.request(method, url, json=payload) as response:
+            options = {"allow_redirects": False} if account_api else {}
+            async with client.request(method, url, json=payload, **options) as response:
                 try:
                     value = await response.json(content_type=None)
                 except (ValueError, aiohttp.ContentTypeError):

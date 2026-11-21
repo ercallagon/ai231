@@ -287,7 +287,8 @@
             try {
               const url=new URL(t.publication?.[key]);
               const expectedHost=key==='repository_url'?url.hostname==='github.com':url.hostname.endsWith('.github.io');
-              if(url.protocol==='https:'&&expectedHost&&!url.username&&!url.password&&!url.port)links.push(`<a href="${escape(url.href)}" target="_blank" rel="noopener noreferrer">${label}</a>`);
+              const title=key==='repository_url'&&url.pathname.split('/').filter(Boolean).length===2?'GitHub repository':label;
+              if(url.protocol==='https:'&&expectedHost&&!url.username&&!url.password&&!url.port)links.push(`<a href="${escape(url.href)}" target="_blank" rel="noopener noreferrer">${title}</a>`);
             } catch {}
           }
           const published=t.publication?.published_at_pht;
