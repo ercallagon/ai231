@@ -38,6 +38,11 @@ From WSL, use `./scripts/swift.sh pi-viewer --dashboard user@pi-host` to
 open a loopback SSH route to the dashboard when remote desktop access is
 unavailable. Voice then uses the laptop browser's audio devices.
 
+For a headless demo with the Pi microphone and speaker, use the laptop viewer
+to control **Pi Chromium**. After moving both devices to another hotspot, use
+the Pi's new address for the viewer connection. In Swift, select **Start
+conversation** and say “Hey Swift” into the Pi microphone.
+
 Use `./scripts/swift.sh demo --offline` for the deterministic MCP smoke and
 an isolated, read-only report at [127.0.0.1:8765](http://127.0.0.1:8765/).
 This is the no-argument default on non-Pi hosts.
