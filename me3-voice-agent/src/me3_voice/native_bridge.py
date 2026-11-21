@@ -618,9 +618,11 @@ def context_view(state, application, *, archived=False):
     task_store = state.task_runtime.store if state.task_runtime else None
     task_revision = task_store.revision if task_store else 0
     action_revision = getattr(application, "action_revision", 0)
-    tasks = (task_store.snapshot() if task_store else []) + list(
-        getattr(application, "fast_action_rows", ())
-    )
+    tasks = [
+        row
+        for row in (task_store.snapshot() if task_store else [])
+        if row.get("task_id") and application._voice_owned_task(row["task_id"]) is not None
+    ] + list(getattr(application, "fast_action_rows", ()))
     tasks.sort(
         key=lambda row: (
             row.get("turn_id", 0),
@@ -669,6 +671,8 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
         "backend_sha256": config_digest(getattr(wake_args, "backend_config", None)),
         "runtime_sha256": config_digest(getattr(wake_args, "runtime_config", None)),
     }
+    revision = os.environ.get("ME3_SOURCE_REVISION", "")
+    revision = revision if re.fullmatch(r"[a-f0-9]{40}", revision) else None
     state = NativeState(
         backends,
         credentials,
@@ -1120,6 +1124,7 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
         return {
             "checked_at_utc": datetime.now(timezone.utc).isoformat(),
             "configuration_profile": configuration_profile,
+            "source_revision": revision,
             "services": services,
             "budget": budget,
             "voice_configured": voice_configured,

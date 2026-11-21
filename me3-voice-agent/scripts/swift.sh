@@ -88,6 +88,26 @@ print(f"No desktop browser opener is available. Open: {url}")
 raise SystemExit(1)
 PY
 }
+report_demo_bridge() {
+  "$python_bin" -B - "$1" <<'PY'
+import json
+import sys
+import urllib.request
+
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/health", timeout=2) as response:
+        health = json.load(response)
+except (OSError, ValueError):
+    raise SystemExit("Swift production bridge is unavailable. Start the configured Pi profile first.")
+if health.get("bridge") != "ready" or health.get("engine") != "native" or health.get("voice_ready") is not True:
+    raise SystemExit("Swift production bridge is not voice ready. Check its startup terminal.")
+print("Running bridge revision:", health.get("source_revision") or "unreported by this running bridge")
+print("Native voice ready; session:", health.get("voice_session"))
+for role, quota in health.get("budget", {}).items():
+    if role.endswith("_requests") and isinstance(quota, dict) and quota.get("limit") is not None:
+        print(f"{role.removesuffix('_requests')}: {quota.get('remaining')} of {quota['limit']} requests left")
+PY
+}
 case "$command" in
   check)
     "$uv_bin" pip check --python "$python_bin"
@@ -95,13 +115,21 @@ case "$command" in
     exec "$python_bin" -B -m me3_voice.preflight "$@" ;;
   demo)
     if [[ "${1:-}" == --report-only ]]; then shift; exec "$python_bin" -B -m me3_voice.cli demo "$@"; fi
+    if [[ "${1:-}" == --connect ]] || { (( $# == 0 )) && grep -aq 'Raspberry Pi' /proc/device-tree/model 2>/dev/null; }; then
+      if [[ "${1:-}" == --connect && $# != 1 ]]; then exit 2; fi
+      report_demo_bridge 18770
+      open_dashboard 18770 || :
+      exit 0
+    fi
+    if [[ "${1:-}" == --offline ]]; then shift; fi
     if (( $# )); then exec "$python_bin" -B -m me3_voice.cli demo "$@"; fi
     # Keep the smoke report and transcript separate from the production session.
     mkdir -p var/results
     demo_workspace="$(mktemp -d "$PWD/var/results/swift-demo.XXXXXXXX")"
     cd "$demo_workspace"
     mkdir -p var/results
-    "$python_bin" -B -m me3_voice.cli demo --transcript
+    printf 'Offline demo checkout revision: %s\n' "$(git rev-parse HEAD 2>/dev/null || printf unknown)"
+    "$python_bin" -B -m me3_voice.cli demo
     exec "$python_bin" -B -m me3_voice.dashboard serve --open-browser ;;
   dashboard) exec "$python_bin" -B -m me3_voice.dashboard serve "$@" ;;
   bridge) exec "$python_bin" -B -m me3_voice.voice_bridge "$@" ;;
@@ -173,6 +201,8 @@ case "$command" in
   native-bridge)
     # Supported native browser entrypoint. No backend descriptor means mocks;
     # live providers require an explicit backend profile and credentials.
+    ME3_SOURCE_REVISION="$(git rev-parse HEAD 2>/dev/null || true)"
+    export ME3_SOURCE_REVISION
     native_state="${XDG_STATE_HOME:-$HOME/.local/state}/swift-me3"
     if [[ ! -e "$native_state" ]]; then
       (umask 077; mkdir -p "$native_state")

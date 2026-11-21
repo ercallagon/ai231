@@ -2621,7 +2621,7 @@ class TaskRuntime:
                     f"{source_branch}:{source_folder} (artifact branch {branch}, commit {commit_sha}); site path "
                     f"/{pages_site_path}/, repository destination {destination_path}/; selected files: {file_summary}. "
                     f"The website URL will be {expected_url}; the root published-sites index at "
-                    f"{publisher.expected_pages_url()} will be updated in the same Pages commit. Both will be "
+                    f"{publisher.expected_pages_url()} will be refreshed after the site is verified. Both will be "
                     f"publicly accessible; {source_note}. This is a separate approval from the branch push."
                 )
                 pages_summary = (

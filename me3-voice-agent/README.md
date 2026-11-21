@@ -19,14 +19,18 @@ Linux, Python 3.11–3.13 and `python3-venv` are required. HPC/x86_64 Python 3.1
 
 Optional automatic VPN startup: fresh Pi setup accepts `bash scripts/setup.sh --pi --vpn-profile /path/to/private-profile.ovpn`; existing installations use `bash scripts/swift.sh vpn-setup --profile /path/to/private-profile.ovpn`. Enter credentials only at the hidden Pi prompts. Then use the documented `swift.sh vpn` launch command to initialize VPN, check routes and start the bridge. Credentials stay private on the Pi; see the runbook for permissions, OS sudo requirements and current qualification limits.
 
-The no-argument `demo` command runs a deterministic Pipecat/MCP smoke test,
-saves its report under `var/results/swift-demo.*/`, then serves that isolated
-report at [127.0.0.1:8765](http://127.0.0.1:8765/) and opens it on an available
-desktop. Press Ctrl+C to stop the viewer. Relaunching creates a fresh report.
-The demo uses mock inference, memory playback, and no microphone, GPIO, or
-provider credentials. For CI or a headless terminal use
-`./scripts/swift.sh demo --report-only`. To serve the checkout's existing
-reports separately:
+On Raspberry Pi, `./scripts/swift.sh demo` opens the ready production bridge
+at [127.0.0.1:18770](http://127.0.0.1:18770/) and prints its readiness, reported
+revision and remaining request allowances. Use Start conversation, then say
+“Hey Swift.” If the bridge is down, start your configured Pi profile using the
+[Pi runbook](deploy/rpi/README.md). The demo command reuses the running
+ledger and profile.
+
+Use `./scripts/swift.sh demo --offline` for the deterministic MCP smoke and
+an isolated, read-only report at [127.0.0.1:8765](http://127.0.0.1:8765/).
+This is the no-argument default on non-Pi hosts.
+For CI, use `./scripts/swift.sh demo --report-only`.
+To serve the checkout's existing reports separately:
 
 ```bash
 bash scripts/swift.sh dashboard --port 8765
@@ -60,7 +64,7 @@ Use `--profile pi-primary` to prepare Pi credentials for Nova-3 and Aura-2 via D
 Status is offline and reports credential presence only. In interactive mode, Enter keeps existing values or skips missing ones. Use `a` or `u` to add or update a hidden secret. Device fields are edited individually, `!` clears supported fields, and private contact/phone prompts are hidden. Secret files and Pi device/contact JSON remain owner-only and are updated atomically without replacing unrelated keys/settings. The Soloist key and Connect pairing are sufficient for receiver use. Swift's Spotify voice controls use the Spotify Web API and require the separate Spotify OAuth step. Skip that step if you only want to use Soloist as a receiver. The wizard offers GitHub, Spotify and Soloist setup as selectable steps and leaves optional Onit setup to its legacy utility.
 
 For a Pi software smoke from a fresh checkout, install and launch with
-`bash scripts/setup.sh --pi && ./scripts/swift.sh demo`. Port 8765 must be
+`bash scripts/setup.sh --pi && ./scripts/swift.sh demo --offline`. Port 8765 must be
 free. On a headless Pi, forward it over SSH and open the loopback URL on your
 laptop. The live production bridge has a separate launch procedure in the
 [Pi runbook](deploy/rpi/README.md).
@@ -74,14 +78,11 @@ A new website with no explicit destination goes under
 files, then separately to publish them on Pages. The task card links to the
 GitHub branch and adds the Pages link when the deployment has been verified.
 
-For the AI231 class demo, ask Swift to create the site under
-`me3-voice-agent/artifacts/demos/ai231-class-demo/` in create mode. The
-gallery displays **AI231 Class Demo** only once real site files are deployed.
-Scope the demo to the configured repository, that one directory, and the
-reviewed file list. Approve the `swift-artifacts` push and public Pages
-deployment separately when Swift shows their task-specific summaries.
-Use GitHub's successful deployment timestamp for the site when refreshing
-the gallery's `swift-gallery-published.json` on the Pages branch.
+Approve the `swift-artifacts` push and public Pages deployment separately
+when Swift shows their task-specific summaries. The newest site with a
+verified deployment appears under **Latest**. Older verified sites are
+available under **Other Trials**. GitHub supplies the publication timestamp,
+which the gallery displays in Manila time.
 
 Install Node.js separately if you want the dashboard JavaScript checks to
 run. Node is a test dependency. The Pi launcher uses the locked Python

@@ -54,87 +54,52 @@ def new_pages_artifact_paths(files, task_id):
 
 
 def render_pages_index(site_paths, *, published_at=None):
-    """Render a responsive gallery from site paths on the published Pages branch."""
+    """Promote the newest verified Pages deployment and archive the rest."""
     paths = sorted({_path(path) for path in site_paths if isinstance(path, str)})
-    groups = {"Demos": [], "Trials": [], "Other published sites": []}
+    verified = []
     for path in paths:
         if not path.startswith("me3-voice-agent/artifacts/"):
             continue
-        parts = PurePosixPath(path).parts
-        category = parts[2].casefold() if len(parts) > 3 else ""
-        group = (
-            "Demos"
-            if category == "demos"
-            else "Trials"
-            if category == "trials"
-            else "Other published sites"
-        )
-        label = (
-            PurePosixPath(path).name.replace("-", " ").replace("_", " ").strip().title()
-            or "Website"
-        )
-        label = re.sub(r"\bAi(\d+)\b", r"AI\1", label)
-        # Project Pages sites live below /<repository>/; a root-absolute URL
-        # would drop that prefix. Keep links relative to the Pages root index.
-        href = "/".join(quote(part, safe="-._~") for part in path.split("/")) + "/"
-        kind = "Demo" if group == "Demos" else "Trial" if group == "Trials" else "Website"
         stamp = _pages_published_at((published_at or {}).get(path))
-        timestamp = (
-            f'<time class="site-action" datetime="{stamp}">Published '
-            f'{stamp[:19].replace("T", " ")} PHT</time>'
-            if stamp
-            else ""
+        if stamp:
+            verified.append((stamp, path))
+    verified.sort(key=lambda entry: datetime.fromisoformat(entry[0]), reverse=True)
+
+    def card(stamp, path):
+        label = PurePosixPath(path).name.replace("-", " ").replace("_", " ").strip().title()
+        href = "/".join(quote(part, safe="-._~") for part in path.split("/")) + "/"
+        return (
+            f'<a class="site-card" href="{html.escape(href, quote=True)}">'
+            f'<strong>{html.escape(label)}</strong>'
+            f'<time datetime="{stamp}">Published {stamp[:19].replace("T", " ")} PHT</time>'
+            '<span>Visit site <span aria-hidden="true">↗</span></span></a>'
         )
-        groups[group].append(
-            '<a class="site-card" href="'
-            + html.escape(href, quote=True)
-            + '"><span class="site-kind">'
-            + kind
-            + '</span><span class="site-name">'
-            + html.escape(label)
-            + "</span>"
-            + timestamp
-            + '<span class="site-action">Visit site <span aria-hidden="true">↗</span></span></a>'
+
+    latest = archive = ""
+    if verified:
+        latest = '<section aria-labelledby="latest"><h2 id="latest">Latest</h2>' + card(*verified[0]) + "</section>"
+    if len(verified) > 1:
+        archive = (
+            '<details><summary>Other Trials</summary>'
+            + "".join(card(*entry) for entry in verified[1:])
+            + "</details>"
         )
-    count = sum(len(items) for items in groups.values())
-    sections = []
-    for heading, items in groups.items():
-        cards = "".join(items) or (
-            '<p class="empty-state">No published sites in this section yet.</p>'
-        )
-        sections.append(
-            f'<section class="gallery-section" aria-labelledby="{heading.split()[0].lower()}-heading">'
-            f'<div class="section-heading"><h2 id="{heading.split()[0].lower()}-heading">{heading}</h2>'
-            f'<span class="section-count">{len(items):02d}</span></div>'
-            f'<div class="site-grid">{cards}</div></section>'
-        )
-    count_label = "published site" if count == 1 else "published sites"
     return (
         '<!doctype html>\n<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<meta name="theme-color" content="#101713"><meta name="color-scheme" content="light dark">'
-        "<title>Published sites · Swift</title><style>"
-        ':root{color-scheme:light dark;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;'
-        "--bg:#f4f7f3;--surface:#fff;--ink:#17231d;--muted:#68766d;--line:#dce5dc;--accent:#187a58;--soft:#e7f2eb}"
-        "@media(prefers-color-scheme:dark){:root{--bg:#101713;--surface:#17211b;--ink:#edf5ee;--muted:#aab8ad;--line:#2b3a30;--accent:#72d6a5;--soft:#1e382b}}"
-        "*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 80% 0%,color-mix(in srgb,var(--accent) 12%,transparent),transparent 36rem),var(--bg);color:var(--ink);min-height:100vh}"
-        "a{color:inherit}a:focus-visible{outline:3px solid var(--accent);outline-offset:4px}.shell{width:min(1080px,calc(100% - 40px));margin:auto}"
-        ".topbar{display:flex;align-items:center;justify-content:space-between;padding:27px 0;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:11px;font-size:.78rem;font-weight:750;letter-spacing:.14em}"
-        ".brand-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:11px;background:var(--accent);color:#fff;font-size:1rem;letter-spacing:0}.top-note{color:var(--muted);font-size:.83rem}"
-        ".hero{padding:78px 0 56px;max-width:740px}.eyebrow{color:var(--accent);font-size:.75rem;font-weight:750;letter-spacing:.16em;text-transform:uppercase}h1{font-size:clamp(2.65rem,7vw,5.3rem);line-height:.99;letter-spacing:-.065em;margin:18px 0 20px}"
-        ".hero-copy{max-width:580px;color:var(--muted);font-size:1.08rem;line-height:1.7}.total{display:inline-flex;align-items:center;gap:9px;margin-top:25px;padding:9px 13px;border:1px solid var(--line);border-radius:999px;background:var(--surface);font-size:.83rem;color:var(--muted)}.total strong{color:var(--ink)}"
-        ".gallery-section{padding:26px 0 38px;border-top:1px solid var(--line)}.section-heading{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}h2{margin:0;font-size:1.3rem;letter-spacing:-.025em}.section-count{font-variant-numeric:tabular-nums;color:var(--muted);font-size:.78rem}"
-        ".site-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.site-card{min-height:164px;padding:19px;display:flex;flex-direction:column;align-items:flex-start;gap:12px;text-decoration:none;border:1px solid var(--line);border-radius:17px;background:var(--surface);transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease}"
-        ".site-card:hover{transform:translateY(-3px);border-color:var(--accent);box-shadow:0 14px 32px #10201512}.site-kind{padding:5px 9px;border-radius:999px;background:var(--soft);color:var(--accent);font-size:.7rem;font-weight:700;letter-spacing:.04em}.site-name{font-size:1.12rem;font-weight:720;letter-spacing:-.02em}.site-action{margin-top:auto;color:var(--muted);font-size:.82rem}.site-action span{color:var(--accent)}"
-        ".empty-state{margin:0;padding:19px;border:1px dashed var(--line);border-radius:14px;color:var(--muted);font-size:.9rem}.footer{padding:28px 0 36px;border-top:1px solid var(--line);color:var(--muted);font-size:.78rem}"
-        ".skip-link{position:absolute;left:14px;top:-60px;z-index:10;padding:10px 12px;border-radius:8px;background:var(--surface);color:var(--ink)}.skip-link:focus{top:14px}"
-        "@media(max-width:760px){.hero{padding:58px 0 42px}.site-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:500px){.shell{width:min(100% - 28px,1080px)}.topbar{padding:19px 0}.top-note{font-size:.72rem}.site-grid{grid-template-columns:1fr}.site-card{min-height:142px}.hero-copy{font-size:1rem}}@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}}</style></head><body>"
-        '<a class="skip-link" href="#main">Skip to published sites</a>'
-        '<header class="shell topbar"><div class="brand"><span class="brand-mark" aria-hidden="true">S</span><span>SWIFT / PUBLISHED</span></div><span class="top-note">A gallery of live work</span></header>'
-        '<main id="main" class="shell"><div class="hero"><p class="eyebrow">Made with Swift</p><h1>From conversation to live web projects</h1>'
-        '<p class="hero-copy">Browse demos, experiments, and other sites that have been published and verified.</p>'
-        f'<p class="total"><strong>{count:02d}</strong> {count_label}</p></div>{"".join(sections)}</main>'
-        '<footer class="shell footer">Only published sites appear here. New work is listed after its deployment succeeds.</footer></body></html>\n'
+        '<meta name="color-scheme" content="light dark"><title>Published sites · Swift</title>'
+        '<style>:root{color-scheme:light dark;--bg:#f4f7f3;--ink:#17231d;--card:#fff;--line:#dce5dc;--muted:#465b4d;--accent:#187a58}'
+        '@media(prefers-color-scheme:dark){:root{--bg:#101713;--ink:#edf5ee;--card:#17211b;--line:#2b3a30;--muted:#adbbb1;--accent:#72d6a5}}'
+        '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:1rem/1.5 system-ui,sans-serif}'
+        '.shell{max-width:940px;width:calc(100% - 40px);margin:auto}header{padding:24px 0;border-bottom:1px solid var(--line);font-weight:700}'
+        'main{padding:clamp(36px,8vw,76px) 0}h1{max-width:760px;font-size:clamp(2.4rem,7vw,5rem);line-height:1;letter-spacing:-.045em;margin:0 0 1em}'
+        'h2,summary{font-size:1.05rem;font-weight:700}h2{color:var(--accent)}'
+        '.site-card{display:grid;gap:7px;color:inherit;text-decoration:none;padding:20px;margin:10px 0;border:1px solid var(--line);border-radius:14px;background:var(--card);overflow-wrap:anywhere}'
+        'section .site-card strong{font-size:clamp(1.4rem,4vw,2.1rem)}time,.site-card span{color:var(--muted);font-size:.87rem}'
+        'details{margin-top:28px;border-top:1px solid var(--line);padding-top:14px}summary{cursor:pointer}a:hover{border-color:var(--accent)}'
+        ':focus-visible{outline:3px solid var(--accent);outline-offset:3px}</style></head>'
+        '<body><header class="shell">Swift</header><main class="shell">'
+        f'<h1>From conversation to live web projects</h1>{latest}{archive}</main></body></html>\n'
     )
 
 
@@ -576,12 +541,11 @@ class GitHubPublisher:
                 raise GitHubPublishError("github_pages_source_is_base_branch")
             prefix = "docs/" if source_folder == "/docs" else ""
             deployed_files = {(prefix + name): content for name, content in files.items()}
-            site_paths, published_at = set(), {}
+            gallery_parent, site_paths, stamps = None, set(), {}
             if not configure:
-                site_paths, published_at = await self._pages_site_paths(client, source_branch, prefix)
-            site_paths.add(site_path)
-            pages_index_path = prefix + "index.html"
-            deployed_files[pages_index_path] = render_pages_index(site_paths, published_at=published_at)
+                gallery_parent, site_paths, stamps = await self._pages_site_paths(
+                    client, source_branch, prefix
+                )
             site_deployed_paths = {prefix + name for name in files}
             existing_paths = set()
             for name in site_deployed_paths:
@@ -612,6 +576,7 @@ class GitHubPublisher:
                 create_branch=configure,
                 task_id=task_id,
                 operation_id=operation_id,
+                expected_parent=gallery_parent,
             )
             if configure:
                 status, _ = await self._request(
@@ -630,6 +595,30 @@ class GitHubPublisher:
                 configure=False,
                 source_path=source_folder,
             )
+            gallery_status = "timestamp_unavailable"
+            if published_at:
+                site_paths.add(site_path)
+                # Refresh the index only after the site build and HTTPS checks pass.
+                stamps[site_path] = published_at
+                try:
+                    gallery_commit = await self._commit_files_to_branch(
+                        client,
+                        source_branch,
+                        {
+                            prefix + "index.html": render_pages_index(site_paths, published_at=stamps),
+                            prefix + GALLERY_TIMESTAMPS: json.dumps(stamps, sort_keys=True) + "\n",
+                        },
+                        "Promote verified Swift publication",
+                        expected_parent=page_commit,
+                        task_id=task_id,
+                        operation_id=operation_id,
+                    )
+                    await self._enable_and_verify_pages(
+                        client, source_branch, gallery_commit, source_path=source_folder
+                    )
+                    gallery_status = "verified"
+                except GitHubPublishError as exc:
+                    gallery_status = "unknown" if exc.unknown else exc.code
         return {
             "status": "deployed",
             "repository": self.repository_name,
@@ -639,11 +628,12 @@ class GitHubPublisher:
             "review_commit": commit_sha,
             "deployment_url": url,
             "deployment_status": "verified",
+            "gallery_status": gallery_status,
             **({"published_at_pht": published_at} if published_at else {}),
         }
 
     async def _commit_files_to_branch(
-        self, client, branch, files, message, *, create_branch=False, task_id=None, operation_id=None
+        self, client, branch, files, message, *, create_branch=False, task_id=None, operation_id=None, expected_parent=None
     ):
         branch_path = quote(branch, safe="/")
         status, ref = await self._request(client, "GET", f"/git/ref/heads/{branch_path}")
@@ -656,6 +646,8 @@ class GitHubPublisher:
             parent = ref.get("object", {}).get("sha")
             if not isinstance(parent, str) or not re.fullmatch(r"[a-f0-9]{40}", parent):
                 raise GitHubPublishError("github_pages_source_commit_invalid")
+            if expected_parent is not None and parent != expected_parent:
+                raise GitHubPublishError("github_pages_gallery_source_changed")
             status, commit = await self._request(client, "GET", f"/git/commits/{parent}")
             if status != 200 or not isinstance(commit, dict):
                 raise GitHubPublishError("github_pages_source_commit_unavailable")
@@ -708,7 +700,7 @@ class GitHubPublisher:
         branch_path = quote(branch, safe="/")
         status, ref = await self._request(client, "GET", f"/git/ref/heads/{branch_path}")
         if status == 404:
-            return set(), {}
+            return None, set(), {}
         if status != 200 or not isinstance(ref, dict):
             raise GitHubPublishError("github_pages_source_unavailable")
         parent = ref.get("object", {}).get("sha")
@@ -732,7 +724,7 @@ class GitHubPublisher:
             elif path == source_prefix + GALLERY_TIMESTAMPS:
                 stamps_blob = entry.get("sha")
         if stamps_blob is None:
-            return output, {}
+            return parent, output, {}
         if not isinstance(stamps_blob, str) or not re.fullmatch(r"[a-f0-9]{40}", stamps_blob):
             raise GitHubPublishError("github_pages_gallery_timestamps_invalid")
         status, blob = await self._request(client, "GET", f"/git/blobs/{stamps_blob}")
@@ -747,7 +739,7 @@ class GitHubPublisher:
                 raise ValueError
         except (KeyError, ValueError, TypeError):
             raise GitHubPublishError("github_pages_gallery_timestamps_invalid") from None
-        return output, {path: stamps[path] for path in output if path in stamps}
+        return parent, output, {path: stamps[path] for path in output if path in stamps}
 
     async def publish(
         self,

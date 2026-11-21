@@ -1412,7 +1412,9 @@ def test_native_transcript_revision_advances_for_task_and_action_updates():
     from me3_voice.native_bridge import context_view
     from me3_voice.configuration import load_backends
 
-    task_store = SimpleNamespace(revision=2, snapshot=lambda: [])
+    owned = {"task_id": "current-task", "turn_id": 1}
+    previous = {"task_id": "previous-task", "turn_id": 1}
+    task_store = SimpleNamespace(revision=2, snapshot=lambda: [previous, owned])
     state = SimpleNamespace(
         context=LLMContext(),
         session_id="revision-session",
@@ -1425,9 +1427,12 @@ def test_native_transcript_revision_advances_for_task_and_action_updates():
         event_count=4,
         action_revision=0,
         fast_action_rows=[],
+        _voice_owned_task=lambda task_id: owned if task_id == owned["task_id"] else None,
     )
 
-    first = context_view(state, application)["revision"]
+    first_view = context_view(state, application)
+    assert first_view["tasks"] == [owned]
+    first = first_view["revision"]
     application.action_revision += 1
     second = context_view(state, application)["revision"]
     task_store.revision += 1

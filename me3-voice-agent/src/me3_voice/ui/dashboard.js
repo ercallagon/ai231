@@ -387,7 +387,7 @@
     const replyComplete=state==='listening'&&runtime.completedTurnId===runtime.turnId;
     const activeContext=voiceNode.dataset.wakeConfirmed==='true'?'Wake heard · speak now':replyComplete?'Reply complete · ask a follow-up':'';
     text('voice-status-context',runtime.connected?activeContext:runtime.resumePending?'Refresh closed the microphone. Resume to restore this bridge session.':runtime.liveReport?'Reconnect to continue. Previous audio will not replay.':'');
-    document.querySelector('#welcome p').textContent=runtime.resumePending?'Your conversation is preserved on this bridge. Click Resume conversation and allow microphone access to continue.':runtime.available?'Start a conversation to enable voice.':'Connect the voice runtime to begin.';
+    document.querySelector('#welcome p').textContent=runtime.resumePending?'Your conversation is preserved on this bridge. Click Resume conversation and allow microphone access to continue.':runtime.available?'Start a conversation, then say “Hey Swift”.':'Connect the voice runtime to begin.';
     text('mic-indicator',runtime.connected?(runtime.micMuted?'Microphone muted':runtime.media?.getAudioTracks()?.[0]?.readyState==='live'?'Microphone on':'Microphone unavailable'):'Microphone not connected');
     node.dataset.muted=String(runtime.micMuted);node.dataset.input=String(runtime.connected&&!runtime.micMuted&&runtime.media?.getAudioTracks()?.[0]?.readyState==='live');
     $('voice-start').textContent=runtime.connected?'End conversation':runtime.resumePending?'Resume conversation':'Start conversation';
@@ -778,7 +778,7 @@
     runtime.context?.close().catch(()=>{});
     runtime.ws=runtime.media=runtime.context=runtime.processor=runtime.input=runtime.mute=null;
     runtime.prebuffer=null;
-    if(ended){resumeSessionId='';runtime.resumePending=false;try{sessionStorage.removeItem('swift-native-session');}catch(_){}}
+    if(ended){resumeSessionId='';runtime.resumePending=false;runtime.liveReport=null;try{sessionStorage.removeItem('swift-native-session');}catch(_){}}
     else if(runtime.sessionId){resumeSessionId=runtime.sessionId;runtime.resumePending=true;try{sessionStorage.setItem('swift-native-session',resumeSessionId);}catch(_){}}
     runtime.connected=false;runtime.connecting=false;runtime.status='disconnected';runtime.engine=null;runtime.inputTurnOpen=null;runtime.interrupting=false;runtime.aec=null;runtime.lastResearchDiagnostic=null;runtime.micMuted=false;runtime.micLevel=0;runtime.micVisual=0;runtime.playLevel=0;runtime.toolActive=false;runtime.ended=ended;runtime.runId=null;runtime.sessionId=null;runtime.wakeCueSessionId=null;delete voiceNode.dataset.wakeConfirmed;runtime.turnId=0;runtime.completedTurnId=null;runtime.eventSequence=0;runtime.statusSequence=0;
     $('voice-start').disabled=false;$('voice-start').setAttribute('aria-busy','false');$('voice-interrupt').disabled=true;$('voice-mute').hidden=true;$('voice-mute').textContent='Mute microphone';

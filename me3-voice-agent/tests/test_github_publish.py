@@ -332,6 +332,7 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
     page_tree = "c" * 40
     page_commit = "d" * 40
     base_tree = "e" * 40
+    gallery_commit = "9" * 40
     branch = GitHubPublisher.branch_for("task_" + "1" * 24, "publish-000002")
     pages_source = {"branch": "gh-pages", "path": "/"}
     existing_path = "me3-voice-agent/artifacts/existing-site"
@@ -354,6 +355,14 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
             (200, {"ref": "refs/heads/gh-pages"}),
             (200, {"source": pages_source}),
             (200, {"status": "built", "commit": page_commit, "updated_at": "2026-11-20T19:04:00Z"}),
+            (200, {"source": pages_source, "html_url": "https://private-owner.github.io/demo-repo/"}),
+            (200, {"object": {"sha": page_commit}}),
+            (200, {"tree": {"sha": page_tree}}),
+            (201, {"sha": "8" * 40}),
+            (201, {"sha": gallery_commit}),
+            (200, {"ref": "refs/heads/gh-pages"}),
+            (200, {"source": pages_source}),
+            (200, {"status": "built", "commit": gallery_commit}),
             (200, {"source": pages_source, "html_url": "https://private-owner.github.io/demo-repo/"}),
         ]
     )
@@ -395,12 +404,12 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
             return None
 
         def get(self, url, **kwargs):
-            assert url == (
-                "https://private-owner.github.io/demo-repo/"
-                "me3-voice-agent/artifacts/trials/nasa-artemis/"
-            )
+            assert url in {"https://private-owner.github.io/demo-repo/", PublicResponse.url}
             assert kwargs["allow_redirects"] is True
-            return PublicResponse()
+            response = PublicResponse()
+            response.url = url
+            return response
+
 
     publisher = GitHubPublisher(
         "fixture-token",
@@ -432,18 +441,19 @@ async def test_github_publisher_returns_pages_url_only_after_build_and_public_ht
     )
     assert result["branch"] == "gh-pages"
     assert result["review_branch"] == branch
-    assert len(client.calls) == 16
+    assert result["gallery_status"] == "verified"
+    assert len(client.calls) == 24
     tree_call = client.calls[10]
     assert tree_call[2]["base_tree"] == base_tree
-    assert {item["path"] for item in tree_call[2]["tree"]} == set(files) | {"index.html"}
-    assert "artemis" in tree_call[2]["tree"][-1]["content"].lower() or any(
-        item["path"] == "index.html" and "artemis" in item["content"].lower()
-        for item in tree_call[2]["tree"]
-    )
-    root_index = next(row["content"] for row in tree_call[2]["tree"] if row["path"] == "index.html")
-    assert "existing site" in root_index.casefold()
-    assert "nasa artemis" in root_index.casefold()
-    assert '<time class="site-action" datetime="2026-11-19T11:30:58+08:00">' in root_index
+    assert {item["path"] for item in tree_call[2]["tree"]} == set(files)
+    gallery_tree = client.calls[18][2]
+    assert gallery_tree["base_tree"] == page_tree
+    entries = {item["path"]: item["content"] for item in gallery_tree["tree"]}
+    assert set(entries) == {"index.html", GALLERY_TIMESTAMPS}
+    latest, archive = entries["index.html"].split("<details>")
+    assert "Nasa Artemis" in latest and "Existing Site" in archive
+    assert 'datetime="2026-11-19T11:30:58+08:00"' in archive
+    assert json.loads(entries[GALLERY_TIMESTAMPS])[existing_path] == "2026-11-19T03:30:58Z"
     assert not any(method == "PUT" and url.endswith("/pages") for method, url, _ in client.calls)
     assert not any(method == "POST" and url.endswith("/pages") for method, url, _ in client.calls)
 
@@ -614,36 +624,33 @@ async def test_first_pages_publication_uses_one_stable_source_and_nested_site_pa
         payload for method, url, payload in client.calls
         if method == "POST" and url.endswith("/git/trees")
     )
-    assert any(
-        row["path"] == "index.html" and "me3-voice-agent/artifacts/demo/" in row["content"]
-        for row in root_commit_tree["tree"]
-    )
+    assert [row["path"] for row in root_commit_tree["tree"]] == [
+        "me3-voice-agent/artifacts/demo/index.html"
+    ]
+    assert result["gallery_status"] == "timestamp_unavailable"
 
 
 def test_pages_root_index_lists_only_sanitized_published_site_paths():
+    latest = "me3-voice-agent/artifacts/trials/site-two"
+    older = "me3-voice-agent/artifacts/demos/site-one"
     rendered = render_pages_index(
-        [
-            "me3-voice-agent/artifacts/demos/site-one",
-            "me3-voice-agent/artifacts/demos/ai231-class-demo",
-            "me3-voice-agent/artifacts/trials/site-two",
-            "unpublished/draft",
-        ],
-        published_at={"unpublished/draft": "2026-11-19T03:30:58Z"},
+        [latest, older, "unpublished/draft", "me3-voice-agent/artifacts/pending"],
+        published_at={
+            latest: "2026-11-20T03:30:58Z",
+            older: "2026-11-19T03:30:58Z",
+            "unpublished/draft": "2026-11-21T03:30:58Z",
+        },
     )
-    assert "Site One" in rendered
-    assert "From conversation to live web projects" in rendered
-    assert "AI231 Class Demo" in rendered
-    assert "<time" not in rendered
-    assert "Site Two" in rendered
-    assert "Demos" in rendered
-    assert "Trials" in rendered
-    assert "unpublished" not in rendered
-    assert 'href="me3-voice-agent/artifacts/demos/site-one/"' in rendered
-    assert 'href="me3-voice-agent/artifacts/trials/site-two/"' in rendered
-    assert "Edgardo Callagon Jr." not in rendered
-    assert (
-        urljoin("https://owner.github.io/repo/", "me3-voice-agent/artifacts/demos/site-one/")
-        == "https://owner.github.io/repo/me3-voice-agent/artifacts/demos/site-one/"
+    featured, archive = rendered.split("<details>")
+    assert "From conversation to live web projects" in featured
+    assert '>Latest</h2>' in featured and "Site Two" in featured
+    assert "<summary>Other Trials</summary>" in archive and "Site One" in archive
+    assert "2026-11-19 11:30:58 PHT" in archive
+    assert "unpublished" not in rendered and "pending" not in rendered
+    assert f'href="{latest}/"' in featured and f'href="{older}/"' in archive
+    assert rendered.count(f'href="{latest}/"') == 1
+    assert urljoin("https://owner.github.io/repo/", older + "/").startswith(
+        "https://owner.github.io/repo/me3-voice-agent/"
     )
 
 
