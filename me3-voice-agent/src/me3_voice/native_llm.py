@@ -26,7 +26,7 @@ from loguru import logger
 from pipecat.services.openai.llm import OpenAILLMService
 from .providers import MockLLM, ToolCall
 from .remote import LiveTransport, ProviderError
-from .conversation_context import prepare_context, runtime_time
+from .conversation_context import prepare_context, runtime_time, senate_research_scope
 from .conversation_tools import validate_arguments
 from .request_budget import RequestBudgetError, conservative_input_token_estimate
 from .research import public_url, research_sentences
@@ -738,28 +738,22 @@ class NativeLLM(OpenAILLMService):
             self.dispatch_epoch.reset(token)
 
     def _ground_yearless_senate_search(self, call):
-        """Keep an unrequested year out of a narrowly scoped election lookup."""
+        """Apply the user's current Senate jurisdiction and election year."""
         if call.function_name != "web_search":
             return call
-        question = self._latest_user_question(call.context).strip()
-        match = re.fullmatch(
-            r"Who won the (?:U\.S\. |US |United States )?Senate election (?:in|for) "
-            r"([A-Za-z]+(?:[ -][A-Za-z]+){0,3})[?.!]?",
-            question,
-            flags=re.I,
-        )
-        if not match or re.search(
-            r"\b(?:in|on|during|for|after|before|last|previous|nineteen|twenty|thousand)\b",
-            match[1],
-            re.I,
-        ):
+        scope = senate_research_scope(call.context)
+        if not scope:
             return call
         try:
             args = validate_arguments("web_search", call.arguments)
             day = runtime_time(self.timezone_name, self.clock)["local"][:10]
         except (TypeError, ValueError):
             return call
-        query = f"latest completed U.S. Senate election result in {match[1]} as of {day}"
+        state, year = scope
+        query = (
+            f"{year} {state} U.S. Senate election winner"
+            if year else f"latest completed U.S. Senate election result in {state} as of {day}"
+        )
         return replace(call, arguments={**args, "query": query})
 
     async def push_frame(self, frame, direction=FrameDirection.DOWNSTREAM):
@@ -975,6 +969,25 @@ class NativeLLM(OpenAILLMService):
         dropped, instruction, request_context = prepare_context(
             context, clock=self.clock, timezone_name=self.timezone_name
         )
+        senate_scope = senate_research_scope(context)
+        if senate_scope:
+            state, year = senate_scope
+            date_scope = f"the {year} election" if year else "the latest completed election as of the runtime date"
+            instruction += (
+                f"\nResolved U.S. Senate results question: {state}, {date_scope}. "
+                "Use fetched evidence for this state and scope. State the confirmed election year. "
+                "For a year follow-up, give the year of that state's result. Do not use a previous state's result."
+            )
+            if not self.calls and not repair_context:
+                from pipecat.adapters.schemas.tools_schema import ToolsSchema
+
+                search_tools = [
+                    tool for tool in getattr(request_context.tools, "standard_tools", ())
+                    if tool.name == "web_search"
+                ]
+                if search_tools:
+                    request_context.set_tools(ToolsSchema(standard_tools=search_tools))
+                    request_context.set_tool_choice("required")
         if auto_fetched:
             request_context.set_tool_choice("none")
         # The first post-search call should fetch a lead while there is
@@ -1109,6 +1122,7 @@ class NativeLLM(OpenAILLMService):
             request_id=request_id,
             structured_research=structured_research,
             research_question=research_question,
+            senate_scope=senate_scope,
             strict_research_support=strict_research_support,
             owner_turn_id=self.turn_number,
             research_repair_context_id=(repair_context_id if repair_context else None),
@@ -1702,7 +1716,8 @@ class NativeLLM(OpenAILLMService):
             return
 
     def _validate_structured_research_answer(
-        self, raw, *, question="", strict_support=False, diagnostic_draft=None, rejection=None
+        self, raw, *, question="", strict_support=False, diagnostic_draft=None, rejection=None,
+        senate_scope=None,
     ):
         """Resolve source-owned IDs, screen explicit conflicts, and report lexical fit."""
         trace = rejection if rejection is not None else {}
@@ -1710,7 +1725,8 @@ class NativeLLM(OpenAILLMService):
             payload = json.loads(raw)
         except (TypeError, ValueError):
             return self._validate_cited_research_prose(
-                raw, question=question, strict_support=strict_support, rejection=trace
+                raw, question=question, strict_support=strict_support, rejection=trace,
+                senate_scope=senate_scope,
             )
         if not isinstance(payload, dict) or set(payload) != {"claims"}:
             return None, "invalid_structured_answer", [], False
@@ -1739,7 +1755,7 @@ class NativeLLM(OpenAILLMService):
         available = self.source_ids()
         used = []
         rendered = []
-        for claim in claims:
+        for index, claim in enumerate(claims):
             if not isinstance(claim, dict) or set(claim) != {"text", "passage_id"}:
                 if isinstance(claim, dict) and "passage_id" not in claim:
                     trace["rejection_rule"] = "missing_passage_id"
@@ -1779,6 +1795,17 @@ class NativeLLM(OpenAILLMService):
                 )
                 failed_sources = used + ([source_id] if source_id in available else [])
                 return None, "insufficient_verified_evidence", failed_sources, False
+            if senate_scope and (not index or _ELECTION_WIN.search(text)):
+                state, year = senate_scope
+                matching_scope = any(
+                    re.search(rf"\b{re.escape(state)}\b", sentence, flags=re.I)
+                    and (not year or re.search(rf"\b{year}\b", sentence))
+                    for sentence in _relevant_research_sentences(text, original)
+                )
+                if not matching_scope:
+                    self._rejected_research_passage = passage_id
+                    trace["rejection_rule"] = "senate_scope_not_supported"
+                    return None, "unsupported_claim", used + [source_id], False
             claim_terms = _research_content_terms(text)
             passage_terms = _research_content_terms(original)
             matched_terms = claim_terms & passage_terms
@@ -1835,7 +1862,9 @@ class NativeLLM(OpenAILLMService):
             return None, "unavailable_citation_url", citations, False
         return " ".join(rendered), None, citations, False
 
-    def _validate_cited_research_prose(self, raw, *, question="", strict_support=False, rejection=None):
+    def _validate_cited_research_prose(
+        self, raw, *, question="", strict_support=False, rejection=None, senate_scope=None
+    ):
         """Accept ordinary prose only when each claim names a retained source.
 
         OpenRouter-compatible endpoints may return a readable, explicitly
@@ -1896,6 +1925,7 @@ class NativeLLM(OpenAILLMService):
                 strict_support=strict_support,
                 diagnostic_draft=raw,
                 rejection=rejection,
+                senate_scope=senate_scope,
             )
             if failure:
                 return None, failure, used_sources + citations, invalid
@@ -2175,6 +2205,7 @@ class NativeLLM(OpenAILLMService):
         request_id=None,
         structured_research=False,
         research_question="",
+        senate_scope=None,
         strict_research_support=False,
         owner_turn_id=None,
         research_repair_context_id=None,
@@ -2329,6 +2360,7 @@ class NativeLLM(OpenAILLMService):
                                 question=research_question,
                                 strict_support=strict_research_support,
                                 rejection=rejection,
+                                senate_scope=senate_scope,
                             )
                         )
                         if failure:

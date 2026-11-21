@@ -97,9 +97,10 @@ def _github_publication_status(text):
 
 def _pages_request(text):
     phrase = _normalize_approval_utterance(text)
+    pages = r"github (?:pages|(?:dot )?(?:io|i o))"
     return bool(
-        re.search(r"\b(?:push|publish|deploy|upload|put)\b.*\bgithub (?:io|pages)\b", phrase)
-        or re.search(r"\b(?:create|build|generate)\b.*\bon github (?:io|pages)\b", phrase)
+        re.search(rf"\b(?:push|publish|deploy|upload|put)\b.*\b{pages}\b", phrase)
+        or re.search(rf"\b(?:create|build|generate)\b.*\bon {pages}\b", phrase)
         or _make_site_live(phrase)
     )
 
@@ -1309,9 +1310,9 @@ class NativeApplication:
         if not re.search(r"\b(?:web ?site|web ?page|portfolio)\b", phrase):
             return None
         if re.search(
-            r"\b(?:my (?:personal )?(?:web ?site|web ?page|portfolio)"
+            r"\b(?:my (?:(?:professional|personal) )?(?:web ?site|web ?page|portfolio)"
             r"|personal (?:web ?site|web ?page|portfolio)"
-            r"|(?:create|build|make|develop|generate) me (?:a )?(?:personal )?(?:web ?site|web ?page|portfolio)"
+            r"|(?:create|build|make|develop|generate) me (?:a )?(?:(?:professional|personal) )?(?:web ?site|web ?page|portfolio)"
             r"|(?:web ?site|web ?page|portfolio) (?:about|for) me)\b", phrase
         ):
             return "personal_site"

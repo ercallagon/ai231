@@ -1914,8 +1914,37 @@ async def test_fetched_election_citation_must_support_the_result(claim, supporte
         assert reason in ({None} if supported else {"unsupported_claim", "contradictory_claim"})
         if supported:
             assert answer == claim + " [S2]"
+            for scope in (("Minnesota", "2026"), ("Michigan", "2024")):
+                rejected = {}
+                answer, reason, _, _ = llm._validate_structured_research_answer(
+                    json.dumps({"claims": [{"text": claim, "passage_id": "S2-P6"}]}),
+                    senate_scope=scope,
+                    rejection=rejected,
+                )
+                assert answer is None and reason == "unsupported_claim"
+                assert rejected["rejection_rule"] == "senate_scope_not_supported"
     finally:
         await llm._client.close()
+
+
+def test_senate_scope_follows_user_corrections_and_resets_on_topic_change():
+    from me3_voice.conversation_context import senate_research_scope
+
+    context = LLMContext(messages=[])
+    prompts = [
+        ("Who won the US Senate elections in Michigan?", ("Michigan", None)),
+        ("How about for Minnesota?", ("Minnesota", None)),
+        ("What year was that?", ("Minnesota", None)),
+        ("Oh, I need twenty twenty six", ("Minnesota", "2026")),
+        ("How about the US Senate winner in Ohio?", ("Ohio", "2026")),
+        ("I meant nineteen ninety eight", ("Ohio", "1998")),
+        ("Who won New Hampshire’s U.S. Senate election in 2016?", ("New Hampshire", "2016")),
+        ("How about for software testing?", None),
+        ("What year was that?", None),
+    ]
+    for prompt, expected in prompts:
+        context.add_message({"role": "user", "content": prompt})
+        assert senate_research_scope(context) == expected
 
 
 async def test_unsupported_research_capture_is_private_and_preserves_decision(
@@ -2687,6 +2716,7 @@ async def test_openrouter_requires_retrieval_before_answering_from_search(
         pytest.param(False, "yearless", id="yearless"),
         pytest.param(False, "historical", id="historical"),
         pytest.param(False, "minnesota", id="minnesota-for"),
+        pytest.param(False, "minnesota-followup", id="minnesota-followup"),
     ],
 )
 async def test_native_current_research_fetches_ranked_lead_without_extra_model_call(
@@ -2707,7 +2737,7 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
         "El-Sayed won a seat in the U.S. Senate.",
     ]
     draft_query = "Michigan 2026 Senate election winner"
-    expected_query = draft_query
+    expected_query = "2026 Michigan U.S. Senate election winner"
     if election_scope:
         draft_query = "2024 Michigan U.S. Senate election winner"
         questions[1] = "Who won the U.S. Senate election in Michigan?"
@@ -2717,13 +2747,16 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
         answers[1] = "Elissa Slotkin won Michigan's 2024 Senate election"
         answers[2] = "Slotkin won a seat in the U.S. Senate."
         expected_query = draft_query
-    if election_scope == "minnesota":
+    if election_scope in {"minnesota", "minnesota-followup"}:
         questions[1] = "who won the us senate election for minnesota"
         draft_query = "Minnesota 2024 Senate election winner"
-        expected_query = "latest completed U.S. Senate election result in minnesota as of 2026-11-20"
+        expected_query = "latest completed U.S. Senate election result in Minnesota as of 2026-11-20"
         answers[1] = "Peggy Flanagan won Minnesota's 2026 U.S. Senate election"
         answers[2] = "Flanagan won a seat in the U.S. Senate."
-    state_name = "Minnesota" if election_scope == "minnesota" else "Michigan"
+    if election_scope == "minnesota-followup":
+        questions[1] = "oh i need twenty twenty six"
+        expected_query = "2026 Minnesota U.S. Senate election winner"
+    state_name = "Minnesota" if election_scope in {"minnesota", "minnesota-followup"} else "Michigan"
     url = f"https://elections.example/{state_name.lower()}"
     alternate = "https://news.example/alternate"
     cited_url = alternate if primary_fails else url
@@ -2863,7 +2896,14 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
             try:
                 async with NativeApplication(state, MemorySink(), annotated=True) as native:
                     native.llm.clock = lambda: datetime(2026, 11, 20, tzinfo=timezone.utc)
-                    for _ in questions:
+                    for index, _ in enumerate(questions):
+                        if index == 1 and election_scope == "minnesota-followup":
+                            for earlier in (
+                                "who won the us senate elections in michigan",
+                                "how about for minnesota",
+                                "what year was that",
+                            ):
+                                state.context.add_message({"role": "user", "content": earlier})
                         await native.utterance(b"\1\0" * 1024)
                     assert state.budget.requests == (4 if optimize else 5)
                     assert [
@@ -2904,6 +2944,9 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
             assert fetches == ([url, alternate] if primary_fails else [url])
             assert len(requests) == (4 if optimize else 5)
             assert searches == [expected_query]
+            if election_scope:
+                assert requests[1]["tool_choice"] == "required"
+                assert "Resolved U.S. Senate results question" in repr(requests[1]["messages"])
             assert expected_query in repr(requests[-2]["messages"])
             if optimize:
                 assert requests[-2]["tool_choice"] == "none"

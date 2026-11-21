@@ -2598,6 +2598,7 @@ async def test_owner_pronoun_questions_use_private_profile_without_model_call():
         ("Create my personal website", False),
         ("Create me a public profile", False),
         ("No, can you create me a personal website and push to GitHub.io?", True),
+        ("Create my professional website and publish to GitHub dot I O", True),
     ],
 )
 async def test_personal_site_task_gets_only_scoped_profile_context(utterance, publish):

@@ -3124,9 +3124,30 @@ class TaskRuntime:
             answer = "The game has not passed its browser checks. The task card shows the saved files and their status."
         if personal_site_identity(task["requirements"]):
             manifest = await self.store.browser_manifest(task["task_id"])
+            site_files = sorted(
+                path for path in manifest
+                if Path(path).suffix.lower() in {".html", ".htm", ".css", ".js", ".mjs", ".svg"}
+            )
             if reason := await self._personal_site_review(task, manifest):
                 verification.update(verified=False, level="unverified", personal_site_review=reason)
                 answer = "The personal website needs review before publication. I could not verify its identity and source links or it still contains placeholder content."
+            elif (
+                PAGES_REQUEST_NOTE in task["requirements"]
+                and self.github_writer is not None
+                and 1 <= len(site_files) <= 20
+                and not state.get("pages_artifact_paths")
+                and not any(
+                    isinstance(item, ToolMessage) and item.name == "publish_github_branch"
+                    for item in state.get("messages", ())
+                )
+            ):
+                # An explicit publish request still needs its approval when the
+                # model stops after building the site. Use the existing saved
+                # artifact path, which repeats file and browser verification.
+                return Command(
+                    update={"pages_artifact_paths": site_files},
+                    goto="agent",
+                )
         if PAGES_REQUEST_NOTE in task["requirements"] or state.get("pages_artifact_paths"):
             publication = self.store.rows[task["task_id"]].get("_publication", {})
             if url := publication.get("pages_url"):

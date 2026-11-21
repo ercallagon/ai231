@@ -614,7 +614,10 @@ async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tm
         await runtime.close()
 
 
-@pytest.mark.parametrize("scenario", ["approve", "reject", "unverified", "saved", "game", "personal", "wrong_identity", "placeholder"])
+@pytest.mark.parametrize(
+    "scenario",
+    ["approve", "reject", "unverified", "saved", "game", "personal", "personal_auto", "wrong_identity", "placeholder"],
+)
 async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, scenario):
     import me3_voice.task_runtime as task_runtime_module
     from me3_voice.github_publish import GitHubPublisher
@@ -664,14 +667,14 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
     async def verify_pages_artifact(_path, **_kwargs):
         return {"available": True, "verified": True, "browser": "chromium", "errors": []}
 
-    if scenario in {"game", "personal"}:
+    if scenario in {"game", "personal", "personal_auto"}:
         executable = task_runtime_module._chromium_executable()
         if not executable:
             pytest.skip("Chromium is unavailable")
         monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
     else:
         monkeypatch.setattr(task_runtime_module, "validate_in_chromium", verify_pages_artifact)
-    personal = scenario in {"personal", "wrong_identity", "placeholder"}
+    personal = scenario in {"personal", "personal_auto", "wrong_identity", "placeholder"}
     files = {"site/index.html": "<h1>Site</h1>", "site/styles.css": "h1 { color: navy; }"}
     if scenario == "game":
         html, rest = TIC_TAC_TOE_HTML.split("<script>", 1)
@@ -703,7 +706,7 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
                 call("web_search", {"query": "Fixture Owner GitHub"}, "owner-search"),
                 call("retrieve_source", {"url": url}, "owner-source"),
             ] if personal else []),
-            call(
+            *([] if scenario == "personal_auto" else [call(
                 "publish_github_branch",
                 {
                     "paths": list(files),
@@ -711,7 +714,7 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
                     "deploy_pages": scenario != "approve",
                 },
                 tool_id,
-            ),
+            )]),
             AIMessage(content="The approved branch and Pages site are ready."),
         ]
     )
@@ -744,6 +747,8 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
             files["site/index.html"] += "<p>Project One</p>"
         for path, content in files.items():
             await runtime.store.persist_artifact(task_id, 1, path, content, path.rsplit(".", 1)[-1])
+        if scenario == "personal_auto":
+            await runtime.store.persist_artifact(task_id, 1, "research-notes.md", "Private notes", "notes")
         if scenario == "saved":
             await runtime.store.update(task_id, status="succeeded")
             await runtime.publish_saved_site(task_id, 1)
@@ -783,7 +788,7 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
         [final_approval] = result["approvals"]
         assert final_approval["approval_id"] == approval["approval_id"]
         assert len(writer.published) == len(writer.pages) == (0 if scenario == "reject" else 1)
-        succeeded = scenario in {"approve", "saved", "game", "personal"}
+        succeeded = scenario in {"approve", "saved", "game", "personal", "personal_auto"}
         assert result["status"] == ("succeeded" if succeeded else "completed_unverified")
         publication = result["publication"]
         if scenario == "reject":
@@ -800,6 +805,8 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
             assert "pages_url" not in publication and url not in result["result"]
         if scenario == "saved":
             assert result["model_calls"] == 0
+        if scenario == "personal_auto":
+            assert result["model_calls"] == 3
     finally:
         await runtime.close()
 

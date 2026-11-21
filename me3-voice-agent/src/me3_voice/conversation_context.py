@@ -1,6 +1,7 @@
 """Bounded policy over Pipecat's authoritative context; no second history."""
 
 import json
+import re
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from copy import deepcopy
@@ -8,6 +9,74 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from .remote import ProviderError
 
 LOCAL_OWNER_TURN = "_me3_local_owner_turn"
+
+_SENATE_WINNER = re.compile(
+    r"(?:who won|(?:how|what) about) the (?:latest )?(?:(?P<early_year>(?:19|20)\d{2}) )?"
+    r"(?:u s |us |united states )?senate (?:elections?|winner) (?:in|for) "
+    r"(?P<state>[a-z]+(?: [a-z]+){0,3}?)"
+    r"(?: (?:in |for )?(?P<late_year>(?:19|20)\d{2}))?"
+)
+_SENATE_STATE_FIRST = re.compile(
+    r"who won (?:the )?(?P<state>[a-z]+(?: [a-z]+){0,3}?) (?:s )?"
+    r"(?:(?P<early_year>(?:19|20)\d{2}) )?(?:u s |us |united states )?senate elections?"
+    r"(?: (?:in |for )?(?P<late_year>(?:19|20)\d{2}))?"
+)
+_SENATE_LOCATION_FOLLOWUP = re.compile(r"(?:how|what) about (?:in |for )?([a-z]+(?: [a-z]+){0,3})")
+_YEAR_UNITS = ("", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+_YEAR_TEENS = ("ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen")
+_YEAR_TENS = ("twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
+_YEAR_SUFFIX = dict(zip(_YEAR_TEENS, range(10, 20), strict=True))
+_YEAR_SUFFIX.update({f"oh {unit}": n for n, unit in enumerate(_YEAR_UNITS) if unit})
+_YEAR_SUFFIX.update({
+    f"{tens} {unit}".strip(): decade * 10 + n
+    for decade, tens in enumerate(_YEAR_TENS, start=2)
+    for n, unit in enumerate(_YEAR_UNITS)
+})
+_SENATE_YEAR_FOLLOWUP = re.compile(
+    r"(?:oh )?(?:(?:i (?:meant|mean|need|want)|what about|how about|in|for) )?"
+    rf"(?:(?P<year>(?:19|20)\d{{2}})|(?P<century>nineteen|twenty) "
+    rf"(?P<suffix>{'|'.join(_YEAR_SUFFIX)}))"
+    r"(?: instead)?"
+)
+_US_STATES = frozenset(
+    ("alabama,alaska,arizona,arkansas,california,colorado,connecticut,delaware,florida,georgia,"
+     "hawaii,idaho,illinois,indiana,iowa,kansas,kentucky,louisiana,maine,maryland,massachusetts,"
+     "michigan,minnesota,mississippi,missouri,montana,nebraska,nevada,new hampshire,new jersey,"
+     "new mexico,new york,north carolina,north dakota,ohio,oklahoma,oregon,pennsylvania,"
+     "rhode island,south carolina,south dakota,tennessee,texas,utah,vermont,virginia,washington,"
+     "west virginia,wisconsin,wyoming").split(",")
+)
+
+
+def senate_research_scope(context):
+    """Resolve a short chain of US Senate winner follow-ups from user turns."""
+    users = [
+        " ".join(re.findall(r"[a-z0-9]+", row["content"].casefold()))
+        for row in context.get_messages()
+        if isinstance(row, dict) and row.get("role") == "user" and isinstance(row.get("content"), str)
+    ]
+    state = year = None
+    for phrase in users[-6:]:
+        if direct := (_SENATE_WINNER.fullmatch(phrase) or _SENATE_STATE_FIRST.fullmatch(phrase)):
+            state = direct["state"]
+            inferred_year = year if phrase.startswith(("how about ", "what about ")) else None
+            year = direct["early_year"] or direct["late_year"] or inferred_year
+        elif state and (location := _SENATE_LOCATION_FOLLOWUP.fullmatch(phrase)):
+            state = location[1]
+        elif state and (date := _SENATE_YEAR_FOLLOWUP.fullmatch(phrase)):
+            year = date["year"]
+            if not year:
+                century = 1900 if date["century"] == "nineteen" else 2000
+                year = str(century + _YEAR_SUFFIX[date["suffix"]])
+        elif phrase not in {"what year was that", "which year was that", "what year was it"}:
+            state = year = None
+        if state and state not in _US_STATES:
+            state = year = None
+    if not state:
+        return None
+    # Normal title case is only for the question supplied to the model. Search
+    # engines are case-insensitive, and the user's transcript stays unchanged.
+    return state.title(), year
 
 # ME3-VOICE-4: bound the first spoken answer to simple factual questions after
 # a browser turn produced 432 TTS characters and over 29 seconds of audio.
