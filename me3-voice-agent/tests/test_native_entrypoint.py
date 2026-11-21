@@ -2156,6 +2156,7 @@ async def test_interrupted_fast_action_is_recorded_before_later_unrelated_turn()
         ("Yes, push it.", "github_publish", "approve"),
         ("Approve", "github_pages_deploy", "approve"),
         ("Approve", "github_publish_and_deploy", "approve"),
+        ("Approved.", "github_publish_and_deploy", "approve"),
         ("Cancel", "github_publish", "reject"),
     ],
 )
@@ -2665,7 +2666,39 @@ async def test_tic_tac_toe_creation_and_status_use_the_same_background_task():
         assert "index.html" in runtime.store.rows[task_id]["goal"]
         context.add_message({"role": "user", "content": "What's the status of the game?"})
         assert await app.fast_action(context) == "The task is in progress."
-        runtime.status.assert_awaited_once_with(task_id)
+        game = runtime.store.rows[task_id]
+        game["created"] = 2
+        for number, session, created in [(8, state.session_id, 1), (9, "other-session", 3)]:
+            other_id, call_id = f"task_{str(number) * 24}", f"game-task-{number}"
+            runtime.store.rows[other_id] = {
+                "task_id": other_id, "call_id": call_id,
+                "request_id": _voice_task_request_id(session, call_id),
+                "goal": "Create a Tic-Tac-Toe game", "status": "succeeded", "created": created,
+            }
+        context.add_message({"role": "user", "content": "What’s the status now?"})
+        assert await app.fast_action(context) == "The task is in progress."
+        game["status"] = "waiting_approval"
+        runtime.status.return_value = {
+            "status": "waiting_approval", "progress": [],
+            "approvals": [{"action": "github_publish_and_deploy", "status": "pending"}],
+        }
+        context.add_message({"role": "user", "content": "Is it completed now?"})
+        assert "one approval" in await app.fast_action(context)
+        game["status"] = "running"
+        runtime.status.return_value = {
+            "status": "running", "progress": [],
+            "approvals": [{"action": "github_publish_and_deploy", "status": "approved"}],
+        }
+        context.add_message({"role": "user", "content": "Check the status."})
+        assert "waiting for the public link" in await app.fast_action(context)
+        game["status"] = "succeeded"
+        runtime.status.return_value = {
+            "status": "succeeded", "progress": [],
+            "publication": {"pages_url": "https://example.test/game/"},
+        }
+        context.add_message({"role": "user", "content": "I don't have it. Also check the latest one."})
+        assert "live on GitHub Pages" in await app.fast_action(context)
+        assert [entry.args for entry in runtime.status.await_args_list] == [(task_id,)] * 5
         assert app.dispatch_task_tool.await_count == 1
     finally:
         await state.close()

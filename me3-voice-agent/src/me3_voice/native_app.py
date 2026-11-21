@@ -78,7 +78,7 @@ def _normalize_command_phrase(text):
 def _normalize_approval_utterance(text):
     if not isinstance(text, str):
         return ""
-    return " ".join(re.sub(r"[^a-z0-9']+", " ", text.casefold()).split())
+    return " ".join(re.sub(r"[^a-z0-9']+", " ", text.casefold().replace("’", "'")).split())
 
 
 def _github_publication_status(text):
@@ -115,7 +115,7 @@ _GITHUB_APPROVAL_ACTIONS = {"github_publish", "github_pages_deploy", "github_pub
 
 def _github_approval_intent(text):
     phrase = _normalize_approval_utterance(text)
-    generic_approve = {"approve", "approve it", "yes approve", "yes approve it", "confirm"}
+    generic_approve = {"approve", "approved", "approve it", "yes approve", "yes approve it", "confirm"}
     reject = {"cancel", "cancel it", "no", "no thanks", "reject", "decline"}
     branch_approve = {"yes push it", "yes push this", "yes publish it", "yes publish this"}
     pages_approve = {
@@ -1332,7 +1332,9 @@ class NativeApplication:
                 "\nSearch the exact owner name with GitHub, then run focused searches for recent "
                 "professional work, publications and projects. Fetch original public profiles or "
                 "primary sources. Confirm the person using affiliation, linked accounts or project "
-                "details, and check dates before calling anything current. Treat the configured "
+                "details, and check dates before calling anything current. Use the approved profile "
+                "as the sole owner identity. Omit ambiguous matches without asking for another profile. "
+                "Treat the configured "
                 "repository as a lead only. Cite fetched URLs next to sourced facts in index.html. "
                 "Omit unverified sections and do not infer employer, contact details or other "
                 "personal information. Avoid placeholders. Save the site and its local assets. "
@@ -1460,6 +1462,119 @@ class NativeApplication:
                 row["widget"] = widget
         self.action_revision += 1
 
+    async def _handle_task_progress(self, text, history):
+        phrase = _normalize_approval_utterance(text)
+        subject = r"(?:website|game|tic tac (?:toe|tow)|(?:background )?task)"
+        github_status = (
+            r"(?:what(?:'s| is) the )?(?:status of|progress on) "
+            r"(?:the |my )?github(?: pages)? task"
+        )
+        publication_question = _github_publication_status(text)
+        github_progress = publication_question or bool(re.fullmatch(github_status, phrase))
+        latest = re.fullmatch(
+            r"(?:i don't have (?:it|the task id) )?(?:also )?"
+            r"(?:please )?(?:check|show me|tell me about) (?:the )?latest(?: (?:one|task|status))?(?: please)?",
+            phrase,
+        )
+        progress = re.fullmatch(
+            rf"(?:what(?:'s| is) the (?:status|progress)(?: (?:on|of) (?:the |my )?{subject}(?: task)?)?"
+            rf"|(?:check (?:the )?|what(?:'s| is) the )?status of (?:the |my )?{subject}(?: task)?"
+            rf"|(?:check (?:the )?)?(?:task )?status"
+            rf"|how(?:'s| is) (?:the )?(?:(?:website|game) )?task going"
+            rf"|is (?:it|the {subject}) (?:ready|done|finished|completed))(?: now| yet)?",
+            phrase,
+        )
+        if not github_progress and re.fullmatch(
+            r"(?:it was )?the task about (?:my )?(?:personal )?website(?: i don't have the task id)?",
+            phrase,
+        ):
+            previous = [
+                _normalize_approval_utterance(row["content"])
+                for row in history
+                if row["role"] == "user"
+            ][-3:-1]
+            previous = [item for item in previous if item != "it was the"]
+            github_progress = bool(previous and re.fullmatch(github_status, previous[-1]))
+        if not (github_progress or latest or progress):
+            return None
+        runtime = self.resources.task_runtime
+        self.event("route_selected", route="fast_task_progress")
+        if runtime is None or runtime.store is None:
+            return "Background task status is unavailable right now."
+        rows = [
+            row for task_id in runtime.store.rows
+            if (row := self._voice_owned_task(task_id)) is not None
+        ]
+        if github_progress:
+            rows = [
+                row for row in rows
+                if row["call_id"].startswith("voice-github-task-")
+                or re.search(r"\bgithub\b", row.get("goal") or "", re.I)
+                or row.get("_publication")
+            ]
+        elif re.search(r"\b(?:website|game|tic tac (?:toe|tow))\b", phrase):
+            kinds = {"game"} if re.search(r"\b(?:game|tic tac (?:toe|tow))\b", phrase) else {
+                "website", "personal_site"
+            }
+            rows = [row for row in rows if self._coding_creation(row.get("goal", "")) in kinds]
+        if not rows:
+            if phrase.startswith("is it ") and not github_progress:
+                return None
+            return "There isn't a matching background task in this conversation."
+        active = [
+            row for row in rows
+            if row["status"] in {"queued", "running", "pausing", "paused", "waiting_approval", "cancel_requested"}
+        ]
+        candidates = rows if latest else active or rows
+        selected = max(candidates, key=lambda row: (row.get("created", 0), row.get("updated", 0)))
+        snapshot = await runtime.status(selected["task_id"])
+        stage_row = next(
+            (
+                event
+                for event in snapshot["progress"]
+                if event["kind"] == "stage_update" and isinstance(event.get("payload"), dict)
+            ),
+            None,
+        )
+        status = snapshot["status"]
+        stage = stage_row["payload"].get("stage") if stage_row and status == "running" else None
+        self.event("task_progress_read", task_id=selected["task_id"], task_status=status, stage=stage)
+        publication = snapshot.get("publication", {})
+        if publication_question or publication.get("pages_url"):
+            self.event("github_publication_status_read", task_id=selected["task_id"], task_status=status)
+        if publication.get("pages_url"):
+            return "The website is live on GitHub Pages. The verified public link is in the task card."
+        combined = {
+            approval.get("status")
+            for approval in snapshot.get("approvals", ())
+            if approval.get("action") == "github_publish_and_deploy"
+        }
+        if status == "waiting_approval" and "pending" in combined:
+            return "The site is ready for one approval covering the push and public deployment."
+        if status == "running" and "approved" in combined:
+            return "The push and public deployment were approved. I'm waiting for the public link to be verified."
+        if publication.get("repository_url") and status != "running":
+            return "The branch was pushed to GitHub. There is no verified public Pages URL for this task."
+        message = {
+            "queued": "The task is queued.",
+            "pausing": "The task is pausing.",
+            "succeeded": "The task is complete.",
+            "completed_unverified": "The task finished, but its result needs review.",
+            "failed": "The task failed.",
+            "cancelled": "The task was cancelled.",
+            "paused": "The task is paused.",
+            "waiting_approval": "The task is waiting for approval.",
+            "cancel_requested": "The task is stopping.",
+        }.get(status)
+        if status == "running":
+            stage_message = stage_row["payload"].get("message") if stage_row else None
+            message = (
+                stage_message
+                if isinstance(stage_message, str) and stage_message.strip()
+                else ("The task is in progress.")
+            )
+        return message or "I couldn't confirm the task's current state."
+
     async def fast_action(self, context):
         """Use shared exact-command parsers inside the native turn lifecycle."""
         import json
@@ -1531,6 +1646,9 @@ class NativeApplication:
         )
         if not text:
             return None
+        progress = await self._handle_task_progress(text, history)
+        if progress is not None:
+            return progress
         github_control = await self._handle_github_voice_control(text)
         if github_control is not None:
             return github_control
@@ -1624,129 +1742,6 @@ class NativeApplication:
             return (
                 "No private demo owner is configured. A spoken name does not authenticate anyone."
             )
-        progress_question = re.fullmatch(
-            r"(?i)(?:what(?:'s| is) the progress(?: on (?:the )?(?:website|game|task))?|"
-            r"how(?:'s| is) (?:the )?(?:(?:website|game) )?task going|"
-            r"(?:what(?:'s| is) the )?status of (?:the )?(?:website|game|task|"
-            r"(?:website|game|tic[- ]tac[- ]toe) task)|is the (?:website|game) (?:ready|done)(?: yet)?)[?.! ]*",
-            text.strip(),
-        )
-        github_status_pattern = (
-            r"(?:what(?:'s| is) the )?(?:status of|progress on) "
-            r"(?:the |my )?github(?: pages)? task"
-        )
-        phrase = text.casefold().replace("’", "'").strip(" ?!.")
-        github_progress = bool(re.fullmatch(github_status_pattern, phrase)) or _github_publication_status(text)
-        publication_question = _github_publication_status(text)
-        if not github_progress and re.fullmatch(
-            r"(?:(?:it was )?the task about (?:my )?(?:personal )?website"
-            r"(?:[.,]? i don't have the task id)?|is it (?:done|finished)(?: yet)?)",
-            phrase,
-        ):
-            previous = [
-                row["content"].casefold().replace("’", "'").strip(" ?!.")
-                for row in history
-                if row["role"] == "user"
-            ][-3:-1]
-            if previous and previous[-1] == "it was the":
-                previous.pop()
-            github_progress = bool(previous and re.fullmatch(github_status_pattern, previous[-1]))
-        if github_progress or progress_question:
-            runtime = self.resources.task_runtime
-            self.event("route_selected", route="fast_task_progress")
-            if runtime is None or runtime.store is None:
-                return "Background task status is unavailable right now."
-            rows = [
-                row
-                for task_id in runtime.store.rows
-                if (row := self._voice_owned_task(task_id)) is not None
-            ]
-            if progress_question and re.search(r"\b(?:website|game|tic[- ]tac[- ]toe)\b", phrase):
-                kinds = {"game"} if re.search(r"\b(?:game|tic[- ]tac[- ]toe)\b", phrase) else {
-                    "website", "personal_site"
-                }
-                rows = [row for row in rows if self._coding_creation(row.get("goal", "")) in kinds]
-                if len(rows) > 1:
-                    return "I found more than one matching task in this conversation. Which one do you mean?"
-            if github_progress:
-                rows = [
-                    row
-                    for row in rows
-                    if row["call_id"].startswith("voice-github-task-")
-                    or re.search(r"\bgithub\b", row.get("goal") or "", re.I)
-                    or row.get("_publication")
-                ]
-                if len(rows) > 1:
-                    return "This conversation has more than one GitHub task. Which one do you mean?"
-                if not rows:
-                    return "I couldn't find a GitHub task in this conversation."
-            active = [
-                row
-                for row in rows
-                if row["status"]
-                in {
-                    "queued",
-                    "running",
-                    "pausing",
-                    "paused",
-                    "waiting_approval",
-                    "cancel_requested",
-                }
-            ]
-            if len(active) > 1:
-                return "More than one background task is active. Which task do you mean?"
-            selected = (
-                rows[0]
-                if len(rows) == 1
-                else max(active or rows, key=lambda row: row["updated"], default=None)
-            )
-            if selected is None:
-                return "There isn't a background task to report on."
-            snapshot = await runtime.status(selected["task_id"])
-            stage_row = next(
-                (
-                    event
-                    for event in snapshot["progress"]
-                    if event["kind"] == "stage_update" and isinstance(event.get("payload"), dict)
-                ),
-                None,
-            )
-            status = snapshot["status"]
-            publication = snapshot.get("publication", {})
-            if publication_question:
-                self.event("github_publication_status_read", task_id=selected["task_id"], task_status=status)
-                if publication.get("pages_url"):
-                    return "The website is live on GitHub Pages. The verified public link is in the task card."
-                if status == "waiting_approval":
-                    return "The GitHub task is waiting for approval."
-                if publication.get("repository_url"):
-                    return "The branch was pushed to GitHub. There is no verified public Pages URL for this task."
-            stage = stage_row["payload"].get("stage") if stage_row and status == "running" else None
-            message = {
-                "queued": "The task is queued.",
-                "pausing": "The task is pausing.",
-                "succeeded": "The task is complete.",
-                "completed_unverified": "The task finished, but its result needs review.",
-                "failed": "The task failed.",
-                "cancelled": "The task was cancelled.",
-                "paused": "The task is paused.",
-                "waiting_approval": "The task is waiting for approval.",
-                "cancel_requested": "The task is stopping.",
-            }.get(status)
-            if status == "running":
-                stage_message = stage_row["payload"].get("message") if stage_row else None
-                message = (
-                    stage_message
-                    if isinstance(stage_message, str) and stage_message.strip()
-                    else ("The task is in progress.")
-                )
-            self.event(
-                "task_progress_read",
-                task_id=selected["task_id"],
-                task_status=status,
-                stage=stage,
-            )
-            return message or "I couldn't confirm the task's current state."
         # Exact explicit task control shares the existing local fast-action
         # boundary; no provider round trip is needed just to request cancellation.
         cancel = re.fullmatch(
