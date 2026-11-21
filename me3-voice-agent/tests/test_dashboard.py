@@ -131,6 +131,47 @@ def test_provider_health_check_does_not_block_voice_start():
     assert result.stdout.strip() == "startup continued"
 
 
+def test_dashboard_clears_snapshot_error_after_recovery_but_keeps_voice_warning():
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is needed to execute the dashboard refresh handler")
+    source = (Path(__file__).parents[1] / "src/me3_voice/ui/dashboard.js").read_text()
+    start = source.index("  const reportUpdateError")
+    end = source.index("  $('transcript-messages').addEventListener", start)
+    script = """
+const assert = require('node:assert/strict');
+let polling = false, connectionRevision = 0, sourceMode = 'server';
+const notice = {textContent: ''};
+const $ = () => notice;
+const showNotice = text => { notice.textContent = text; };
+const connection = () => {};
+function accept(snapshot, {clearNotice}) {
+  assert.deepEqual(snapshot, {current: true});
+  if (clearNotice) showNotice('');
+}
+let available = false;
+fetch = async () => ({ok: available, json: async () => ({current: true})});
+""" + source[start:end] + """
+(async () => {
+  await refresh();
+  assert.equal(notice.textContent, reportUpdateError);
+  available = true;
+  await refresh();
+  assert.equal(notice.textContent, '');
+  showNotice('Microphone disconnected');
+  await refresh();
+  assert.equal(notice.textContent, 'Microphone disconnected');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+"""
+    subprocess.run([node, "-e", script], check=True, timeout=5)
+
+
 def save(root, name, data):
     path = root / "var/results" / name
     path.parent.mkdir(parents=True, exist_ok=True)

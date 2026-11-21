@@ -89,7 +89,8 @@ def show(port, status, managed):
         print(f"Swift bridge: {status.get('bridge')} / {status.get('engine')} / {status.get('voice_session')}"
               f" ({'managed' if managed else 'external'})")
         print(f"Runtime SHA: {status.get('source_revision') or 'unreported by external bridge'}")
-        print(f"Voice ready: {status.get('voice_ready') is True}; dashboard: {BASE}{port}/ (Pi only)")
+        print(f"Voice ready: {status.get('voice_ready') is True}")
+        print(f"Pi Chromium (Pi microphone and speaker): {BASE}{port}/")
         budget = status.get("budget", {})
         print(f"Ledger run: {budget.get('run_id') or 'none'}")
         for name, quota in budget.items():
@@ -97,8 +98,9 @@ def show(port, status, managed):
                 print(f"  {name}: {quota.get('remaining')} of {quota['limit']} remaining")
     fields = os.environ.get("SSH_CONNECTION", "").split()
     target = f"{getpass.getuser()}@{fields[2]}" if len(fields) == 4 else "<user@pi-address>"
-    print(f"From laptop WSL: ./scripts/swift.sh pi-viewer --dashboard {shlex.quote(target)}")
-    print(f"For Pi desktop audio: ./scripts/swift.sh pi-viewer {shlex.quote(target)}")
+    print(f"Laptop WSL tunnel: ./scripts/swift.sh pi-viewer --dashboard {shlex.quote(target)}")
+    print("Then open the URL printed by the tunnel in your laptop browser (uses laptop audio).")
+    print(f"Pi desktop tunnel (requires a compatible viewer): ./scripts/swift.sh pi-viewer {shlex.quote(target)}")
     print("Status: ./scripts/swift.sh demo status")
     print("Stop managed bridge: ./scripts/swift.sh demo stop")
     if status and not managed:

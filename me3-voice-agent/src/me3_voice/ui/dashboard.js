@@ -622,6 +622,7 @@
     if(Date.now()-lastDelivery>12000){connection('stale');showNotice('Terminal updates paused. Showing the last report.');}
     else{connection();showNotice('');}
   }
+  const reportUpdateError = 'Updates unavailable. Showing the last report.';
   async function refresh(){
     if(polling)return;
     polling=true;
@@ -632,9 +633,11 @@
         const response=await fetch('/api/snapshot',{cache:'no-store',signal:AbortSignal.timeout(6000)});
         if(!response.ok)throw new Error('Report service unavailable');
         const next=await response.json();
-        if(revision===connectionRevision)accept(next);
+        if(revision===connectionRevision){
+          accept(next,{clearNotice:$('notice').textContent===reportUpdateError});
+        }
       }
-    }catch(_){if(revision===connectionRevision){connection('error');showNotice('Updates unavailable. Showing the last report.','error');}}
+    }catch(_){if(revision===connectionRevision){connection('error');showNotice(reportUpdateError,'error');}}
     finally{polling=false;}
   }
   $('transcript-messages').addEventListener('scroll',updateScroll);
