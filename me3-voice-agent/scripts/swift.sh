@@ -16,8 +16,9 @@ fi
 command="${1:-help}"
 if [[ $# -gt 0 ]]; then shift; fi
 if [[ "$command" == help || "$command" == --help ]]; then
-  echo 'Usage: bash scripts/swift.sh {check|demo|dashboard|bridge|native-bridge|laptop-demo|setup|vpn-setup|vpn|preflight|network|assets|audio|health} [arguments]'
+  echo 'Usage: bash scripts/swift.sh {check|demo|dashboard|bridge|native-bridge|laptop-demo|pi-viewer|setup|vpn-setup|vpn|preflight|network|assets|audio|health} [arguments]'
   echo 'Use "setup --interactive" for the guided production configuration wizard; "setup --status" is offline.'
+  echo 'Use "pi-viewer [user@pi-host]" from WSL for the loopback-only Pi Chromium/noVNC tunnel.'
   echo 'bridge requires explicit backend, secrets and wake configuration; audio requires explicit devices.'
   exit 0
 fi
@@ -80,32 +81,12 @@ for command in (("wslview", url), ("explorer.exe", url), ("xdg-open", url), ("gi
             subprocess.Popen((executable, *command[1:]), stdin=subprocess.DEVNULL,
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
-            print(f"Opened Swift UI: {url}")
+            print(f"Requested browser navigation to {url}. Verify the dashboard in the browser.")
             raise SystemExit(0)
         except OSError:
             continue
 print(f"No desktop browser opener is available. Open: {url}")
 raise SystemExit(1)
-PY
-}
-report_demo_bridge() {
-  "$python_bin" -B - "$1" <<'PY'
-import json
-import sys
-import urllib.request
-
-try:
-    with urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}/api/health", timeout=2) as response:
-        health = json.load(response)
-except (OSError, ValueError):
-    raise SystemExit("Swift production bridge is unavailable. Start the configured Pi profile first.")
-if health.get("bridge") != "ready" or health.get("engine") != "native" or health.get("voice_ready") is not True:
-    raise SystemExit("Swift production bridge is not voice ready. Check its startup terminal.")
-print("Running bridge revision:", health.get("source_revision") or "unreported by this running bridge")
-print("Native voice ready; session:", health.get("voice_session"))
-for role, quota in health.get("budget", {}).items():
-    if role.endswith("_requests") and isinstance(quota, dict) and quota.get("limit") is not None:
-        print(f"{role.removesuffix('_requests')}: {quota.get('remaining')} of {quota['limit']} requests left")
 PY
 }
 case "$command" in
@@ -115,11 +96,9 @@ case "$command" in
     exec "$python_bin" -B -m me3_voice.preflight "$@" ;;
   demo)
     if [[ "${1:-}" == --report-only ]]; then shift; exec "$python_bin" -B -m me3_voice.cli demo "$@"; fi
-    if [[ "${1:-}" == --connect ]] || { (( $# == 0 )) && grep -aq 'Raspberry Pi' /proc/device-tree/model 2>/dev/null; }; then
-      if [[ "${1:-}" == --connect && $# != 1 ]]; then exit 2; fi
-      report_demo_bridge 18770
-      open_dashboard 18770 || :
-      exit 0
+    if [[ "${1:-}" == --connect ]]; then shift; set -- start "$@"; fi
+    if [[ "${1:-}" =~ ^(start|status|stop)$ ]] || { (( $# == 0 )) && grep -aq 'Raspberry Pi' /proc/device-tree/model 2>/dev/null; }; then
+      exec "$python_bin" -B scripts/pi_demo.py "$@"
     fi
     if [[ "${1:-}" == --offline ]]; then shift; fi
     if (( $# )); then exec "$python_bin" -B -m me3_voice.cli demo "$@"; fi
@@ -225,6 +204,7 @@ case "$command" in
     exec "$python_bin" -B -m me3_voice.voice_bridge --engine native \
       --kws-assets var/cache/wake/sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01 \
       --keywords-file var/cache/wake/hey-swift-keywords.txt "$@" ;;
+  pi-viewer) exec bash scripts/pi_viewer_tunnel.sh "$@" ;;
   vpn-setup) exec "$python_bin" -B scripts/configure_vpn.py "$@" ;;
   setup)
     case "${1:-}" in

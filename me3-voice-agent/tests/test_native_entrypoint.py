@@ -369,6 +369,37 @@ async def test_native_health_exposes_service_state_and_remaining_profile_quotas(
     assert budget["vendor_billed_cost_usd"] is None
 
 
+async def test_managed_demo_stop_rejects_active_and_unowned_requests(tmp_path, monkeypatch, native_args):
+    import os
+
+    monkeypatch.setenv("ME3_DEMO_STOP_TOKEN", "private-launcher-fixture")
+    signals = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: signals.append((pid, sig)))
+    app = build_app(tmp_path, load_backends(), {}, native_args)
+    async with TestServer(app) as server, ClientSession() as client:
+        stop = server.make_url("/api/demo/stop")
+        ws_url = server.make_url("/api/voice/ws")
+        headers = {"X-Swift-Demo-Token": "private-launcher-fixture"}
+        async with client.post(stop) as response:
+            assert response.status == 403
+        async with client.ws_connect(ws_url):
+            async with client.post(stop, headers=headers) as response:
+                assert response.status == 409
+        for _ in range(30):
+            async with client.post(stop, headers=headers) as response:
+                if response.status == 200:
+                    assert (await response.json())["status"] == "stopping"
+                    break
+                assert response.status == 409
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("Closed session never released the shutdown gate")
+        async with client.get(ws_url) as response:
+            assert response.status == 409
+        await asyncio.sleep(0.15)
+    assert len(signals) == 1
+
+
 async def test_production_session_prepare_warms_local_pipeline_without_model_calls(
     tmp_path, monkeypatch, native_args
 ):

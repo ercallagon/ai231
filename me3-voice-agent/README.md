@@ -19,12 +19,21 @@ Linux, Python 3.11–3.13 and `python3-venv` are required. HPC/x86_64 Python 3.1
 
 Optional automatic VPN startup: fresh Pi setup accepts `bash scripts/setup.sh --pi --vpn-profile /path/to/private-profile.ovpn`; existing installations use `bash scripts/swift.sh vpn-setup --profile /path/to/private-profile.ovpn`. Enter credentials only at the hidden Pi prompts. Then use the documented `swift.sh vpn` launch command to initialize VPN, check routes and start the bridge. Credentials stay private on the Pi; see the runbook for permissions, OS sudo requirements and current qualification limits.
 
-On Raspberry Pi, `./scripts/swift.sh demo` opens the ready production bridge
-at [127.0.0.1:18770](http://127.0.0.1:18770/) and prints its readiness, reported
-revision and remaining request allowances. Use Start conversation, then say
-“Hey Swift.” If the bridge is down, start your configured Pi profile using the
-[Pi runbook](deploy/rpi/README.md). The demo command reuses the running
-ledger and profile.
+On Raspberry Pi, `./scripts/swift.sh demo` starts the configured production
+bridge or reports the existing one. Open [127.0.0.1:18770](http://127.0.0.1:18770/)
+in Pi Chromium or use the viewer command printed by the launcher. Use
+`./scripts/swift.sh demo status` for readiness, runtime SHA and remaining
+allowances. `./scripts/swift.sh demo stop` stops only an idle bridge started by
+this launcher. End any active conversation first. Start uses the same
+private profile and ledger on each launch. See the [Pi runbook](deploy/rpi/README.md).
+
+The private mode-0600 `var/cache/pi-demo-launch.json` stores two dictionaries.
+`options` maps existing bridge flags such as `--backend-config`,
+`--runtime-config`, `--device-config` and `--secrets-file` to local file
+paths. `environment` selects the existing `ME3_REQUEST_RUN_ID`,
+`ME3_REQUEST_LEDGER` and, for research, `ME3_RESEARCH_LEDGER`. Use only a
+previously authorized, capped profile and its matching ledger. The launcher
+neither provisions credentials nor creates an allowance.
 
 Use `./scripts/swift.sh demo --offline` for the deterministic MCP smoke and
 an isolated, read-only report at [127.0.0.1:8765](http://127.0.0.1:8765/).

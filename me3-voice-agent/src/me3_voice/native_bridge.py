@@ -10,6 +10,8 @@ import logging
 import math
 import os
 import re
+import secrets
+import signal
 import threading
 import traceback
 import time
@@ -673,6 +675,8 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
     }
     revision = os.environ.get("ME3_SOURCE_REVISION", "")
     revision = revision if re.fullmatch(r"[a-f0-9]{40}", revision) else None
+    demo_token = os.environ.get("ME3_DEMO_STOP_TOKEN", "")
+    demo_instance = hashlib.sha256(demo_token.encode()).hexdigest() if demo_token else None
     state = NativeState(
         backends,
         credentials,
@@ -685,6 +689,7 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
     state.owner_name = state.owner_profile.get("display_name", "")
     app = web.Application(client_max_size=16384)
     busy = False
+    stopping = False
     wake_configured = any(
         getattr(wake_args, name, None)
         for name in ("wake_model", "mel_model", "embedding_model", "kws_assets", "keywords_file")
@@ -1125,6 +1130,7 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
             "checked_at_utc": datetime.now(timezone.utc).isoformat(),
             "configuration_profile": configuration_profile,
             "source_revision": revision,
+            "demo_instance": demo_instance,
             "services": services,
             "budget": budget,
             "voice_configured": voice_configured,
@@ -1573,10 +1579,24 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
             headers={"Cache-Control": "no-store"},
         )
 
+    async def demo_stop(request):
+        nonlocal stopping
+        local_request(request)
+        if not secrets.compare_digest(request.headers.get("X-Swift-Demo-Token", ""), demo_token):
+            raise web.HTTPForbidden()
+        jobs = getattr(state.task_runtime, "_jobs", {}).values() if state.task_runtime else ()
+        if busy or any(not job.done() for job in jobs):
+            raise web.HTTPConflict(text="End the active conversation and let background tasks finish first.")
+        if not stopping:
+            stopping = True
+            # Reject new conversation admission before the graceful aiohttp shutdown.
+            asyncio.get_running_loop().call_later(0.1, os.kill, os.getpid(), signal.SIGTERM)
+        return web.json_response({"status": "stopping"})
+
     async def voice(request):
         nonlocal busy
         local_request(request)
-        if busy:
+        if busy or stopping:
             raise web.HTTPConflict(text="voice session already active")
         busy = True
         ws = web.WebSocketResponse(max_msg_size=16384, heartbeat=10)
@@ -2102,6 +2122,8 @@ def build_native_app(root, backends, credentials, wake_args, options, *, trace_d
     app.router.add_get("/", page)
     app.router.add_get("/audio-probe", audio_probe)
     app.router.add_get("/api/health", health)
+    if demo_instance:
+        app.router.add_post("/api/demo/stop", demo_stop)
     app.router.add_post("/api/session/prepare", prepare_session)
     app.router.add_post("/api/health/provider-check", check_provider_connectivity)
     app.router.add_get("/api/audio/output-volume", output_volume)
