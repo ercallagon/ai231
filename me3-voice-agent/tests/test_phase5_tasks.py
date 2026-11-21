@@ -883,15 +883,18 @@ async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(
     readme = f"# AI weekly\n- A verified announcement. [Source]({articles})\n"
     saved_readme = readme.strip()
     writes = []
+    searches = []
 
     class Research:
         async def search(self, query, _count):
+            searches.append((query, _count))
             return {"results": [{"url": articles}]}
 
         async def retrieve(self, url):
             return {"source_id": "S1", "url": url, "fetched": sourced, "text": "A verified announcement."}
 
-        def evidence_for_model(self, result, _question):
+        def evidence_for_model(self, result, _question, *, max_chars):
+            assert max_chars == 1200
             return result
 
     class Writer:
@@ -904,12 +907,20 @@ async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(
                 "readme_commit": "f" * 40,
             }
 
+    class BriefingModel(ScriptedModel):
+        async def __call__(self, messages, tools):
+            assert "up to three notable updates" in messages[0].content
+            names = {tool["function"]["name"] for tool in tools}
+            assert ("web_search" in names) == (self.calls == 0)
+            return await super().__call__(messages, tools)
+
     monkeypatch.setenv("ME3_GITHUB_CREATE_PUBLIC_REPO", "1")
     runtime = TaskRuntime(
         load_backends()["llm"], database=tmp_path / "tasks.sqlite", artifact_root=tmp_path / "artifacts",
         research=Research(),
-        model=ScriptedModel([
+        model=BriefingModel([
             call("web_search", {"query": "AI research news past week"}, "search"),
+            call("web_search", {"query": "Unnecessary second search"}, "repeat-search"),
             call("retrieve_source", {"url": articles}, "retrieve"),
             call("write_artifact", {"path": "README.md", "content": readme}, "write"),
             AIMessage(content="The report is ready."),
@@ -938,6 +949,9 @@ async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(
         result = await wait_for_status(runtime, task_id)
         assert result["status"] == ("succeeded" if sourced else "completed_unverified")
         assert writes == ([("ai-weekly", saved_readme)] if sourced else [])
+        assert searches == [("AI research news past week", 4)]
+        assert result["task_budgets"]["research_searches"]["used"] == 1
+        assert result["task_budgets"]["source_retrievals"]["used"] == 1
         assert bool(result["approvals"]) == sourced
         assert bool(result["publication"]) == sourced
     finally:

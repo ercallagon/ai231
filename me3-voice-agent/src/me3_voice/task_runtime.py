@@ -2069,9 +2069,11 @@ class TaskRuntime:
             await self._tool_guard(state, research_kind="search")
             if not self.research:
                 return {"ok": False, "error": "research_unavailable"}
-            result = await self.research.search(
-                query, min(max_results, 2) if demo_task else max_results
-            )
+            if demo_task:
+                max_results = min(max_results, 2)
+            elif state.get("repository_readme"):
+                max_results = min(max_results, 4)
+            result = await self.research.search(query, max_results)
             if demo_task:
                 projected = []
                 for lead in result.get("results", [])[:2]:
@@ -2121,7 +2123,10 @@ class TaskRuntime:
                     progress["owner_source_url"] = result["url"]
             if state.get("repository_readme") and result.get("fetched") is True and isinstance(result.get("url"), str):
                 progress["readme_source_url"] = result["url"]
-            result = self.research.evidence_for_model(result, state.get("requirements", ""))
+            evidence_options = {"max_chars": 1200} if state.get("repository_readme") else {}
+            result = self.research.evidence_for_model(
+                result, state.get("requirements", ""), **evidence_options
+            )
             await self.store.event(state["task_id"], "progress", progress)
             return result
 
@@ -2939,11 +2944,13 @@ class TaskRuntime:
                 raise TaskError("tool_budget_exhausted")
             updates = {"tool_calls": row["tool_calls"] + 1}
             if research_kind == "search":
-                if row["search_calls"] >= MAX_RESEARCH_SEARCHES_PER_TASK:
+                search_limit = 1 if state.get("repository_readme") else MAX_RESEARCH_SEARCHES_PER_TASK
+                if row["search_calls"] >= search_limit:
                     raise TaskError("task_search_budget_exhausted")
                 updates["search_calls"] = row["search_calls"] + 1
             elif research_kind == "retrieval":
-                if row["retrieval_calls"] >= MAX_RESEARCH_RETRIEVALS_PER_TASK:
+                retrieval_limit = 2 if state.get("repository_readme") else MAX_RESEARCH_RETRIEVALS_PER_TASK
+                if row["retrieval_calls"] >= retrieval_limit:
                     raise TaskError("task_retrieval_budget_exhausted")
                 updates["retrieval_calls"] = row["retrieval_calls"] + 1
             await self.store._set_locked(task_id, **updates)
@@ -3154,7 +3161,9 @@ class TaskRuntime:
         model_options = {}
         if state.get("repository_readme"):
             system += (
-                " For this task, write only README.md at the workspace root. "
+                " For this task, use one focused search and retrieve at most two original sources. "
+                "Write a brief roundup of up to three notable updates as soon as there is enough "
+                "evidence for at least one. Write only README.md at the workspace root. "
                 "Use the runtime date and the requested period, state the actual date range, "
                 "and include only relevant, independently sourced public developments from that period. "
                 "Fetch original URLs and put a Markdown link to a fetched source next to each reported development. "
@@ -3162,7 +3171,12 @@ class TaskRuntime:
                 "Swift prepares publication after the file is verified. Never claim that you created the repository."
             )
             messages[0] = SystemMessage(content=system)
-            model_options["tool_names"] = REPOSITORY_README_TOOLS
+            tool_names = set(REPOSITORY_README_TOOLS)
+            if task["search_calls"]:
+                tool_names.discard("web_search")
+            if task["retrieval_calls"] >= 2:
+                tool_names.discard("retrieve_source")
+            model_options["tool_names"] = tool_names
         repair_messages = []
         try:
             answer = await self._call_model(
