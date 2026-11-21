@@ -1059,6 +1059,34 @@ async def test_search_cache_deduplicates_and_provenance_rank_is_generic(monkeypa
     assert all(row["evidence_status"] == "discovery_only" for row in first["results"])
 
 
+async def test_dated_search_separates_strict_relaxed_and_unscoped_cache_entries(monkeypatch):
+    client = ResearchClient(
+        ResearchOptions(allow_live=True, request_limit=4),
+        {"ME3_RESEARCH_TAVILY_API_KEY": "fixture"},
+    )
+    requests = []
+
+    async def read(_method, _url, *, json, **_options):
+        requests.append(json)
+        return {"data": b'{"results":[]}'}
+
+    monkeypatch.setattr(client, "read", read)
+    week = ("2026-11-14", "2026-11-20")
+    await client.search("topic")
+    await client.search("topic", published_between=week, require_published_date=True)
+    await client.search("topic", published_between=week)
+    cached = await client.search("topic", published_between=week, require_published_date=True)
+
+    unscoped, strict, relaxed = requests
+    assert "start_date" not in unscoped
+    assert strict == {
+        **unscoped, "start_date": week[0], "end_date": week[1],
+        "include_published_date": True, "filter_by_published_date": True,
+    }
+    assert relaxed == {**strict, "filter_by_published_date": False}
+    assert cached["cache_hit"] is True
+
+
 def test_retrieval_alternatives_exclude_failed_and_already_retrieved_sources():
     client = ResearchClient()
     result = {

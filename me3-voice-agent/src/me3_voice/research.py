@@ -488,8 +488,18 @@ class ResearchClient:
             "last_modified": response.headers.get("Last-Modified"),
         }
 
-    async def search(self, query, max_results=5):
+    async def search(self, query, max_results=5, *, published_between=None, require_published_date=False):
         normalized_query = " ".join(query.casefold().split()) + f"\0{max_results}"
+        date_options = {}
+        if published_between:
+            start, end = published_between
+            date_options = {
+                "start_date": start,
+                "end_date": end,
+                "include_published_date": True,
+                "filter_by_published_date": require_published_date,
+            }
+            normalized_query += f"\0{start}\0{end}\0{require_published_date}"
         key_cache = "search:" + hashlib.sha256(normalized_query.encode()).hexdigest()
         cached = self._cached(key_cache)
         if cached is not None:
@@ -518,6 +528,7 @@ class ResearchClient:
                     "include_answer": "basic" if self.options.answer_mode == "tavily" else False,
                     "include_raw_content": False,
                     "auto_parameters": False,
+                    **date_options,
                 },
             )
         except ResearchError as exc:

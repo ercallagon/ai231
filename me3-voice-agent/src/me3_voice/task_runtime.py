@@ -13,7 +13,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager, contextmanager
 from contextlib import suppress
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import fcntl
 from functools import wraps
 import hashlib
@@ -508,6 +508,26 @@ REPOSITORY_README_TOOLS = {
     "get_runtime_time", "web_search", "retrieve_source", "verify_evidence",
     "write_artifact", "read_artifact",
 }
+REPOSITORY_README_SEARCH_LIMIT = 3
+REPOSITORY_README_FETCH_LIMIT = 4
+
+
+def repository_week_window(requirements):
+    if not re.search(r"\b(?:last|past|previous) (?:week|seven days|7 days)\b", requirements, re.I):
+        return None
+    today = datetime.now(timezone.utc).date()
+    return (today - timedelta(days=7)).isoformat(), (today - timedelta(days=1)).isoformat()
+
+
+def repository_listing_url(url):
+    try:
+        parts = urlsplit(url).path.strip("/").casefold().split("/")
+    except ValueError:
+        return False  # The retrieval adapter validates the URL before fetching.
+    return (
+        parts[-1] in {"", "news", "blog", "articles", "posts", "press", "releases", "the-batch"}
+        or ("releases" not in parts and bool({"tag", "tags", "category", "categories"} & set(parts)))
+    )
 
 
 class ToolArgs(BaseModel):
@@ -2069,11 +2089,30 @@ class TaskRuntime:
             await self._tool_guard(state, research_kind="search")
             if not self.research:
                 return {"ok": False, "error": "research_unavailable"}
+            search_options = {}
+            week = None
             if demo_task:
                 max_results = min(max_results, 2)
             elif state.get("repository_readme"):
-                max_results = min(max_results, 4)
-            result = await self.research.search(query, max_results)
+                week = repository_week_window(state["requirements"])
+                if week:
+                    search_options = {
+                        "published_between": week,
+                        "require_published_date": task["search_calls"] < REPOSITORY_README_SEARCH_LIMIT - 1,
+                    }
+            result = await self.research.search(query, max_results, **search_options)
+            if week:
+                leads = [
+                    {**lead, "snippet": lead.get("snippet", "")[:200]}
+                    for lead in result.get("results", [])
+                    if not repository_listing_url(lead["url"])
+                ]
+                leads.sort(key=lambda lead: week[0] <= lead.get("published_date_reported", "")[:10] <= week[1], reverse=True)
+                result = {
+                    "results": leads, "publication_window_utc": week,
+                    "guidance": "Fetch an individual article. Prefer an original announcement or dated report. "
+                                "If coverage is insufficient, refine the search within the remaining allowance.",
+                }
             if demo_task:
                 projected = []
                 for lead in result.get("results", [])[:2]:
@@ -2109,6 +2148,9 @@ class TaskRuntime:
                     "error": "demo_source_fetch_not_needed",
                     "guidance": "Use the retained Tavily answer and source snippets; omit unsupported facts and continue.",
                 }
+            if state.get("repository_readme") and repository_week_window(state["requirements"]) and repository_listing_url(url):
+                return {"ok": False, "error": "weekly_briefing_listing_page",
+                        "guidance": "Fetch a dated article, paper, or original announcement instead."}
             await self._tool_guard(state, research_kind="retrieval")
             if not self.research:
                 return {"ok": False, "error": "research_unavailable"}
@@ -2944,12 +2986,12 @@ class TaskRuntime:
                 raise TaskError("tool_budget_exhausted")
             updates = {"tool_calls": row["tool_calls"] + 1}
             if research_kind == "search":
-                search_limit = 1 if state.get("repository_readme") else MAX_RESEARCH_SEARCHES_PER_TASK
+                search_limit = REPOSITORY_README_SEARCH_LIMIT if state.get("repository_readme") else MAX_RESEARCH_SEARCHES_PER_TASK
                 if row["search_calls"] >= search_limit:
                     raise TaskError("task_search_budget_exhausted")
                 updates["search_calls"] = row["search_calls"] + 1
             elif research_kind == "retrieval":
-                retrieval_limit = 2 if state.get("repository_readme") else MAX_RESEARCH_RETRIEVALS_PER_TASK
+                retrieval_limit = REPOSITORY_README_FETCH_LIMIT if state.get("repository_readme") else MAX_RESEARCH_RETRIEVALS_PER_TASK
                 if row["retrieval_calls"] >= retrieval_limit:
                     raise TaskError("task_retrieval_budget_exhausted")
                 updates["retrieval_calls"] = row["retrieval_calls"] + 1
@@ -3161,7 +3203,10 @@ class TaskRuntime:
         model_options = {}
         if state.get("repository_readme"):
             system += (
-                " For this task, use one focused search and retrieve at most two original sources. "
+                " For this task, start with one focused search and prefer dated primary announcements or articles. "
+                "Use up to three focused searches and four original-source fetches only if needed. "
+                "If the first leads are undated or outside the requested period, search a different source or phrase. "
+                "Use publication dates on the fetched pages, and leave out events you cannot date. "
                 "Write a brief roundup of up to three notable updates as soon as there is enough "
                 "evidence for at least one. Write only README.md at the workspace root. "
                 "Use the runtime date and the requested period, state the actual date range, "
@@ -3172,9 +3217,9 @@ class TaskRuntime:
             )
             messages[0] = SystemMessage(content=system)
             tool_names = set(REPOSITORY_README_TOOLS)
-            if task["search_calls"]:
+            if task["search_calls"] >= REPOSITORY_README_SEARCH_LIMIT:
                 tool_names.discard("web_search")
-            if task["retrieval_calls"] >= 2:
+            if task["retrieval_calls"] >= REPOSITORY_README_FETCH_LIMIT:
                 tool_names.discard("retrieve_source")
             model_options["tool_names"] = tool_names
         repair_messages = []

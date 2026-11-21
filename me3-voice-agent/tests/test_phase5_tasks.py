@@ -884,13 +884,20 @@ async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(
     saved_readme = readme.strip()
     writes = []
     searches = []
+    fetches = []
+    listing = "https://example.com/the-batch"
+    week = ("2026-11-14", "2026-11-20")
+    monkeypatch.setattr("me3_voice.task_runtime.repository_week_window", lambda _: week)
 
     class Research:
-        async def search(self, query, _count):
-            searches.append((query, _count))
-            return {"results": [{"url": articles}]}
+        async def search(self, query, count, **options):
+            searches.append((query, count, options))
+            if len(searches) < 3:
+                return {"results": [{"url": listing}, {"url": "https://example.com/the-batch/tag/data-points"}]}
+            return {"results": [{"url": articles, "published_date_reported": "2026-11-19"}]}
 
         async def retrieve(self, url):
+            fetches.append(url)
             return {"source_id": "S1", "url": url, "fetched": sourced, "text": "A verified announcement."}
 
         def evidence_for_model(self, result, _question, *, max_chars):
@@ -911,7 +918,9 @@ async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(
         async def __call__(self, messages, tools):
             assert "up to three notable updates" in messages[0].content
             names = {tool["function"]["name"] for tool in tools}
-            assert ("web_search" in names) == (self.calls == 0)
+            assert ("web_search" in names) == (self.calls < 4)
+            if self.calls == 1:
+                assert articles not in messages[-1].content and '"results": []' in messages[-1].content
             return await super().__call__(messages, tools)
 
     monkeypatch.setenv("ME3_GITHUB_CREATE_PUBLIC_REPO", "1")
@@ -920,7 +929,10 @@ async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(
         research=Research(),
         model=BriefingModel([
             call("web_search", {"query": "AI research news past week"}, "search"),
-            call("web_search", {"query": "Unnecessary second search"}, "repeat-search"),
+            call("retrieve_source", {"url": listing}, "skip-index"),
+            call("web_search", {"query": "AI lab announcements this week"}, "refined-search"),
+            call("web_search", {"query": "Deep learning releases this week"}, "alternate-search"),
+            call("web_search", {"query": "Over the limit"}, "exhausted-search"),
             call("retrieve_source", {"url": articles}, "retrieve"),
             call("write_artifact", {"path": "README.md", "content": readme}, "write"),
             AIMessage(content="The report is ready."),
@@ -949,8 +961,16 @@ async def test_weekly_repo_voice_task_requires_fetched_sources_and_one_approval(
         result = await wait_for_status(runtime, task_id)
         assert result["status"] == ("succeeded" if sourced else "completed_unverified")
         assert writes == ([("ai-weekly", saved_readme)] if sourced else [])
-        assert searches == [("AI research news past week", 4)]
-        assert result["task_budgets"]["research_searches"]["used"] == 1
+        assert searches == [
+            (query, 5, {"published_between": week, "require_published_date": strict})
+            for query, strict in (
+                ("AI research news past week", True),
+                ("AI lab announcements this week", True),
+                ("Deep learning releases this week", False),
+            )
+        ]
+        assert fetches == [articles]
+        assert result["task_budgets"]["research_searches"]["used"] == 3
         assert result["task_budgets"]["source_retrievals"]["used"] == 1
         assert bool(result["approvals"]) == sourced
         assert bool(result["publication"]) == sourced
@@ -1100,7 +1120,7 @@ async def test_task_research_caps_are_durable_and_legacy_schema_migrates(tmp_pat
         await store.update(task["task_id"], model_calls=30)
         runtime.max_model_calls = 100  # Constructor overrides cannot bypass the hard ceiling.
         with pytest.raises(TaskError, match="model_budget_exhausted"):
-            await runtime._agent(state)
+            await runtime._agent({**state, "messages": [AIMessage(content="Research deeply")]})
         assert runtime.model.calls == 0
 
         # Reopening TaskStore on the same durable DB retains counters. Simulate
