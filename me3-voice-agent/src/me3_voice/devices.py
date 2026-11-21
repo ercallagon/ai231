@@ -898,10 +898,12 @@ class DeviceActions:
                     else f"Pi LED command accepted: {self.color}, {self.brightness}% brightness, {'on' if self.light else 'off'}; no sensor confirms the output."
                 )
                 spoken_summary = {
+                    "light_on": "Light switched on.",
+                    "light_off": "Light switched off.",
                     "set_color": f"Light set to {self.color}.",
                     "set_brightness": f"Brightness set to {self.brightness} percent.",
-                }.get(action, summary)
-                if self.mode == "mock" and action in {"set_color", "set_brightness"}:
+                }[action]
+                if self.mode == "mock":
                     spoken_summary = "Simulated " + spoken_summary[0].lower() + spoken_summary[1:]
                 return self._base_result(
                     result_status=status,

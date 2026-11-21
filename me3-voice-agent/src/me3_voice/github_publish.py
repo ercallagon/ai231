@@ -45,16 +45,22 @@ def _pages_published_at(value):
         return None
 
 
-def new_pages_artifact_paths(files, task_id):
-    """Map a new local site to a unique Demo directory, retaining relative paths."""
+def new_pages_artifact_paths(files, task_id, *, kind):
+    """Give each new publication a descriptive, task-specific destination."""
     if not re.fullmatch(r"task_[a-f0-9]{24}", task_id):
         raise GitHubPublishError("github_pages_artifact_path_invalid")
-    prefix = f"me3-voice-agent/artifacts/demos/{task_id[5:]}/"
+    directory, name = {
+        "tic_tac_toe": ("games", "tic-tac-toe"),
+        "game": ("games", "browser-game"),
+        "personal_site": ("websites", "professional-website"),
+        "website": ("websites", "website"),
+    }[kind]
+    prefix = f"me3-voice-agent/artifacts/{directory}/{name}-{task_id[5:]}/"
     return {_path(prefix + _path(path)): content for path, content in files.items()}
 
 
 def render_pages_index(site_paths, *, published_at=None):
-    """Promote the newest verified Pages deployment and archive the rest."""
+    """Feature the newest verified publication with discreet links to earlier work."""
     paths = sorted({_path(path) for path in site_paths if isinstance(path, str)})
     verified = []
     for path in paths:
@@ -66,7 +72,10 @@ def render_pages_index(site_paths, *, published_at=None):
     verified.sort(key=lambda entry: datetime.fromisoformat(entry[0]), reverse=True)
 
     def card(stamp, path):
-        label = PurePosixPath(path).name.replace("-", " ").replace("_", " ").strip().title()
+        parts = PurePosixPath(path).parts
+        name = parts[3] if len(parts) > 3 and parts[2] in {"games", "websites"} else parts[-1]
+        name = re.sub(r"(?:^|-)[a-f0-9]{24}$", "", name)
+        label = name.replace("-", " ").replace("_", " ").strip().title() or "Published website"
         href = "/".join(quote(part, safe="-._~") for part in path.split("/")) + "/"
         return (
             f'<a class="site-card" href="{html.escape(href, quote=True)}">'
@@ -77,10 +86,10 @@ def render_pages_index(site_paths, *, published_at=None):
 
     latest = archive = ""
     if verified:
-        latest = '<section aria-labelledby="latest"><h2 id="latest">Latest</h2>' + card(*verified[0]) + "</section>"
+        latest = '<section aria-labelledby="latest"><h2 id="latest">Latest publication</h2>' + card(*verified[0]) + "</section>"
     if len(verified) > 1:
         archive = (
-            '<details><summary>Other Trials</summary>'
+            '<details><summary>More published projects</summary>'
             + "".join(card(*entry) for entry in verified[1:])
             + "</details>"
         )

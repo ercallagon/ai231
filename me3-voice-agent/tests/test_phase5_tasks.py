@@ -608,14 +608,13 @@ async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tm
         assert "deploy publicly to GitHub Pages" in row["approvals"][0]["details"]
         assert "me3-voice-agent/artifacts/trials/nasa-artemis/" in row["approvals"][0]["details"]
         approval_events = [event for event in row["progress"] if event["kind"] == "approval_requested"]
-        assert "index.html" in approval_events[-1]["payload"]["spoken_summary"]
-        assert "styles.css" in approval_events[-1]["payload"]["spoken_summary"]
+        assert "2 files" in approval_events[-1]["payload"]["spoken_summary"]
         assert "public" in approval_events[-1]["payload"]["spoken_summary"]
     finally:
         await runtime.close()
 
 
-@pytest.mark.parametrize("scenario", ["approve", "reject", "unverified", "saved", "personal", "wrong_identity", "placeholder"])
+@pytest.mark.parametrize("scenario", ["approve", "reject", "unverified", "saved", "game", "personal", "wrong_identity", "placeholder"])
 async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, scenario):
     import me3_voice.task_runtime as task_runtime_module
     from me3_voice.github_publish import GitHubPublisher
@@ -665,8 +664,20 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
     async def verify_pages_artifact(_path, **_kwargs):
         return {"available": True, "verified": True, "browser": "chromium", "errors": []}
 
-    monkeypatch.setattr(task_runtime_module, "validate_in_chromium", verify_pages_artifact)
+    if scenario in {"game", "personal"}:
+        executable = task_runtime_module._chromium_executable()
+        if not executable:
+            pytest.skip("Chromium is unavailable")
+        monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
+    else:
+        monkeypatch.setattr(task_runtime_module, "validate_in_chromium", verify_pages_artifact)
     personal = scenario in {"personal", "wrong_identity", "placeholder"}
+    files = {"site/index.html": "<h1>Site</h1>", "site/styles.css": "h1 { color: navy; }"}
+    if scenario == "game":
+        html, rest = TIC_TAC_TOE_HTML.split("<script>", 1)
+        script, ending = rest.split("</script>", 1)
+        files["site/index.html"] = html.replace("</head>", '<link rel="stylesheet" href="styles.css"></head>') + '<script src="game.js"></script>' + ending
+        files["site/game.js"] = script
     url = "https://github.com/example/fixture-owner"
 
     class ProfileResearch:
@@ -695,7 +706,7 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
             call(
                 "publish_github_branch",
                 {
-                    "paths": ["site/index.html", "site/styles.css"],
+                    "paths": list(files),
                     "commit_message": "Publish site",
                     "deploy_pages": scenario != "approve",
                 },
@@ -717,20 +728,22 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
         await runtime.start_runtime()
         from me3_voice.task_runtime import PAGES_REQUEST_NOTE
 
-        goal = "Publish a website. " + PAGES_REQUEST_NOTE
+        goal = ("Publish a playable Tic-Tac-Toe game. " if scenario == "game" else "Publish a website. ") + PAGES_REQUEST_NOTE
         if personal:
             goal += "\nPersonal site identity: Fixture Owner"
         task, _ = await runtime.store.create(goal, "site-approval", 1, "site-approval")
         task_id = task["task_id"]
         await runtime.store.update(task_id, status="running")
-        html = (
-            f'<h1>Fixture Owner</h1><p>2025 public project.</p><a href="{url}">Source</a>'
-            if personal else "<h1>Site</h1>"
-        )
+        if personal:
+            files["site/index.html"] = (
+                '<!doctype html><html lang="en"><head><title>Fixture Owner</title>'
+                '<link rel="stylesheet" href="styles.css"></head>'
+                f'<body><h1>Fixture Owner</h1><p>2025 public project.</p><a href="{url}">Source</a></body></html>'
+            )
         if scenario == "placeholder":
-            html += "<p>Project One</p>"
-        await runtime.store.persist_artifact(task_id, 1, "site/index.html", html, "html")
-        await runtime.store.persist_artifact(task_id, 1, "site/styles.css", "h1 { color: navy; }", "css")
+            files["site/index.html"] += "<p>Project One</p>"
+        for path, content in files.items():
+            await runtime.store.persist_artifact(task_id, 1, path, content, path.rsplit(".", 1)[-1])
         if scenario == "saved":
             await runtime.store.update(task_id, status="succeeded")
             await runtime.publish_saved_site(task_id, 1)
@@ -747,10 +760,12 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
             )
             return
 
-        waiting = await wait_for_status(runtime, task_id, {"waiting_approval"})
+        waiting = await wait_for_status(runtime, task_id, {"waiting_approval"}, timeout=25)
         [approval] = waiting["approvals"]
         assert approval["action"] == "github_publish_and_deploy"
-        destination = "me3-voice-agent/artifacts/demos/" + task_id[5:] + "/site"
+        kind = "games/tic-tac-toe" if scenario == "game" else "websites/professional-website" if personal else "websites/website"
+        prefix = f"me3-voice-agent/artifacts/{kind}-{task_id[5:]}"
+        destination = f"{prefix}/site"
         url = writer.expected_pages_url(destination)
         assert "swift-artifacts" in approval["details"]
         assert "gh-pages:/" in approval["details"]
@@ -763,20 +778,22 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
             task_id, approval["approval_id"], approval["revision"],
             "reject" if scenario == "reject" else "approve",
         )
-        result = await wait_for_status(runtime, task_id)
+        result = await wait_for_status(runtime, task_id, timeout=25)
+        assert result["task_id"] == task_id
         [final_approval] = result["approvals"]
         assert final_approval["approval_id"] == approval["approval_id"]
         assert len(writer.published) == len(writer.pages) == (0 if scenario == "reject" else 1)
-        assert result["status"] == ("succeeded" if scenario in {"approve", "saved", "personal"} else "completed_unverified")
+        succeeded = scenario in {"approve", "saved", "game", "personal"}
+        assert result["status"] == ("succeeded" if succeeded else "completed_unverified")
         publication = result["publication"]
         if scenario == "reject":
             assert not publication
         else:
             assert publication["repository_url"].endswith("/tree/swift-artifacts")
-            assert set(writer.published[0][2]) == {f"{destination}/index.html", f"{destination}/styles.css"}
+            assert set(writer.published[0][2]) == {f"{prefix}/{path}" for path in files}
             assert writer.pages[0][1] == "a" * 40
             assert writer.pages[0][3]["expected_source"]["branch"] == "gh-pages"
-        if scenario in {"approve", "saved", "personal"}:
+        if succeeded:
             assert publication["pages_url"] == url
             assert url in result["result"]
         else:

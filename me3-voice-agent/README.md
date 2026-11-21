@@ -85,8 +85,9 @@ Native coding tasks use a private per-task directory under
 `${XDG_STATE_HOME:-$HOME/.local/state}/swift-me3/workspace` by default.
 The task card reports saved file locations and offers downloads. When you
 request publication, Swift uses the repository selected in guided setup.
-A new website with no explicit destination goes under
-`me3-voice-agent/artifacts/demos/<task-id>/`. For an explicit GitHub.io or
+A new site gets a task-specific destination under
+`me3-voice-agent/artifacts/websites/`, or under `artifacts/games/` for a
+browser game. For an explicit GitHub.io or
 public Pages request, Swift asks for one approval covering the reviewed files,
 the `swift-artifacts` push, and the public Pages deployment. The task card
 links to the branch and adds the Pages link after deployment verification.
@@ -98,10 +99,9 @@ Chromium with external requests blocked. A personal website needs the approved
 private owner name and links to fetched public sources before Swift can offer
 Pages publication.
 
-The newest site with a
-verified deployment appears under **Latest**. Older verified sites are
-available under **Other Trials**. GitHub supplies the publication timestamp,
-which the gallery displays in Manila time.
+During approved publication, the Pages index features the newest verified
+deployment and lists earlier projects under **More published projects**.
+GitHub supplies the publication timestamp, displayed in Manila time.
 
 Install Node.js separately if you want the dashboard JavaScript checks to
 run. Node is a test dependency. The Pi launcher uses the locked Python

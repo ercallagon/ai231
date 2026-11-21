@@ -631,7 +631,7 @@ async def test_first_pages_publication_uses_one_stable_source_and_nested_site_pa
 
 
 def test_pages_root_index_lists_only_sanitized_published_site_paths():
-    latest = "me3-voice-agent/artifacts/trials/site-two"
+    latest = "me3-voice-agent/artifacts/games/tic-tac-toe-" + "c" * 24
     older = "me3-voice-agent/artifacts/demos/site-one"
     rendered = render_pages_index(
         [latest, older, "unpublished/draft", "me3-voice-agent/artifacts/pending"],
@@ -643,8 +643,9 @@ def test_pages_root_index_lists_only_sanitized_published_site_paths():
     )
     featured, archive = rendered.split("<details>")
     assert "From conversation to live web projects" in featured
-    assert '>Latest</h2>' in featured and "Site Two" in featured
-    assert "<summary>Other Trials</summary>" in archive and "Site One" in archive
+    assert ">Latest publication</h2>" in featured and "Tic Tac Toe</strong>" in featured
+    assert "<summary>More published projects</summary>" in archive and "Site One" in archive
+    assert "Other Trials" not in rendered and "Practice" not in rendered
     assert "2026-11-19 11:30:58 PHT" in archive
     assert "unpublished" not in rendered and "pending" not in rendered
     assert f'href="{latest}/"' in featured and f'href="{older}/"' in archive

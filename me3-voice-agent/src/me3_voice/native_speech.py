@@ -34,23 +34,83 @@ from pipecat.services.tts_service import TTSService
 from .contracts import FRAME_BYTES, TurnKey, encode_pcm
 
 
+_CODE_BOUNDARY = re.compile(r"```|^\s*~~~|</?(?:script|style)\b[^>]*>", re.I | re.M)
+
+
+def _exclude_code(text, end_marker):
+    """Keep code blocks quiet even if sentence aggregation splits them."""
+    pieces = []
+    offset = 0
+    for match in _CODE_BOUNDARY.finditer(text):
+        marker = match[0].strip().lower()
+        if end_marker:
+            if marker == end_marker:
+                end_marker = ""
+                offset = match.end()
+            continue
+        pieces.append(text[offset:match.start()])
+        if marker in {"```", "~~~"}:
+            end_marker = marker
+        elif not marker.startswith("</"):
+            end_marker = "</" + re.match(r"<(script|style)", marker)[1] + ">"
+        if end_marker:
+            pieces.append(" Code is shown on screen. ")
+        offset = match.end()
+    if not end_marker:
+        pieces.append(text[offset:])
+    return "".join(pieces), end_marker
+
+
 def spoken_text(text):
     """Remove presentation syntax at the speech boundary; retain UI text as-is."""
-    value = str(text or "")
-    # Code is useful on screen but generally unreadable aloud. Keep a short
-    # truthful cue instead of speaking fence and programming punctuation.
-    value = re.sub(r"```[^\n]*\n.*?```", " Code is shown on screen. ", value, flags=re.S)
+    return _spoken_prose(_exclude_code(str(text or ""), "")[0])
+
+
+def _spoken_prose(value):
     # Strip markup emitted as fragmented HTML after Markdown fences have been
     # split by streaming. Keep visible text while dropping tags and entities.
     value = re.sub(r"<\s*/?\s*(?:!doctype|/?[a-z][a-z0-9:-]*)\b[^>]*>", " ", value, flags=re.I)
     value = re.sub(r"&(?:nbsp|amp|lt|gt|quot|#39|#[0-9]{1,6});", " ", value, flags=re.I)
-    value = re.sub(r"`([^`\n]+)`", r"\1", value)
+    value = re.sub(
+        r"`([^`\n]+)`",
+        lambda m: " " if re.search(r"[(){}=;<>]", m[1]) else m[1],
+        value,
+    )
+    value = re.sub(
+        r"(?m)^\s*(?:(?:const|let|var)\s+\w+\s*=|(?:function|def)\s+\w+\s*\().*$",
+        " Code is shown on screen. ",
+        value,
+    )
     value = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", value)
     # Research citations and bare URLs are useful in the UI but awkward and
     # often tokenized poorly by speech providers.
-    value = re.sub(r"\[S\d+(?:\s*,\s*S\d+)*\]", " ", value, flags=re.I)
-    value = re.sub(r"https?://\S+", "", value, flags=re.I)
-    value = re.sub(r"\bwww\.\S+", "", value, flags=re.I)
+    source_id = r"S\d+(?:-P\d+)?"
+    value = re.sub(rf"\[{source_id}(?:\s*,\s*{source_id})*\]", " ", value, flags=re.I)
+    value = re.sub(r"\[(?:https?://|www\.)[^\]\s]+\]", "", value, flags=re.I)
+    url = r"(?:https?://|\bwww\.|\b(?:[\w.-]+\.github\.io|github\.com)(?=[/\s.,;!?]|$))"
+    value = re.sub(
+        rf"\b(see|visit|open|at)\s+{url}[^\s<>]*(?<![.,;!?])",
+        r"\1 the link on screen",
+        value,
+        flags=re.I,
+    )
+    value = re.sub(rf"{url}[^\s<>]*(?<![.,;!?])", "", value, flags=re.I)
+    path = (
+        r"(?:(?:~|\.{1,2}|[A-Za-z]:)?[/\\][\w.@+~-]+(?:[/\\][\w.@+~-]+)*"
+        r"|[\w.@+~-]+(?:[/\\][\w.@+~-]+){2,})(?<!\.)"
+    )
+    value = re.sub(rf"\b(in|at|to|from)\s+{path}", r"\1 the location shown on screen", value, flags=re.I)
+    value = re.sub(
+        rf"(?<![\w/]){path}",
+        " ",
+        value,
+    )
+    value = re.sub(
+        r"\b(?:task_[a-f0-9]{24}|[a-f0-9]{24,64}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\b",
+        " ",
+        value,
+        flags=re.I,
+    )
     value = re.sub(r"^\s{0,3}#{1,6}\s+", "", value, flags=re.M)
     value = re.sub(r"^\s*(?:[-+*]|\d+[.)])\s+", "", value, flags=re.M)
     value = re.sub(r"(\*\*|__|\*|_|~~)(.*?)\1", r"\2", value, flags=re.S)
@@ -813,6 +873,7 @@ class McpTTSService(TTSService):
         self.response_context_id = None
         self.response_has_audio = False
         self.response_stop_emitted = False
+        self._code_end_marker = ""
         self._progress_owner_id = None
         self.progress_allowed = None
 
@@ -830,6 +891,7 @@ class McpTTSService(TTSService):
             self.response_context_id,
             self.response_has_audio,
             self.response_stop_emitted,
+            self._code_end_marker,
             self._progress_owner_id,
         )
         self._progress_owner_id = frame.owner_id
@@ -840,6 +902,7 @@ class McpTTSService(TTSService):
                 self.response_context_id,
                 self.response_has_audio,
                 self.response_stop_emitted,
+                self._code_end_marker,
                 self._progress_owner_id,
             ) = saved
 
@@ -851,6 +914,7 @@ class McpTTSService(TTSService):
         self.response_context_id = context_id
         self.response_has_audio = False
         self.response_stop_emitted = False
+        self._code_end_marker = ""
         if self._progress_owner_id:
             self.event(
                 "tts_progress_started", response_id=context_id, owner_id=self._progress_owner_id
@@ -913,7 +977,8 @@ class McpTTSService(TTSService):
                 values.setdefault("owner_id", self._progress_owner_id)
             self.event(name, **values)
 
-        text = spoken_text(text)
+        prose, self._code_end_marker = _exclude_code(str(text or ""), self._code_end_marker)
+        text = _spoken_prose(prose)
         if not any(char.isalnum() for char in text):
             # A malformed streamed answer can contain punctuation-only
             # sentences. They have no speakable content and previously opened

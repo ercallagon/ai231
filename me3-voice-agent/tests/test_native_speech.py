@@ -420,7 +420,7 @@ async def test_spoken_tts_removes_markdown_without_changing_display_context():
 
     source = (
         "The lamp is now **red** with 30 % brightness[S1, S2]. "
-        "The result[S3]is preliminary.\n```python\nprint('hi')\n```"
+        "The result[S3-P2]is preliminary.\n```python\nprint('hi')\n```"
     )
     assert spoken_text(source) == (
         "The lamp is now red with 30 percent brightness. "
@@ -434,6 +434,28 @@ async def test_spoken_tts_removes_markdown_without_changing_display_context():
     assert "[S" not in speech.text[0]
     assert all("**" not in text and "```" not in text for text in speech.text)
     assert all(frame.context_id == "response-context" for frame in frames)
+
+    await tts.on_turn_context_created("streamed-response")
+    fragments = [
+        "I saved the site in /home/ej/workspace/task_0123456789abcdef01234567/index.html. "
+        "The preview is preliminary[S3-P2]. ```js\nconst example = 1;",
+        "window.alert(example);",
+        "``` The public URL is still unverified.",
+    ]
+    for fragment in fragments:
+        _ = [frame async for frame in tts.run_tts(fragment, "streamed-response")]
+    assert speech.text[1:] == [
+        "I saved the site in the location shown on screen. "
+        "The preview is preliminary. Code is shown on screen.",
+        "The public URL is still unverified.",
+    ]
+    assert "window.alert(example)" in fragments[1]
+    assert spoken_text("See example.github.io/projects/game. The push succeeded.") == (
+        "See the link on screen. The push succeeded."
+    )
+    assert spoken_text("<script>window.alert(1)</script>Approval is still required.") == (
+        "Code is shown on screen. Approval is still required."
+    )
     assert events[0]["response_id"] == "response-context"
 
 
