@@ -2686,6 +2686,7 @@ async def test_openrouter_requires_retrieval_before_answering_from_search(
         pytest.param(True, None, id="fallback"),
         pytest.param(False, "yearless", id="yearless"),
         pytest.param(False, "historical", id="historical"),
+        pytest.param(False, "minnesota", id="minnesota-for"),
     ],
 )
 async def test_native_current_research_fetches_ranked_lead_without_extra_model_call(
@@ -2716,7 +2717,14 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
         answers[1] = "Elissa Slotkin won Michigan's 2024 Senate election"
         answers[2] = "Slotkin won a seat in the U.S. Senate."
         expected_query = draft_query
-    url = "https://elections.example/michigan"
+    if election_scope == "minnesota":
+        questions[1] = "who won the us senate election for minnesota"
+        draft_query = "Minnesota 2024 Senate election winner"
+        expected_query = "latest completed U.S. Senate election result in minnesota as of 2026-11-20"
+        answers[1] = "Peggy Flanagan won Minnesota's 2026 U.S. Senate election"
+        answers[2] = "Flanagan won a seat in the U.S. Senate."
+    state_name = "Minnesota" if election_scope == "minnesota" else "Michigan"
+    url = f"https://elections.example/{state_name.lower()}"
     alternate = "https://news.example/alternate"
     cited_url = alternate if primary_fails else url
     snippet = (
@@ -2727,7 +2735,7 @@ async def test_native_current_research_fetches_ranked_lead_without_extra_model_c
         "kind": "untrusted_retrieved_source",
         "source_id": "S2",
         "url": cited_url,
-        "title": "Michigan Senate results",
+        "title": f"{state_name} Senate results",
         "fetched": True,
         "text": answers[1] + ".",
     }

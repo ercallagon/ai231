@@ -23,6 +23,11 @@ from urllib.parse import urlsplit, urljoin
 import aiohttp
 
 
+def research_sentences(text):
+    """Keep abbreviations like U.S. attached to the office that follows."""
+    return re.split(r"(?<!\b[A-Z]\.[A-Z]\.)(?<=[.!?])\s+|\n+", text)
+
+
 class ResearchError(ValueError):
     def __init__(
         self,
@@ -259,7 +264,7 @@ class ResearchClient:
 
         passages = OrderedDict()
         ordinal = 0
-        for sentence in re.split(r"(?<=[.!?])\s+", text):
+        for sentence in research_sentences(text):
             remaining = sentence.strip()
             while remaining:
                 ordinal += 1

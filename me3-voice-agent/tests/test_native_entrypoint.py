@@ -2592,7 +2592,15 @@ async def test_owner_pronoun_questions_use_private_profile_without_model_call():
         await state.close()
 
 
-async def test_personal_site_task_gets_only_scoped_profile_context():
+@pytest.mark.parametrize(
+    ("utterance", "publish"),
+    [
+        ("Create my personal website", False),
+        ("Create me a public profile", False),
+        ("No, can you create me a personal website and push to GitHub.io?", True),
+    ],
+)
+async def test_personal_site_task_gets_only_scoped_profile_context(utterance, publish):
     from me3_voice.native_app import NativeApplication, NativeState
     from pipecat.processors.aggregators.llm_context import LLMContext
 
@@ -2603,7 +2611,15 @@ async def test_personal_site_task_gets_only_scoped_profile_context():
         "aliases": ["Fixture Alias"],
         "permissions": {"public_publish": False},
     }
-    state.task_runtime = type("Runtime", (), {"close": lambda self: asyncio.sleep(0)})()
+    state.task_runtime = type(
+        "Runtime",
+        (),
+        {
+            "store": type("Store", (), {"rows": {}, "pending_approvals": {}})(),
+            "github_writer": object(),
+            "close": lambda self: asyncio.sleep(0),
+        },
+    )()
     app = NativeApplication(state, object(), annotated=True)
     requests = []
 
@@ -2613,9 +2629,9 @@ async def test_personal_site_task_gets_only_scoped_profile_context():
 
     app.dispatch_task_tool = start_task
     try:
-        for utterance in ("Create my personal website", "Create a website for my bakery"):
+        for request in (utterance, "Create a website for my bakery"):
             context = LLMContext()
-            context.add_message({"role": "user", "content": utterance})
+            context.add_message({"role": "user", "content": request})
             await app.fast_action(context)
         assert len(requests) == 2
         assert "Edgardo Callagon Jr." in requests[0]
@@ -2625,6 +2641,7 @@ async def test_personal_site_task_gets_only_scoped_profile_context():
         assert "do not infer employer, contact details" in requests[0]
         assert "Public deployment requires explicit approval" in requests[0]
         assert "Search the exact owner name with GitHub" in requests[0]
+        assert ("deploy_pages=true" in requests[0]) is publish
         assert "Edgardo Callagon Jr." not in requests[1]
         assert "Personal site identity:" not in requests[1]
     finally:

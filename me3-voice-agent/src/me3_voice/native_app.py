@@ -1288,7 +1288,8 @@ class NativeApplication:
     def _coding_creation(text):
         phrase = _normalize_approval_utterance(text)
         if not re.match(
-            r"^(?:hey swift )?(?:(?:please|can you|could you|would you|i want you to) )*"
+            r"^(?:hey swift )?(?:no (?=(?:can|could|would) you ))?"
+            r"(?:(?:please|can you|could you|would you|i want you to) )*"
             r"(?:create|build|make|develop|generate|code|write|design)\b",
             phrase,
         ) and not re.match(
@@ -1299,6 +1300,12 @@ class NativeApplication:
             return None
         if re.search(r"\b(?:tic tac toe|tic tac tow|game)\b", phrase):
             return "game"
+        if re.search(
+            r"\b(?:my public profile|public profile (?:about|for) me|"
+            r"(?:create|build|make|develop|generate|write|design) me (?:a )?public profile)\b",
+            phrase,
+        ):
+            return "personal_site"
         if not re.search(r"\b(?:web ?site|web ?page|portfolio)\b", phrase):
             return None
         if re.search(

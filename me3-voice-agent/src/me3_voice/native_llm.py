@@ -29,7 +29,7 @@ from .remote import LiveTransport, ProviderError
 from .conversation_context import prepare_context, runtime_time
 from .conversation_tools import validate_arguments
 from .request_budget import RequestBudgetError, conservative_input_token_estimate
-from .research import public_url
+from .research import public_url, research_sentences
 
 
 from pipecat.frames.frames import (
@@ -195,17 +195,12 @@ def _research_content_terms(text):
     }
 
 
-def _research_sentences(passage):
-    # Keep an office name such as U.S. Senate in the result sentence.
-    return re.split(r"(?<!\b[A-Z]\.[A-Z]\.)(?<=[.!?])\s+|\n+", passage)
-
-
 def _relevant_research_sentences(claim, passage):
     """Return the passage sentences most directly tied to a claim's wording."""
     claim_terms = _research_content_terms(claim)
     claim_entities = _research_entities(claim)
     scored = []
-    for sentence in _research_sentences(passage):
+    for sentence in research_sentences(passage):
         shared_terms = len(claim_terms & _research_content_terms(sentence))
         shared_entities = len(claim_entities & _research_entities(sentence))
         if shared_terms or shared_entities:
@@ -251,7 +246,7 @@ def _election_result_supported(claim, passage):
     years = set(re.findall(r"\b(?:19|20)\d{2}\b", claim))
     offices = set(_ELECTION_OFFICE.findall(claim.casefold()))
     election_round = set(re.findall(r"\b(?:primary|runoff|general)\b", claim.casefold()))
-    for sentence in _research_sentences(passage):
+    for sentence in research_sentences(passage):
         result = _ELECTION_WIN.search(sentence)
         if (
             not result
@@ -748,7 +743,7 @@ class NativeLLM(OpenAILLMService):
             return call
         question = self._latest_user_question(call.context).strip()
         match = re.fullmatch(
-            r"Who won the (?:U\.S\. |US |United States )?Senate election in "
+            r"Who won the (?:U\.S\. |US |United States )?Senate election (?:in|for) "
             r"([A-Za-z]+(?:[ -][A-Za-z]+){0,3})[?.!]?",
             question,
             flags=re.I,
@@ -1851,7 +1846,7 @@ class NativeLLM(OpenAILLMService):
         """
         if not isinstance(raw, str) or "{" in raw or "}" in raw:
             return None, "invalid_structured_answer", [], False
-        sentences = [part.strip() for part in _research_sentences(raw) if part.strip()]
+        sentences = [part.strip() for part in research_sentences(raw) if part.strip()]
         if not 1 <= len(sentences) <= 2:
             return None, "invalid_structured_answer", [], False
 
