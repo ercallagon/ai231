@@ -1953,6 +1953,7 @@ class NativeApplication:
             ),
             research_alternatives=lambda: self.resources.research.alternative_leads(limit=1),
             on_event=self.event,
+            max_output_tokens=self.options.llm_max_output_tokens,
             max_model_calls_per_turn=self.options.max_model_calls_per_turn,
             max_tool_calls_per_turn=self.options.max_tool_calls_per_turn,
             max_repeated_tool_calls=self.options.max_repeated_tool_calls,

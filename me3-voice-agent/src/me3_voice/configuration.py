@@ -324,6 +324,7 @@ class RuntimeOptions:
     max_model_calls_per_turn: int = 7
     max_tool_calls_per_turn: int = 8
     max_repeated_tool_calls: int = 2
+    llm_max_output_tokens: int | None = None
     task_model: str = ""
     task_request_limit: int | None = None
     task_input_tokens_total: int | None = None
@@ -348,6 +349,7 @@ def load_runtime(path=None, *, engine=None):
             "max_model_calls_per_turn",
             "max_tool_calls_per_turn",
             "max_repeated_tool_calls",
+            "llm_max_output_tokens",
             "task_model",
             "task_request_limit",
             "task_input_tokens_total",
@@ -374,6 +376,13 @@ def load_runtime(path=None, *, engine=None):
             or not 1 <= result.max_tool_calls_per_turn <= 8
             or type(result.max_repeated_tool_calls) is not int
             or not 1 <= result.max_repeated_tool_calls <= 4
+            or (
+                result.llm_max_output_tokens is not None
+                and (
+                    type(result.llm_max_output_tokens) is not int
+                    or not 1 <= result.llm_max_output_tokens <= 8192
+                )
+            )
             or result.task_model not in {"", "anthropic/claude-haiku-5.5"}
             or (
                 result.task_request_limit is not None

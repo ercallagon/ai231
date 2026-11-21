@@ -356,6 +356,7 @@ class NativeLLM(OpenAILLMService):
         evidence_passage_ids=None,
         evidence_passage_lookup=None,
         research_remaining=None,
+        max_output_tokens=None,
         max_model_calls_per_turn=MAX_MODEL_CALLS_PER_TURN,
         max_tool_calls_per_turn=8,
         max_repeated_tool_calls=2,
@@ -457,7 +458,9 @@ class NativeLLM(OpenAILLMService):
                 # Bound completion work per call; session request allowances
                 # are configured independently in the selected profile.
                 max_completion_tokens=(
-                    2000
+                    max_output_tokens
+                    if max_output_tokens is not None
+                    else 2000
                     if groq and spec.model == "openai/gpt-oss-120b"
                     else 512
                     if local_qwen

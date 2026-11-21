@@ -146,6 +146,9 @@ def test_runtime_selection_is_explicit_and_legacy_default(tmp_path):
     path.write_text('{"engine":"nativ","extra":true}')
     with pytest.raises(ConfigurationError):
         load_runtime(path)
+    path.write_text('{"engine":"native","llm_max_output_tokens":8193}')
+    with pytest.raises(ConfigurationError):
+        load_runtime(path)
     with pytest.raises(ConfigurationError):
         load_runtime(tmp_path / "missing.json")
 
@@ -162,6 +165,7 @@ def test_laptop_demo_profile_uses_provider_managed_volume_and_context_caps():
     assert runtime.task_model == "anthropic/claude-haiku-5.5"
     assert runtime.task_request_limit is None
     assert runtime.task_input_tokens_total is None
+    assert runtime.llm_max_output_tokens == 4096
     assert runtime.task_max_output_tokens == 8192
     assert runtime.cost_alert_usd == 0.5
     assert runtime.research.request_limit is None
@@ -205,6 +209,77 @@ def test_haiku_task_model_has_separate_budget_and_preserves_gpt_oss_conversation
     assert task_budget is not state.budget
     assert state.budget.spec.model == "openai/gpt-oss-120b"
     assert backends["llm"].model == "openai/gpt-oss-120b"
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+async def test_production_dialogue_output_limit_preserves_request_accounting(
+    tmp_path, monkeypatch, finish_reason
+):
+    import sqlite3
+
+    from openai.types.chat import ChatCompletionChunk
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    from me3_voice.native_llm import NativeLLM
+    from me3_voice.remote import ProviderError
+
+    runtime = load_runtime("configs/native-demo-runtime.json")
+    spec = load_backends(Path("configs/native-demo-backends.json"))["llm"]
+    ledger = tmp_path / "provider.sqlite"
+    monkeypatch.setenv("ME3_REQUEST_LEDGER", str(ledger))
+    monkeypatch.setenv("ME3_REQUEST_RUN_ID", "production-output-fixture")
+    llm = NativeLLM(
+        spec,
+        credentials={spec.auth_env: "offline-fixture"},
+        max_output_tokens=runtime.llm_max_output_tokens,
+    )
+
+    async def create(**params):
+        assert params["max_completion_tokens"] == 4096
+
+        async def chunks():
+            yield ChatCompletionChunk(
+                id="fixture",
+                object="chat.completion.chunk",
+                created=0,
+                model=spec.model,
+                choices=[
+                    {
+                        "index": 0,
+                        "delta": {"content": "Fixture response."},
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                usage={"prompt_tokens": 9000, "completion_tokens": 3072, "total_tokens": 12072},
+            )
+
+        return chunks()
+
+    monkeypatch.setattr(llm._client.chat.completions, "create", create)
+    context = LLMContext(messages=[{"role": "user", "content": "source evidence " * 2500}])
+    try:
+        stream = await llm.get_chat_completions(context)
+        if finish_reason == "length":
+            with pytest.raises(ProviderError) as error:
+                async for _ in stream:
+                    pass
+            assert error.value.code == "response_budget_exhausted"
+        else:
+            assert [chunk.choices[0].delta.content async for chunk in stream] == [
+                "Fixture response."
+            ]
+    finally:
+        await llm._client.close()
+    with sqlite3.connect(ledger) as db:
+        status, reserved, actual_in, actual_out = db.execute(
+            "SELECT status,input_tokens_reserved,input_tokens_actual,output_tokens_actual "
+            "FROM provider_requests"
+        ).fetchone()
+    assert 32768 < reserved <= 65536
+    if finish_reason == "stop":
+        assert (status, actual_in, actual_out) == ("success", 9000, 3072)
+    else:
+        assert status != "success"
 
 
 @pytest.mark.parametrize("engine", ["legacy", "native"])
