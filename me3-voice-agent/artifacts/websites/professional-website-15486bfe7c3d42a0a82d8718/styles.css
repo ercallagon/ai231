@@ -1,0 +1,58 @@
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  color: #1f2933;
+  background: #f7f9fb;
+  line-height: 1.6;
+}
+
+.hero {
+  background: #1d3b53;
+  color: #ffffff;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.hero h1 {
+  margin: 0 0 8px;
+  font-size: 2.4rem;
+}
+
+.role {
+  font-size: 1.2rem;
+  margin: 0 0 12px;
+}
+
+.summary {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+main {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+section {
+  background: #ffffff;
+  border-radius: 6px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+h2 {
+  color: #1d3b53;
+  margin-top: 0;
+}
+
+a {
+  color: #0b6e99;
+}
+
+footer {
+  text-align: center;
+  padding: 16px;
+  font-size: 0.9rem;
+}
