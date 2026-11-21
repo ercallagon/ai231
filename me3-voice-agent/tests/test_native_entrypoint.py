@@ -2433,6 +2433,7 @@ async def test_native_github_task_status_replay_uses_session_task_without_reason
     website_id = "task_" + "c" * 24
     state = NativeState(speech_factory=lambda: SpeechClient(transcript=questions))
     state.session_id = "github-status-replay"
+    state.owner_profile = {"display_name": "Fixture Owner"}
 
     class Runtime:
         github_writer = object()
@@ -2489,6 +2490,7 @@ async def test_native_github_task_status_replay_uses_session_task_without_reason
             [(goal, request_id, _, call_id)] = runtime.starts
             assert goal.startswith(questions[0])
             assert "deploy_pages=true" in goal
+            assert "Personal site identity: Fixture Owner" in goal
             assert request_id == _voice_task_request_id(state.session_id, call_id)
             runtime.store.rows[task_id]["status"] = "running"
             runtime.store.rows[foreign_id] = {
@@ -2620,9 +2622,51 @@ async def test_personal_site_task_gets_only_scoped_profile_context():
         assert "Fixture Alias" not in requests[0]
         assert "public_publish" not in requests[0]
         assert "do not infer employer, contact details" in requests[0]
-        assert "public publication still requires separate explicit approval" in requests[0]
+        assert "Public deployment requires explicit approval" in requests[0]
+        assert "Search the exact owner name with GitHub" in requests[0]
         assert "Edgardo Callagon Jr." not in requests[1]
-        assert "Approved private profile facts" not in requests[1]
+        assert "Personal site identity:" not in requests[1]
+    finally:
+        await state.close()
+
+
+async def test_tic_tac_toe_creation_and_status_use_the_same_background_task():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    state = NativeState()
+    state.session_id = "game-route-fixture"
+    task_id = "task_" + "7" * 24
+    runtime = state.task_runtime = SimpleNamespace(
+        store=SimpleNamespace(rows={}, pending_approvals={}),
+        status=AsyncMock(return_value={"status": "running", "progress": []}),
+        close=AsyncMock(),
+    )
+    app = NativeApplication(state, object(), annotated=True)
+
+    async def start(call, arguments):
+        runtime.store.rows[task_id] = {
+            "task_id": task_id,
+            "call_id": call.call_id,
+            "request_id": _voice_task_request_id(state.session_id, call.call_id),
+            "status": "running",
+            "goal": arguments["goal"],
+        }
+        return {"task_id": task_id, "status": "running"}
+
+    app.dispatch_task_tool = AsyncMock(side_effect=start)
+    context = LLMContext()
+    try:
+        context.add_message({"role": "user", "content": "Create a Tic-Tac-Toe game"})
+        assert "game task in the background" in await app.fast_action(context)
+        assert "index.html" in runtime.store.rows[task_id]["goal"]
+        context.add_message({"role": "user", "content": "What's the status of the game?"})
+        assert await app.fast_action(context) == "The task is in progress."
+        runtime.status.assert_awaited_once_with(task_id)
+        assert app.dispatch_task_tool.await_count == 1
     finally:
         await state.close()
 

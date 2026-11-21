@@ -1189,9 +1189,8 @@ class NativeApplication:
                 )
             )
         ]
-        new_site = bool(
-            re.search(r"\b(?:create|build|generate|make)\b.*\b(?:website|web page|site)\b", text, re.I)
-        )
+        creation = self._coding_creation(text)
+        new_site = creation is not None
         if pages and _make_site_live(phrase):
             new_site = False
         if pages and not new_site and not active:
@@ -1214,7 +1213,9 @@ class NativeApplication:
                 return "I couldn't prepare those saved files for publication."
             return "I'm preparing the saved website. I'll ask once to approve the push and public deployment."
         if len(active) == 0 or (pages and new_site):
-            goal = text.strip()
+            goal = self._coding_goal(text, creation) if creation else text.strip()
+            if goal is None:
+                return "What name should I research for your personal website?"
             if pages:
                 goal += "\n\n" + PAGES_REQUEST_NOTE + " Use publish_github_branch with deploy_pages=true."
             call = ToolCall(
@@ -1282,6 +1283,62 @@ class NativeApplication:
         if pages:
             return "I asked the website task to prepare one approval for the branch push and public Pages deployment."
         return "I asked the website task to prepare a branch push. It will pause for your approval before any repository change."
+
+    @staticmethod
+    def _coding_creation(text):
+        phrase = _normalize_approval_utterance(text)
+        if not re.match(
+            r"^(?:hey swift )?(?:(?:please|can you|could you|would you|i want you to) )*"
+            r"(?:create|build|make|develop|generate|code|write|design)\b",
+            phrase,
+        ) and not re.match(
+            r"^(?:find|research|look up|search)\b.*\band (?:create|build|make)\b", phrase
+        ):
+            return None
+        if _make_site_live(phrase):
+            return None
+        if re.search(r"\b(?:tic tac toe|tic tac tow|game)\b", phrase):
+            return "game"
+        if not re.search(r"\b(?:web ?site|web ?page|portfolio)\b", phrase):
+            return None
+        if re.search(
+            r"\b(?:my (?:personal )?(?:web ?site|web ?page|portfolio)"
+            r"|personal (?:web ?site|web ?page|portfolio)"
+            r"|(?:create|build|make|develop|generate) me (?:a )?(?:personal )?(?:web ?site|web ?page|portfolio)"
+            r"|(?:web ?site|web ?page|portfolio) (?:about|for) me)\b", phrase
+        ):
+            return "personal_site"
+        return "website"
+
+    def _coding_goal(self, text, kind):
+        from .task_runtime import PERSONAL_SITE_IDENTITY
+
+        goal = text.strip()
+        if kind == "game":
+            goal += (
+                "\n\nSave a playable browser game as index.html with working CSS and JavaScript "
+                "in this task workspace. Inspect the saved files and keep all assets local. "
+                "For Tic-Tac-Toe use nine accessible grid cells, X and O markers, visible win "
+                "and draw status, and a Reset button. Reject occupied and terminal moves."
+            )
+        if kind == "personal_site":
+            profile = getattr(self.resources, "owner_profile", {})
+            if not profile.get("display_name"):
+                return None
+            goal += f"\n\n{PERSONAL_SITE_IDENTITY}{profile['display_name']}"
+            if profile.get("current_role"):
+                goal += f"\nApproved profile role: {profile['current_role']}."
+            goal += (
+                "\nSearch the exact owner name with GitHub, then run focused searches for recent "
+                "professional work, publications and projects. Fetch original public profiles or "
+                "primary sources. Confirm the person using affiliation, linked accounts or project "
+                "details, and check dates before calling anything current. Treat the configured "
+                "repository as a lead only. Cite fetched URLs next to sourced facts in index.html. "
+                "Omit unverified sections and do not infer employer, contact details or other "
+                "personal information. Avoid placeholders. Save the site and its local assets. "
+                "Public deployment requires explicit approval."
+            )
+        return goal
 
     def _fast_action_row(self, call, turn):
         action = call.arguments.get("action") if isinstance(call.arguments, dict) else None
@@ -1486,36 +1543,13 @@ class NativeApplication:
         # the model ever hands work to LangGraph. Let the task own both source
         # retrieval and artifact generation, while this voice turn only
         # confirms durable acceptance.
-        website_creation = re.search(
-            r"(?is)\b(?:create|build|make|develop|generate)\b.*\b(?:website|web\s*page|webpage|web\s*site)\b",
-            text,
-        )
-        if website_creation and self.resources.task_runtime is not None:
-            self.event("route_selected", route="fast_task_handoff", task_kind="website")
-            goal = text.strip()
-            personal_site = bool(
-                re.search(
-                    r"\bmy (?:personal )?(?:website|web\s*page|webpage|web\s*site|portfolio|bio)\b"
-                    r"|\bpersonal (?:website|web\s*page|webpage|web\s*site|portfolio|bio)\b"
-                    r"|\b(?:website|web\s*page|webpage|web\s*site|portfolio|bio)\s+(?:about|for) me\b"
-                    r"|\b(?:create|build|make|develop|generate) me (?:a )?(?:personal )?"
-                    r"(?:website|web\s*page|webpage|web\s*site|portfolio|bio)\b",
-                    text,
-                    re.I,
-                )
-            )
-            profile = getattr(self.resources, "owner_profile", {})
-            if personal_site and isinstance(profile, dict) and profile.get("display_name"):
-                facts = ["Name: " + profile["display_name"]]
-                if profile.get("current_role"):
-                    facts.append("Current role: " + profile["current_role"])
-                goal += (
-                    "\n\nApproved private profile facts for this requested personal website: "
-                    + "; ".join(facts)
-                    + ". Use only these confirmed facts; do not infer employer, contact details, "
-                    "location, or other personal information. Generate the local artifact only; "
-                    "public publication still requires separate explicit approval."
-                )
+        if kind := self._coding_creation(text):
+            if self.resources.task_runtime is None:
+                return "Background coding is unavailable right now."
+            self.event("route_selected", route="fast_task_handoff", task_kind=kind)
+            goal = self._coding_goal(text, kind)
+            if goal is None:
+                return "What name should I research for your personal website?"
             call = ToolCall(
                 "voice-fast-task-" + uuid.uuid4().hex,
                 "start_task",
@@ -1557,7 +1591,12 @@ class NativeApplication:
                 self.event("task_handoff_failed", error_code="task_not_accepted")
                 return "The website task was not accepted, so I haven't claimed it is running."
             self.event("task_handoff_accepted", task_id=result["task_id"])
-            return "I've started the research and website task in the background. You can keep talking to me."
+            label = {
+                "game": "game",
+                "website": "research and website",
+                "personal_site": "personal website research and build",
+            }[kind]
+            return f"I've started the {label} task in the background. You can keep talking to me."
         repeat_identity = (
             previous_user is not None
             and previous_user.get(LOCAL_OWNER_TURN) is True
@@ -1586,8 +1625,10 @@ class NativeApplication:
                 "No private demo owner is configured. A spoken name does not authenticate anyone."
             )
         progress_question = re.fullmatch(
-            r"(?i)(?:what(?:'s| is) the progress(?: on (?:the )?(?:website|task))?|"
-            r"how(?:'s| is) (?:the )?(?:website )?task going|status of (?:the )?(?:website )?task)[?.! ]*",
+            r"(?i)(?:what(?:'s| is) the progress(?: on (?:the )?(?:website|game|task))?|"
+            r"how(?:'s| is) (?:the )?(?:(?:website|game) )?task going|"
+            r"(?:what(?:'s| is) the )?status of (?:the )?(?:website|game|task|"
+            r"(?:website|game|tic[- ]tac[- ]toe) task)|is the (?:website|game) (?:ready|done)(?: yet)?)[?.! ]*",
             text.strip(),
         )
         github_status_pattern = (
@@ -1620,6 +1661,13 @@ class NativeApplication:
                 for task_id in runtime.store.rows
                 if (row := self._voice_owned_task(task_id)) is not None
             ]
+            if progress_question and re.search(r"\b(?:website|game|tic[- ]tac[- ]toe)\b", phrase):
+                kinds = {"game"} if re.search(r"\b(?:game|tic[- ]tac[- ]toe)\b", phrase) else {
+                    "website", "personal_site"
+                }
+                rows = [row for row in rows if self._coding_creation(row.get("goal", "")) in kinds]
+                if len(rows) > 1:
+                    return "I found more than one matching task in this conversation. Which one do you mean?"
             if github_progress:
                 rows = [
                     row

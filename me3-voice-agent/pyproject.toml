@@ -30,6 +30,7 @@ wake = ["openwakeword==0.6.0"]
 kws = ["sherpa-onnx==2.0.1", "sentencepiece==0.2.2"]
 pi = [
     "dbus-next==0.2.3",
+    "playwright==1.64.1",
 ]
 
 [project.scripts]

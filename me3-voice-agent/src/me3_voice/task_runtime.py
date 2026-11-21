@@ -63,6 +63,24 @@ MAX_ACTIVE_TASKS = 1
 APPROVAL_SECONDS = 600
 TASK_ID_RE = re.compile(r"^task_[a-f0-9]{24}$")
 WORKSPACE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_. -]{0,119}$")
+PERSONAL_SITE_IDENTITY = "Personal site identity: "
+TIC_TAC_TOE_PATTERN = re.compile(r"\btic[\s-]*tac[\s-]*(?:toe|tow)\b", re.I)
+
+
+def interactive_task(requirements):
+    return bool(
+        TIC_TAC_TOE_PATTERN.search(requirements)
+        or re.search(r"\b(playable|interactive)\b", requirements, re.I)
+    )
+
+
+def personal_site_identity(requirements):
+    match = re.search(r"^" + re.escape(PERSONAL_SITE_IDENTITY) + r"([^\r\n]+)$", requirements, re.M)
+    return match[1] if match else ""
+
+
+def identity_words(text):
+    return " ".join(re.findall(r"\w+", text.casefold(), flags=re.UNICODE))
 MAX_WORKSPACE_PATH = 512
 MAX_WORKSPACE_ENTRIES = 100
 MAX_INTERACTIVE_REPAIR_ATTEMPTS = 1
@@ -78,6 +96,8 @@ class _ArtifactHTMLInspector(HTMLParser):
         self._script_parts: list[str] | None = None
         self.external_scripts = 0
         self.inline_handlers = 0
+        self.links: set[str] = set()
+        self.text: list[str] = []
         self.element_ids: set[str] = set()
         self.invalid_id_values = False
         self.invalid_attribute_delimiters = False
@@ -93,6 +113,8 @@ class _ArtifactHTMLInspector(HTMLParser):
         ):
             self.invalid_attribute_delimiters = True
         attrs = dict(attrs)
+        if tag == "a" and attrs.get("href"):
+            self.links.add(attrs["href"])
         element_id = attrs.get("id")
         if element_id is not None:
             self.element_ids.add(element_id)
@@ -112,6 +134,8 @@ class _ArtifactHTMLInspector(HTMLParser):
     def handle_data(self, data):
         if self._script_parts is not None:
             self._script_parts.append(data)
+        else:
+            self.text.append(data)
 
 
 def validate_interactive_artifact(path: str, content: str) -> None:
@@ -189,6 +213,10 @@ async def validate_in_chromium(
     executable = _chromium_executable()
     if not executable:
         return {"available": False, "verified": False, "errors": ["chromium_unavailable"]}
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        return {"available": False, "verified": False, "errors": ["playwright_unavailable"]}
     main_path = artifact_path or html_path.name
     files = artifact_files or {main_path: html_path.read_text(encoding="utf-8")}
     if main_path not in files:
@@ -231,8 +259,6 @@ async def validate_in_chromium(
         return {"available": False, "verified": False, "errors": ["artifact_loopback_unavailable"]}
     origin = f"http://127.0.0.1:{server.server_port}"
     try:
-        from playwright.async_api import async_playwright
-
         async def run():
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(
@@ -359,7 +385,8 @@ async def _check_tic_tac_toe(page) -> dict[str, Any]:
         second = await cell_text(3)
         turn_before_repeat = await status_text()
         occupied_before_repeat = await cell_text(3)
-        await cells.nth(3).click()
+        if await cells.nth(3).is_enabled():
+            await cells.nth(3).click()
         checks["alternating_moves"] = bool(
             re.search(r"\bX\b", first, re.I) and re.search(r"\bO\b", second, re.I)
         )
@@ -1578,9 +1605,7 @@ class TaskStore:
             and all(artifact_checks + effect_checks)
             and not pending
         )
-        interactive_runtime_required = bool(
-            task and re.search(r"\b(playable|interactive)\b", task.get("requirements", ""), re.I)
-        )
+        interactive_runtime_required = bool(task and interactive_task(task["requirements"]))
         current_manifest = {row["path"]: row["sha256"] for row in artifacts}
         html_paths = sorted(path for path in current_manifest if path.lower().endswith(".html"))
         valid_browser_results = set()
@@ -2067,12 +2092,16 @@ class TaskRuntime:
             if not self.research:
                 return {"ok": False, "error": "research_unavailable"}
             result = await self.research.retrieve(url)
+            progress = {"stage": "source_retrieved", "source_id": result.get("source_id")}
+            owner = personal_site_identity(state["requirements"])
+            if owner and result.get("fetched") is True and isinstance(result.get("url"), str):
+                # Record source provenance separately from the model's claims.
+                name = re.sub(r"\b(?:jr|sr)$", "", identity_words(owner)).strip()
+                evidence = identity_words(f"{result.get('title', '')} {result.get('text', '')}")
+                if name and re.search(rf"\b{re.escape(name)}\b", evidence):
+                    progress["owner_source_url"] = result["url"]
             result = self.research.evidence_for_model(result, state.get("requirements", ""))
-            await self.store.event(
-                state["task_id"],
-                "progress",
-                {"stage": "source_retrieved", "source_id": result.get("source_id")},
-            )
+            await self.store.event(state["task_id"], "progress", progress)
             return result
 
         async def verify_quote(source_id: str, quote: str):
@@ -2094,7 +2123,7 @@ class TaskRuntime:
             state, tool_call_id = self._current_tool()
             await self._tool_guard(state)
             task = await self.store.get(state["task_id"])
-            if re.search(r"\b(playable|interactive)\b", task.get("requirements", ""), re.I):
+            if interactive_task(task["requirements"]):
                 try:
                     validate_interactive_artifact(path, content)
                 except TaskError:
@@ -2503,11 +2532,16 @@ class TaskRuntime:
                 if any(path not in manifest for path in artifacts):
                     return {"ok": False, "error": "github_artifact_not_verified"}
                 manifest = {path: manifest[path] for path in artifacts}
+                if reason := await self._personal_site_review(state, manifest):
+                    return {"ok": False, "error": reason}
                 for html_path in sorted(
                     path for path in artifacts if path.lower().endswith((".html", ".htm"))
                 ):
                     browser_result = await validate_in_chromium(
-                        Path(html_path), artifact_path=html_path, artifact_files=manifest
+                        Path(html_path),
+                        artifact_path=html_path,
+                        artifact_files=manifest,
+                        **({"tic_tac_toe": True} if TIC_TAC_TOE_PATTERN.search(state["requirements"]) else {}),
                     )
                     await self.store.record_browser_test(
                         state["task_id"], html_path, manifest, browser_result
@@ -3059,9 +3093,7 @@ class TaskRuntime:
             )
         if not answer.strip():
             raise TaskError("empty_task_result")
-        interactive_requested = bool(
-            re.search(r"\b(playable|interactive)\b", task.get("requirements", ""), re.I)
-        )
+        interactive_requested = interactive_task(task["requirements"])
         if interactive_requested:
             browser_result = await self._validate_interactive_outputs(task)
             if (
@@ -3081,6 +3113,13 @@ class TaskRuntime:
                     )
                     return Command(update={"messages": [repair_message]}, goto="agent")
         verification = await self.store.verify(task["task_id"])
+        if interactive_requested and not verification["interactive_runtime_check_verified"]:
+            answer = "The game has not passed its browser checks. The task card shows the saved files and their status."
+        if personal_site_identity(task["requirements"]):
+            manifest = await self.store.browser_manifest(task["task_id"])
+            if reason := await self._personal_site_review(task, manifest):
+                verification.update(verified=False, level="unverified", personal_site_review=reason)
+                answer = "The personal website needs review before publication. I could not verify its identity and source links or it still contains placeholder content."
         if PAGES_REQUEST_NOTE in task["requirements"] or state.get("pages_artifact_paths"):
             publication = self.store.rows[task["task_id"]].get("_publication", {})
             if url := publication.get("pages_url"):
@@ -3091,7 +3130,11 @@ class TaskRuntime:
                 answer = (
                     "The files are on GitHub, but the public Pages URL could not be verified."
                     if publication.get("repository_url")
-                    else "The public site was not published. Your saved files are still in the task."
+                    else (
+                        "The public site was not published. Your saved files are still in the task."
+                        if verification["artifacts_checked"]
+                        else "The public site was not published. No website files were verified."
+                    )
                 )
         if "materialize_demo" in task["requirements"]:
             if not demo_materialized:
@@ -3136,6 +3179,43 @@ class TaskRuntime:
             )
         return {"final_answer": answer, "verification": verification}
 
+    async def _personal_site_review(self, task, manifest):
+        """Require saved identity and links to task-fetched evidence before publication."""
+        owner = personal_site_identity(task["requirements"])
+        if not owner:
+            return None
+        index = [text for path, text in manifest.items() if Path(path).name == "index.html"]
+        if len(index) != 1:
+            return "personal_site_index_missing"
+        inspector = _ArtifactHTMLInspector()
+        try:
+            inspector.feed(index[0])
+            inspector.close()
+        except (ValueError, AssertionError):
+            return "personal_site_invalid_html"
+        words = identity_words(" ".join(inspector.text))
+        if not re.search(rf"\b{re.escape(identity_words(owner))}\b", words):
+            return "personal_site_owner_missing"
+        if re.search(
+            r"\b(?:your name|your company|your title|lorem ipsum|project one|"
+            r"project two|project three|replace (?:this|with)|you example com)\b", words
+        ) or re.search(r"\b(?:you|yourname)@example\.com\b", index[0], re.I):
+            return "personal_site_placeholder_content"
+        async with self.store.lock:
+            async with self.store.conn.execute(
+                "SELECT payload FROM me3_task_events WHERE task_id=? AND kind='progress'",
+                (task["task_id"],),
+            ) as cursor:
+                sources = {
+                    value["owner_source_url"]
+                    for (payload,) in await cursor.fetchall()
+                    if (value := json.loads(payload)).get("stage") == "source_retrieved"
+                    and value.get("owner_source_url")
+                }
+        if not sources.intersection(inspector.links):
+            return "personal_site_fetched_source_link_required"
+        return None
+
     async def _validate_interactive_outputs(self, task):
         manifest = await self.store.browser_manifest(task["task_id"])
         html_paths = sorted(path for path in manifest if path.lower().endswith(".html"))
@@ -3147,7 +3227,7 @@ class TaskRuntime:
                 "errors": ["interactive_html_missing"],
             }
         outcomes = []
-        tic_tac_toe = bool(re.search(r"tic[\s-]*tac[\s-]*toe", task["requirements"], re.I))
+        tic_tac_toe = bool(TIC_TAC_TOE_PATTERN.search(task["requirements"]))
         for path in html_paths:
             try:
                 validate_interactive_artifact(path, manifest[path])

@@ -92,6 +92,12 @@ the `swift-artifacts` push, and the public Pages deployment. The task card
 links to the branch and adds the Pages link after deployment verification.
 A GitHub-only push approval covers the branch write.
 
+On the Pi, `bash scripts/setup.sh --pi` installs the pinned browser
+verification driver. Interactive artifact checks run in the installed
+Chromium with external requests blocked. A personal website needs the approved
+private owner name and links to fetched public sources before Swift can offer
+Pages publication.
+
 The newest site with a
 verified deployment appears under **Latest**. Older verified sites are
 available under **Other Trials**. GitHub supplies the publication timestamp,

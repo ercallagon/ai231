@@ -201,16 +201,27 @@ async def test_playable_artifact_is_chromium_verified_before_success(tmp_path, m
     if not executable:
         pytest.skip("Chromium is unavailable")
     monkeypatch.setenv("ME3_CHROMIUM_EXECUTABLE_PATH", executable)
+    html, rest = TIC_TAC_TOE_HTML.split("<script>", 1)
+    script, ending = rest.split("</script>", 1)
+    files = {
+        "index.html": html.replace("</head>", '<link rel="stylesheet" href="game.css"></head>')
+        + '<script src="game.js"></script>' + ending,
+        "game.css": "#board { display: grid; grid-template-columns: repeat(3, 4rem); }",
+        "game.js": script,
+    }
     model = ScriptedModel(
         [
-            call("write_artifact", {"path": "game.html", "content": TIC_TAC_TOE_HTML}, "write-game"),
-            call("read_artifact", {"path": "game.html"}, "read-game"),
+            *(
+                call("write_artifact", {"path": name, "content": value}, f"write-{index}")
+                for index, (name, value) in enumerate(files.items())
+            ),
+            call("read_artifact", {"path": "index.html"}, "read-game"),
             AIMessage(content="I created and browser-verified the playable game."),
         ]
     )
     runtime = await make_runtime(tmp_path, model)
     try:
-        task = await start_task(runtime, "Create a playable Tic-Tac-Toe game")
+        task = await start_task(runtime, "Create a Tic-Tac-Toe game")
         result = await wait_for_status(runtime, task["task_id"], timeout=25)
         assert result["status"] == "succeeded"
         assert result["verification"]["interactive_runtime_check_verified"] is True
@@ -236,13 +247,14 @@ async def test_playable_artifact_is_chromium_verified_before_success(tmp_path, m
                 "reset_after_draw",
             )
         )
-        assert evidence["workspace_manifest"] == {"game.html": evidence["sha256"]}
+        assert set(evidence["workspace_manifest"]) == set(files)
+        assert evidence["workspace_manifest"]["index.html"] == evidence["sha256"]
         projected = runtime.store._project(runtime.store.rows[task["task_id"]])
         assert projected["status"] == "completed"
-        assert projected["artifacts"] == ["game.html"]
+        assert projected["artifacts"] == sorted(files)
         async with runtime.store.lock:
             await runtime.store.conn.execute(
-                "UPDATE me3_artifacts SET sha256=? WHERE task_id=? AND path='game.html'",
+                "UPDATE me3_artifacts SET sha256=? WHERE task_id=? AND path='index.html'",
                 ("0" * 64, task["task_id"]),
             )
             await runtime.store.conn.commit()
@@ -603,7 +615,7 @@ async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tm
         await runtime.close()
 
 
-@pytest.mark.parametrize("scenario", ["approve", "reject", "unverified", "saved"])
+@pytest.mark.parametrize("scenario", ["approve", "reject", "unverified", "saved", "personal", "wrong_identity", "placeholder"])
 async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, scenario):
     import me3_voice.task_runtime as task_runtime_module
     from me3_voice.github_publish import GitHubPublisher
@@ -654,9 +666,32 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
         return {"available": True, "verified": True, "browser": "chromium", "errors": []}
 
     monkeypatch.setattr(task_runtime_module, "validate_in_chromium", verify_pages_artifact)
-    tool_id = "two-step-publish"
+    personal = scenario in {"personal", "wrong_identity", "placeholder"}
+    url = "https://github.com/example/fixture-owner"
+
+    class ProfileResearch:
+        async def search(self, query, _max_results):
+            assert query == "Fixture Owner GitHub"
+            return {"results": [{"url": url}]}
+
+        async def retrieve(self, requested):
+            assert requested == url
+            owner = "Unrelated Author" if scenario == "wrong_identity" else "Fixture Owner"
+            return {
+                "source_id": "S1", "url": url, "fetched": True,
+                "text": f"{owner} published a project in 2025.",
+            }
+
+        def evidence_for_model(self, result, _query):
+            return result
+
+    tool_id = "publish-site"
     model = ScriptedModel(
         [
+            *([
+                call("web_search", {"query": "Fixture Owner GitHub"}, "owner-search"),
+                call("retrieve_source", {"url": url}, "owner-source"),
+            ] if personal else []),
             call(
                 "publish_github_branch",
                 {
@@ -674,6 +709,7 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
         database=tmp_path / "tasks.sqlite",
         artifact_root=tmp_path / "artifacts",
         model=model,
+        research=ProfileResearch() if personal else None,
     )
     writer = Writer()
     runtime.github_writer = writer
@@ -682,16 +718,34 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
         from me3_voice.task_runtime import PAGES_REQUEST_NOTE
 
         goal = "Publish a website. " + PAGES_REQUEST_NOTE
+        if personal:
+            goal += "\nPersonal site identity: Fixture Owner"
         task, _ = await runtime.store.create(goal, "site-approval", 1, "site-approval")
         task_id = task["task_id"]
         await runtime.store.update(task_id, status="running")
-        await runtime.store.persist_artifact(task_id, 1, "site/index.html", "<h1>Site</h1>", "html")
+        html = (
+            f'<h1>Fixture Owner</h1><p>2025 public project.</p><a href="{url}">Source</a>'
+            if personal else "<h1>Site</h1>"
+        )
+        if scenario == "placeholder":
+            html += "<p>Project One</p>"
+        await runtime.store.persist_artifact(task_id, 1, "site/index.html", html, "html")
         await runtime.store.persist_artifact(task_id, 1, "site/styles.css", "h1 { color: navy; }", "css")
         if scenario == "saved":
             await runtime.store.update(task_id, status="succeeded")
             await runtime.publish_saved_site(task_id, 1)
         else:
             runtime._spawn(task_id, initial=True)
+
+        if scenario in {"wrong_identity", "placeholder"}:
+            result = await wait_for_status(runtime, task_id)
+            assert result["status"] == "completed_unverified"
+            assert not result["approvals"] and not writer.published and not writer.pages
+            assert result["verification"]["personal_site_review"] == (
+                "personal_site_placeholder_content" if scenario == "placeholder"
+                else "personal_site_fetched_source_link_required"
+            )
+            return
 
         waiting = await wait_for_status(runtime, task_id, {"waiting_approval"})
         [approval] = waiting["approvals"]
@@ -713,7 +767,7 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
         [final_approval] = result["approvals"]
         assert final_approval["approval_id"] == approval["approval_id"]
         assert len(writer.published) == len(writer.pages) == (0 if scenario == "reject" else 1)
-        assert result["status"] == ("succeeded" if scenario in {"approve", "saved"} else "completed_unverified")
+        assert result["status"] == ("succeeded" if scenario in {"approve", "saved", "personal"} else "completed_unverified")
         publication = result["publication"]
         if scenario == "reject":
             assert not publication
@@ -722,7 +776,7 @@ async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, sce
             assert set(writer.published[0][2]) == {f"{destination}/index.html", f"{destination}/styles.css"}
             assert writer.pages[0][1] == "a" * 40
             assert writer.pages[0][3]["expected_source"]["branch"] == "gh-pages"
-        if scenario in {"approve", "saved"}:
+        if scenario in {"approve", "saved", "personal"}:
             assert publication["pages_url"] == url
             assert url in result["result"]
         else:
