@@ -34,6 +34,9 @@ paths. `environment` selects the existing `ME3_REQUEST_RUN_ID`,
 `ME3_REQUEST_LEDGER` and, for research, `ME3_RESEARCH_LEDGER`. Use only a
 previously authorized, capped profile and its matching ledger. The launcher
 neither provisions credentials nor creates an allowance.
+From WSL, use `./scripts/swift.sh pi-viewer --dashboard user@pi-host` to
+open a loopback SSH route to the dashboard when remote desktop access is
+unavailable. Voice then uses the laptop browser's audio devices.
 
 Use `./scripts/swift.sh demo --offline` for the deterministic MCP smoke and
 an isolated, read-only report at [127.0.0.1:8765](http://127.0.0.1:8765/).

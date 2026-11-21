@@ -97,7 +97,8 @@ def show(port, status, managed):
                 print(f"  {name}: {quota.get('remaining')} of {quota['limit']} remaining")
     fields = os.environ.get("SSH_CONNECTION", "").split()
     target = f"{getpass.getuser()}@{fields[2]}" if len(fields) == 4 else "<user@pi-address>"
-    print(f"From laptop WSL: ./scripts/swift.sh pi-viewer {shlex.quote(target)}")
+    print(f"From laptop WSL: ./scripts/swift.sh pi-viewer --dashboard {shlex.quote(target)}")
+    print(f"For Pi desktop audio: ./scripts/swift.sh pi-viewer {shlex.quote(target)}")
     print("Status: ./scripts/swift.sh demo status")
     print("Stop managed bridge: ./scripts/swift.sh demo stop")
     if status and not managed:

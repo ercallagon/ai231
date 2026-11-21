@@ -18,7 +18,7 @@ if [[ $# -gt 0 ]]; then shift; fi
 if [[ "$command" == help || "$command" == --help ]]; then
   echo 'Usage: bash scripts/swift.sh {check|demo|dashboard|bridge|native-bridge|laptop-demo|pi-viewer|setup|vpn-setup|vpn|preflight|network|assets|audio|health} [arguments]'
   echo 'Use "setup --interactive" for the guided production configuration wizard; "setup --status" is offline.'
-  echo 'Use "pi-viewer [user@pi-host]" from WSL for the loopback-only Pi Chromium/noVNC tunnel.'
+  echo 'Use "pi-viewer [--dashboard] user@pi-host" from WSL for a loopback-only Pi dashboard or desktop tunnel.'
   echo 'bridge requires explicit backend, secrets and wake configuration; audio requires explicit devices.'
   exit 0
 fi
