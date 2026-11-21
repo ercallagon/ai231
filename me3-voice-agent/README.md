@@ -86,12 +86,13 @@ Native coding tasks use a private per-task directory under
 The task card reports saved file locations and offers downloads. When you
 request publication, Swift uses the repository selected in guided setup.
 A new website with no explicit destination goes under
-`me3-voice-agent/artifacts/demos/<task-id>/`. Swift asks first to push the
-files, then separately to publish them on Pages. The task card links to the
-GitHub branch and adds the Pages link when the deployment has been verified.
+`me3-voice-agent/artifacts/demos/<task-id>/`. For an explicit GitHub.io or
+public Pages request, Swift asks for one approval covering the reviewed files,
+the `swift-artifacts` push, and the public Pages deployment. The task card
+links to the branch and adds the Pages link after deployment verification.
+A GitHub-only push approval covers the branch write.
 
-Approve the `swift-artifacts` push and public Pages deployment separately
-when Swift shows their task-specific summaries. The newest site with a
+The newest site with a
 verified deployment appears under **Latest**. Older verified sites are
 available under **Other Trials**. GitHub supplies the publication timestamp,
 which the gallery displays in Manila time.

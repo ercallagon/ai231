@@ -2155,6 +2155,7 @@ async def test_interrupted_fast_action_is_recorded_before_later_unrelated_turn()
     [
         ("Yes, push it.", "github_publish", "approve"),
         ("Approve", "github_pages_deploy", "approve"),
+        ("Approve", "github_publish_and_deploy", "approve"),
         ("Cancel", "github_publish", "reject"),
     ],
 )
@@ -2230,6 +2231,8 @@ async def test_spoken_github_confirmation_targets_exact_current_session_approval
         ("push this file to GitHub", False),
         ("push this to GitHub", False),
         ("publish this on GitHub Pages", True),
+        ("push this to GitHub.io", True),
+        ("make this site live", True),
         ("approve that one", None),
         ("yes push it", None),
     ],
@@ -2249,6 +2252,7 @@ async def test_voice_github_request_prepares_but_never_approves(
         "call_id": call_id,
         "request_id": _voice_task_request_id(state.session_id, call_id),
         "status": "running",
+        "goal": "Build a website",
         "revision": 3,
     }
     controls = []
@@ -2278,11 +2282,11 @@ async def test_voice_github_request_prepares_but_never_approves(
         if pages_request is not None:
             assert len(steers) == 1
             expected_response = (
-                "nothing is published" if pages_request else "before any repository change"
+                "one approval" if pages_request else "before any repository change"
             )
             assert expected_response in answer.casefold()
-            assert ("public GitHub Pages deployment" in steers[0][2]) is pages_request
-            assert "ask separately" in steers[0][2]
+            assert ("deploy_pages=true" in steers[0][2]) is pages_request
+            assert "covers the branch push and public deployment" in steers[0][2]
         else:
             assert steers == []
             assert "no pending github approval" in answer.casefold()
@@ -2327,11 +2331,46 @@ async def test_first_github_request_starts_background_task_without_remote_write(
         assert "nothing will be pushed until you approve" in response
         assert len(requests) == 1
         assert requests[0][0] == "start_task"
-        assert requests[0][1]["goal"] == utterance
+        assert requests[0][1]["goal"].startswith(utterance)
+        assert ("deploy_pages=true" in requests[0][1]["goal"]) is ("Pages" in utterance)
         assert not any(
             event.get("event") in {"github_voice_approval_decided", "github_write_dispatched"}
             for event in app.events
         )
+    finally:
+        await state.close()
+
+
+async def test_make_this_site_live_reuses_the_saved_voice_owned_task():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from me3_voice.native_app import NativeApplication, NativeState, _voice_task_request_id
+
+    state = NativeState()
+    state.session_id = "saved-website-session"
+    task_id = "task_" + "d" * 24
+    row = {
+        "task_id": task_id,
+        "call_id": "saved-site",
+        "request_id": _voice_task_request_id(state.session_id, "saved-site"),
+        "status": "succeeded",
+        "revision": 3,
+        "_artifact_paths": ["index.html", "style.css"],
+    }
+    state.task_runtime = SimpleNamespace(
+        store=SimpleNamespace(rows={task_id: row}, pending_approvals={}),
+        github_writer=object(),
+        publish_saved_site=AsyncMock(),
+        close=AsyncMock(),
+    )
+    app = NativeApplication(state, object(), annotated=True)
+    app.dispatch_task_tool = AsyncMock()
+    try:
+        answer = await app._handle_github_publish_request("Make this site live")
+        assert "ask once" in answer
+        state.task_runtime.publish_saved_site.assert_awaited_once_with(task_id, 3)
+        app.dispatch_task_tool.assert_not_called()
     finally:
         await state.close()
 
@@ -2385,6 +2424,7 @@ async def test_native_github_task_status_replay_uses_session_task_without_reason
 
     questions = [
         "Can you create my personal website based on my available details and push to GitHub.io?",
+        "But did you push the previous task already on GitHub IO?",
         "What's the status of the GitHub task?",
         "It was the task about personal website. I don't have the task ID.",
     ]
@@ -2447,7 +2487,8 @@ async def test_native_github_task_status_replay_uses_session_task_without_reason
         async with NativeApplication(state, MemorySink(), annotated=True, upstream=model) as app:
             await app.utterance(b"\1\0" * 1024)
             [(goal, request_id, _, call_id)] = runtime.starts
-            assert goal == questions[0]
+            assert goal.startswith(questions[0])
+            assert "deploy_pages=true" in goal
             assert request_id == _voice_task_request_id(state.session_id, call_id)
             runtime.store.rows[task_id]["status"] = "running"
             runtime.store.rows[foreign_id] = {
@@ -2465,17 +2506,18 @@ async def test_native_github_task_status_replay_uses_session_task_without_reason
                 "status": "running",
             }
             await app.utterance(b"\1\0" * 1024)
+            await app.utterance(b"\1\0" * 1024)
             runtime.store.rows[task_id]["status"] = "completed_unverified"
             # Preserve the short intervening fragment from the Pi transcript.
             state.context.add_message({"role": "user", "content": "It was the"})
             await app.utterance(b"\1\0" * 1024)
             assert model.calls == 0
-            assert runtime.status_reads == [task_id, task_id]
+            assert runtime.status_reads == [task_id, task_id, task_id]
             assert [
                 (row["task_id"], row["task_status"])
                 for row in app.events
                 if row["event"] == "task_progress_read"
-            ] == [(task_id, "running"), (task_id, "completed_unverified")]
+            ] == [(task_id, "running"), (task_id, "running"), (task_id, "completed_unverified")]
             replies = [
                 row["content"]
                 for row in state.context.get_messages()
@@ -2484,9 +2526,11 @@ async def test_native_github_task_status_replay_uses_session_task_without_reason
             assert "nothing will be pushed until you approve" in replies[0]
             assert replies[1:] == [
                 "The site files are being prepared.",
+                "The site files are being prepared.",
                 "The task finished, but its result needs review.",
             ]
-            assert sum(row["event"] == "turn_completed" for row in app.events) == 3
+            assert len(runtime.starts) == 1
+            assert sum(row["event"] == "turn_completed" for row in app.events) == 4
     finally:
         await state.close()
 

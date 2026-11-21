@@ -504,6 +504,9 @@ async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tm
         async def pages_configuration(self):
             return {"configured": False, "branch": "gh-pages", "path": "/"}
 
+        def expected_pages_url(self, site_path=""):
+            return f"https://private-owner.github.io/demo-repo/{site_path}/"
+
         def __init__(self):
             self.calls = 0
 
@@ -589,8 +592,8 @@ async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tm
         row = await runtime.status(task["task_id"])
         assert row["approvals"]
         assert row["approvals"][0]["status"] == "pending"
-        assert row["approvals"][0]["action"] == "github_publish"
-        assert "does not configure GitHub Pages" in row["approvals"][0]["details"]
+        assert row["approvals"][0]["action"] == "github_publish_and_deploy"
+        assert "deploy publicly to GitHub Pages" in row["approvals"][0]["details"]
         assert "me3-voice-agent/artifacts/trials/nasa-artemis/" in row["approvals"][0]["details"]
         approval_events = [event for event in row["progress"] if event["kind"] == "approval_requested"]
         assert "index.html" in approval_events[-1]["payload"]["spoken_summary"]
@@ -600,10 +603,8 @@ async def test_github_task_tool_pauses_for_approval_before_any_remote_publish(tm
         await runtime.close()
 
 
-@pytest.mark.parametrize("pages_decision", ["approve", "reject"])
-async def test_github_branch_and_pages_require_distinct_approvals(
-    tmp_path, monkeypatch, pages_decision
-):
+@pytest.mark.parametrize("scenario", ["approve", "reject", "unverified", "saved"])
+async def test_github_push_and_pages_use_one_approval(tmp_path, monkeypatch, scenario):
     import me3_voice.task_runtime as task_runtime_module
     from me3_voice.github_publish import GitHubPublisher
 
@@ -636,6 +637,10 @@ async def test_github_branch_and_pages_require_distinct_approvals(
 
         async def enable_pages_for_published_branch(self, branch, commit, site_path, **kwargs):
             self.pages.append((branch, commit, site_path, kwargs))
+            if scenario == "unverified":
+                from me3_voice.github_publish import GitHubPublishError
+
+                raise GitHubPublishError("github_pages_public_url_unverified")
             return {
                 "status": "deployed",
                 "deployment_url": self.expected_pages_url(site_path),
@@ -657,7 +662,7 @@ async def test_github_branch_and_pages_require_distinct_approvals(
                 {
                     "paths": ["site/index.html", "site/styles.css"],
                     "commit_message": "Publish site",
-                    "deploy_pages": True,
+                    "deploy_pages": scenario != "approve",
                 },
                 tool_id,
             ),
@@ -674,57 +679,56 @@ async def test_github_branch_and_pages_require_distinct_approvals(
     runtime.github_writer = writer
     try:
         await runtime.start_runtime()
-        task, _ = await runtime.store.create("Publish a website", "two-step-approval", 1, "two-step-approval")
-        await runtime.store.update(task["task_id"], status="running")
-        await runtime.store.persist_artifact(task["task_id"], 1, "site/index.html", "<h1>Site</h1>", "html")
-        await runtime.store.persist_artifact(task["task_id"], 1, "site/styles.css", "h1 { color: navy; }", "css")
-        runtime._spawn(task["task_id"], initial=True)
+        from me3_voice.task_runtime import PAGES_REQUEST_NOTE
 
-        branch_wait = await wait_for_status(runtime, task["task_id"], {"waiting_approval"})
-        branch_approval = branch_wait["approvals"][0]
-        assert branch_approval["action"] == "github_publish"
-        assert "site/index.html" in branch_approval["details"]
-        assert "public" in branch_approval["details"]
-        assert writer.published == []
-        assert writer.pages == []
-
-        await runtime.approve(
-            task["task_id"], branch_approval["approval_id"], branch_approval["revision"], "approve"
-        )
-        pages_wait = await wait_for_status(runtime, task["task_id"], {"waiting_approval"})
-        pages_approval = pages_wait["approvals"][0]
-        assert pages_approval["action"] == "github_pages_deploy"
-        assert "publicly accessible" in pages_approval["details"]
-        assert "gh-pages:/" in pages_approval["details"]
-        assert "stable" in pages_approval["details"]
-        destination = "me3-voice-agent/artifacts/demos/" + task["task_id"][5:] + "/site"
-        assert f"https://public-owner.github.io/demo-repo/{destination}/" in pages_approval["details"]
-        assert set(writer.published[0][2]) == {
-            f"{destination}/index.html",
-            f"{destination}/styles.css",
-        }
-        assert len(writer.published) == 1
-        assert writer.pages == []
-
-        await runtime.approve(
-            task["task_id"],
-            pages_approval["approval_id"],
-            pages_approval["revision"],
-            pages_decision,
-        )
-        result = await wait_for_status(runtime, task["task_id"])
-        assert result["status"] == (
-            "succeeded" if pages_decision == "approve" else "completed_unverified"
-        )
-        assert len(writer.published) == 1
-        assert len(writer.pages) == (1 if pages_decision == "approve" else 0)
-        projection = runtime.store._project(runtime.store.rows[task["task_id"]])
-        assert projection["publication"]["repository_url"].endswith("/tree/swift-artifacts")
-        if pages_decision == "approve":
-            assert projection["publication"]["pages_url"] == writer.expected_pages_url(destination)
+        goal = "Publish a website. " + PAGES_REQUEST_NOTE
+        task, _ = await runtime.store.create(goal, "site-approval", 1, "site-approval")
+        task_id = task["task_id"]
+        await runtime.store.update(task_id, status="running")
+        await runtime.store.persist_artifact(task_id, 1, "site/index.html", "<h1>Site</h1>", "html")
+        await runtime.store.persist_artifact(task_id, 1, "site/styles.css", "h1 { color: navy; }", "css")
+        if scenario == "saved":
+            await runtime.store.update(task_id, status="succeeded")
+            await runtime.publish_saved_site(task_id, 1)
         else:
-            assert "pages_url" not in projection["publication"]
-        assert result["verification"]["effects_checked"] == 2
+            runtime._spawn(task_id, initial=True)
+
+        waiting = await wait_for_status(runtime, task_id, {"waiting_approval"})
+        [approval] = waiting["approvals"]
+        assert approval["action"] == "github_publish_and_deploy"
+        destination = "me3-voice-agent/artifacts/demos/" + task_id[5:] + "/site"
+        url = writer.expected_pages_url(destination)
+        assert "swift-artifacts" in approval["details"]
+        assert "gh-pages:/" in approval["details"]
+        assert "publicly" in approval["details"]
+        assert f"{destination}/index.html" in approval["details"]
+        assert url in approval["details"]
+        assert writer.published == writer.pages == []
+
+        await runtime.approve(
+            task_id, approval["approval_id"], approval["revision"],
+            "reject" if scenario == "reject" else "approve",
+        )
+        result = await wait_for_status(runtime, task_id)
+        [final_approval] = result["approvals"]
+        assert final_approval["approval_id"] == approval["approval_id"]
+        assert len(writer.published) == len(writer.pages) == (0 if scenario == "reject" else 1)
+        assert result["status"] == ("succeeded" if scenario in {"approve", "saved"} else "completed_unverified")
+        publication = result["publication"]
+        if scenario == "reject":
+            assert not publication
+        else:
+            assert publication["repository_url"].endswith("/tree/swift-artifacts")
+            assert set(writer.published[0][2]) == {f"{destination}/index.html", f"{destination}/styles.css"}
+            assert writer.pages[0][1] == "a" * 40
+            assert writer.pages[0][3]["expected_source"]["branch"] == "gh-pages"
+        if scenario in {"approve", "saved"}:
+            assert publication["pages_url"] == url
+            assert url in result["result"]
+        else:
+            assert "pages_url" not in publication and url not in result["result"]
+        if scenario == "saved":
+            assert result["model_calls"] == 0
     finally:
         await runtime.close()
 

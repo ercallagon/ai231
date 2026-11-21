@@ -497,6 +497,7 @@ class GitHubPublisher:
         task_id=None,
         operation_id=None,
         operation="create",
+        expected_source=None,
     ):
         """Deploy reviewed files into one stable Pages source; never switch an existing source."""
         branch = _branch(branch)
@@ -537,6 +538,10 @@ class GitHubPublisher:
             if configure:
                 source_branch = "gh-pages"
                 source_folder = "/"
+            if expected_source is not None and expected_source != {
+                "configured": not configure, "branch": source_branch, "path": source_folder
+            }:
+                raise GitHubPublishError("github_pages_source_changed")
             if source_branch == self.base_branch:
                 raise GitHubPublishError("github_pages_source_is_base_branch")
             prefix = "docs/" if source_folder == "/docs" else ""

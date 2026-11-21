@@ -81,6 +81,38 @@ def _normalize_approval_utterance(text):
     return " ".join(re.sub(r"[^a-z0-9']+", " ", text.casefold()).split())
 
 
+def _github_publication_status(text):
+    phrase = _normalize_approval_utterance(text)
+    return bool(
+        re.fullmatch(r"(?:is it live|did you push it|has it been published)(?: yet| already)?", phrase)
+        or (
+            re.search(r"\b(?:github|pages|(?:site|website) live)\b", phrase)
+            and re.match(
+                r"^(?:(?:but|so) )?(?:did|have|has|is|are|was|were|what|what's|where|where's|"
+                r"how|how's|can you check|check|status|progress)\b", phrase
+            )
+        )
+    )
+
+
+def _pages_request(text):
+    phrase = _normalize_approval_utterance(text)
+    return bool(
+        re.search(r"\b(?:push|publish|deploy|upload|put)\b.*\bgithub (?:io|pages)\b", phrase)
+        or re.search(r"\b(?:create|build|generate)\b.*\bon github (?:io|pages)\b", phrase)
+        or _make_site_live(phrase)
+    )
+
+
+def _make_site_live(phrase):
+    return re.search(
+        r"\b(?:make|get|put) (?:this|the|my|that) (?:web ?site|site|page) live\b", phrase
+    )
+
+
+_GITHUB_APPROVAL_ACTIONS = {"github_publish", "github_pages_deploy", "github_publish_and_deploy"}
+
+
 def _github_approval_intent(text):
     phrase = _normalize_approval_utterance(text)
     generic_approve = {"approve", "approve it", "yes approve", "yes approve it", "confirm"}
@@ -996,7 +1028,7 @@ class NativeApplication:
                 or task.get("status") != "waiting_approval"
                 or not isinstance(approval, dict)
                 or approval.get("status") != "pending"
-                or approval.get("action") not in {"github_publish", "github_pages_deploy"}
+                or approval.get("action") not in _GITHUB_APPROVAL_ACTIONS
                 or type(approval.get("expires")) not in (int, float)
                 or approval["expires"] <= time.time()
             ):
@@ -1009,10 +1041,7 @@ class NativeApplication:
         payload = fields.get("payload")
         if not isinstance(task_id, str) or not self._voice_owned_task(task_id):
             return
-        if not isinstance(payload, dict) or payload.get("action") not in {
-            "github_publish",
-            "github_pages_deploy",
-        }:
+        if not isinstance(payload, dict) or payload.get("action") not in _GITHUB_APPROVAL_ACTIONS:
             return
         approval_id = payload.get("approval_id")
         summary = payload.get("spoken_summary")
@@ -1127,12 +1156,19 @@ class NativeApplication:
         return "Approval recorded for that exact GitHub action. Swift is proceeding and will report the result."
 
     async def _handle_github_publish_request(self, text):
-        import re
+        from .task_runtime import PAGES_REQUEST_NOTE
 
-        if not (
+        phrase = _normalize_approval_utterance(text)
+        if re.search(
+            r"\b(?:do not|don't|never|without) (?:push|publish|deploy|upload|put|make)\b", phrase
+        ):
+            return None
+        pages = _pages_request(text)
+        repository_request = (
             re.search(r"\b(?:create|edit|update|modify|push|publish|upload|put)\b", text, re.I)
             and re.search(r"\bgithub(?:\s+pages)?\b", text, re.I)
-        ):
+        )
+        if _github_publication_status(text) or not (pages or repository_request):
             return None
         runtime = self.resources.task_runtime
         if runtime is None or runtime.store is None or runtime.github_writer is None:
@@ -1144,12 +1180,47 @@ class NativeApplication:
             for row in runtime.store.rows.values()
             if row.get("status") in {"queued", "running"}
             and self._voice_owned_task(row.get("task_id")) is not None
+            and (
+                not pages
+                or re.search(r"\b(?:website|web page|site|portfolio)\b", row.get("goal", ""), re.I)
+                or any(
+                    path.rsplit("/", 1)[-1] == "index.html"
+                    for path in row.get("_artifact_paths", ())
+                )
+            )
         ]
-        if len(active) == 0:
+        new_site = bool(
+            re.search(r"\b(?:create|build|generate|make)\b.*\b(?:website|web page|site)\b", text, re.I)
+        )
+        if pages and _make_site_live(phrase):
+            new_site = False
+        if pages and not new_site and not active:
+            saved = [
+                row
+                for task_id in runtime.store.rows
+                if (row := self._voice_owned_task(task_id)) is not None
+                and row["status"] in {"succeeded", "completed_unverified"}
+                and any(path.rsplit("/", 1)[-1] == "index.html" for path in row.get("_artifact_paths", ()))
+            ]
+            if len(saved) != 1:
+                return "I need one saved website in this conversation to publish. Which website should I use?"
+            task = saved[0]
+            if task.get("_publication", {}).get("pages_url"):
+                return "This website is already live on GitHub Pages. The verified link is in its task card."
+            try:
+                await runtime.publish_saved_site(task["task_id"], task["revision"])
+            except Exception as exc:
+                self.event("github_publish_request_not_prepared", reason=_safe_tool_error_code(exc))
+                return "I couldn't prepare those saved files for publication."
+            return "I'm preparing the saved website. I'll ask once to approve the push and public deployment."
+        if len(active) == 0 or (pages and new_site):
+            goal = text.strip()
+            if pages:
+                goal += "\n\n" + PAGES_REQUEST_NOTE + " Use publish_github_branch with deploy_pages=true."
             call = ToolCall(
                 "voice-github-task-" + uuid.uuid4().hex,
                 "start_task",
-                {"goal": text.strip()},
+                {"goal": goal},
             )
             self.event("route_selected", route="fast_task_handoff", task_kind="github")
             try:
@@ -1165,7 +1236,7 @@ class NativeApplication:
             self.event(
                 "github_publish_task_started",
                 task_id=result.get("task_id"),
-                pages=bool(re.search(r"\bpages\b", text, re.I)),
+                pages=pages,
             )
             return (
                 "I've started the GitHub task. It will inspect the configured repository and prepare the requested files; "
@@ -1179,7 +1250,6 @@ class NativeApplication:
             )
             return "I need one active website task to prepare that publication. Include GitHub in the original website request or try again while its task is running."
         task = active[0]
-        pages = bool(re.search(r"\bpages\b", text, re.I))
         instruction = (
             "Prepare the requested GitHub file operation for this task's saved and verified artifacts. "
             "Use github_list_files and github_read_file to discover the configured repository paths and read existing files before edits. "
@@ -1189,11 +1259,11 @@ class NativeApplication:
             "Use the persistent swift-artifacts branch for generated files; keep each non-website project under "
             "projects/<stable-project-slug>/ and reuse that slug for a deliberate update. Never write to main. "
             "Do not perform any remote write until the existing approval control is explicitly "
-            "approved. If GitHub Pages was requested, ask separately for branch push and public "
-            "Pages deployment approval. The Pages source must remain stable and separate from swift-artifacts."
+            "approved. A Pages approval covers the branch push and public deployment. "
+            "The Pages source must remain stable and separate from swift-artifacts."
         )
         if pages:
-            instruction += " The user requested a public GitHub Pages deployment."
+            instruction += " " + PAGES_REQUEST_NOTE + " Use publish_github_branch with deploy_pages=true."
         try:
             result = await runtime.steer(task["task_id"], task["revision"], instruction)
         except Exception as exc:
@@ -1210,7 +1280,7 @@ class NativeApplication:
             status=result.get("status") if isinstance(result, dict) else None,
         )
         if pages:
-            return "I asked the website task to prepare a branch push and a separate public Pages approval. Nothing is published yet."
+            return "I asked the website task to prepare one approval for the branch push and public Pages deployment."
         return "I asked the website task to prepare a branch push. It will pause for your approval before any repository change."
 
     def _fast_action_row(self, call, turn):
@@ -1525,7 +1595,8 @@ class NativeApplication:
             r"(?:the |my )?github(?: pages)? task"
         )
         phrase = text.casefold().replace("’", "'").strip(" ?!.")
-        github_progress = bool(re.fullmatch(github_status_pattern, phrase))
+        github_progress = bool(re.fullmatch(github_status_pattern, phrase)) or _github_publication_status(text)
+        publication_question = _github_publication_status(text)
         if not github_progress and re.fullmatch(
             r"(?:(?:it was )?the task about (?:my )?(?:personal )?website"
             r"(?:[.,]? i don't have the task id)?|is it (?:done|finished)(?: yet)?)",
@@ -1555,6 +1626,7 @@ class NativeApplication:
                     for row in rows
                     if row["call_id"].startswith("voice-github-task-")
                     or re.search(r"\bgithub\b", row.get("goal") or "", re.I)
+                    or row.get("_publication")
                 ]
                 if len(rows) > 1:
                     return "This conversation has more than one GitHub task. Which one do you mean?"
@@ -1592,6 +1664,15 @@ class NativeApplication:
                 None,
             )
             status = snapshot["status"]
+            publication = snapshot.get("publication", {})
+            if publication_question:
+                self.event("github_publication_status_read", task_id=selected["task_id"], task_status=status)
+                if publication.get("pages_url"):
+                    return "The website is live on GitHub Pages. The verified public link is in the task card."
+                if status == "waiting_approval":
+                    return "The GitHub task is waiting for approval."
+                if publication.get("repository_url"):
+                    return "The branch was pushed to GitHub. There is no verified public Pages URL for this task."
             stage = stage_row["payload"].get("stage") if stage_row and status == "running" else None
             message = {
                 "queued": "The task is queued.",

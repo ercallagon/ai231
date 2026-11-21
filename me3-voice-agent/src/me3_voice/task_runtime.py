@@ -469,6 +469,10 @@ class TaskGraphState(MessagesState):
     verification: dict[str, Any]
     cancelled: bool
     demo_materialized: bool
+    pages_artifact_paths: list[str]
+
+
+PAGES_REQUEST_NOTE = "Public GitHub Pages publication was explicitly requested."
 
 
 class ToolArgs(BaseModel):
@@ -707,7 +711,7 @@ class TaskStore:
             async with self.conn.execute(
                 f"""SELECT task_id, action, result FROM me3_mock_effects
                     WHERE task_id IN ({placeholders})
-                    AND action IN ('github_publish', 'github_pages_deploy')
+                    AND action IN ('github_publish', 'github_pages_deploy', 'github_publish_and_deploy')
                     ORDER BY created""",
                 visible_ids,
             ) as cursor:
@@ -716,19 +720,21 @@ class TaskStore:
                     if not isinstance(result, dict):
                         continue
                     links = self.rows[receipt["task_id"]].setdefault("_publication", {})
-                    if receipt["action"] == "github_publish" and result.get("status") == "published":
-                        links.update(task_publication_links({"repository_url": result.get("url")}))
+                    action = receipt["action"]
+                    branch_result = result if action == "github_publish" else result.get("branch_result", {})
+                    pages_result = result if action == "github_pages_deploy" else result.get("pages_result", {})
+                    if branch_result.get("status") == "published":
+                        links.update(task_publication_links({"repository_url": branch_result.get("url")}))
                     if (
-                        receipt["action"] == "github_pages_deploy"
-                        and result.get("status") == "deployed"
-                        and result.get("deployment_status") == "verified"
+                        pages_result.get("status") == "deployed"
+                        and pages_result.get("deployment_status") == "verified"
                     ):
                         links.pop("published_at_pht", None)
                         links.update(
                             task_publication_links(
                                 {
-                                    "pages_url": result.get("deployment_url"),
-                                    "published_at_pht": result.get("published_at_pht"),
+                                    "pages_url": pages_result.get("deployment_url"),
+                                    "published_at_pht": pages_result.get("published_at_pht"),
                                 }
                             )
                         )
@@ -1550,6 +1556,11 @@ class TaskStore:
             row["status"] == "complete"
             and row["operation_id"] in effect_by_operation
             and effect_by_operation[row["operation_id"]]["fingerprint"] == row["fingerprint"]
+            and (
+                effect_by_operation[row["operation_id"]]["action"] != "github_publish_and_deploy"
+                or json.loads(effect_by_operation[row["operation_id"]]["result"]).get("status")
+                == "published_and_deployed"
+            )
             for row in effects
         ]
         pending = [
@@ -2433,6 +2444,7 @@ class TaskRuntime:
 
             state, tool_call_id = self._current_tool()
             await self._tool_guard(state)
+            deploy_pages = deploy_pages or PAGES_REQUEST_NOTE in state["requirements"]
             publisher = self.github_writer
             if publisher is None:
                 return {"ok": False, "error": "github_write_not_configured"}
@@ -2582,92 +2594,81 @@ class TaskRuntime:
                     operation=operation,
                 )
 
-            # Approval is scoped to this task revision and exact tool-call ID.
-            try:
-                branch_result = await request_approved_effect(
-                    "github_publish",
-                    branch_details,
-                    perform=publish_branch,
-                    mode="github_repository_write_after_approval",
-                    approval_suffix="branch",
-                    spoken_summary=branch_summary,
-                )
-                if not branch_result.get("ok") or branch_result.get("status") not in {
-                    "completed",
-                    "already_completed",
-                }:
-                    return branch_result
-                if not deploy_pages:
-                    return branch_result
+            if not deploy_pages:
+                try:
+                    return await request_approved_effect(
+                        "github_publish",
+                        branch_details,
+                        perform=publish_branch,
+                        mode="github_repository_write_after_approval",
+                        approval_suffix="branch",
+                        spoken_summary=branch_summary,
+                    )
+                except GitHubPublishError as exc:
+                    raise TaskError(exc.code) from None
 
-                published = branch_result.get("result")
-                if not isinstance(published, dict):
-                    raise GitHubPublishError("github_publish_result_invalid")
-                commit_sha = published.get("commit")
-                if not isinstance(commit_sha, str):
-                    raise GitHubPublishError("github_publish_result_invalid")
-                expected_url = publisher.expected_pages_url(pages_site_path)
-                source_branch = pages_config["branch"]
-                source_folder = pages_config["path"]
-                destination_prefix = "docs/" if source_folder == "/docs" else ""
-                destination_path = destination_prefix + pages_site_path
-                source_note = (
-                    f"existing Pages source {source_branch}:{source_folder} will be preserved"
-                    if pages_config["configured"]
-                    else "Pages is not configured; approval will enable the stable gh-pages:/ source"
-                )
-                pages_details = (
-                    f"Publish approved files for {publisher.repository_name} to the stable Pages source "
-                    f"{source_branch}:{source_folder} (artifact branch {branch}, commit {commit_sha}); site path "
-                    f"/{pages_site_path}/, repository destination {destination_path}/; selected files: {file_summary}. "
-                    f"The website URL will be {expected_url}; the root published-sites index at "
-                    f"{publisher.expected_pages_url()} will be refreshed after the site is verified. Both will be "
-                    f"publicly accessible; {source_note}. This is a separate approval from the branch push."
-                )
-                pages_summary = (
-                    f"Separate public Pages approval: deploy {spoken_files} from "
-                    f"{publisher.repository_name}, branch {branch}, at {expected_url} and update its public root index. "
-                    "Anyone can access both. "
-                    "Say approve to enable Pages or cancel to leave Pages disabled."
-                )
+            expected_url = publisher.expected_pages_url(pages_site_path)
+            source_branch, source_folder = pages_config["branch"], pages_config["path"]
+            source_action = "Preserve" if pages_config["configured"] else "Enable"
+            manifest_digest = hashlib.sha256(
+                json.dumps(artifacts, sort_keys=True, ensure_ascii=False).encode()
+            ).hexdigest()
+            details = (
+                f"Push to {publisher.repository_name}:{branch} and deploy publicly to GitHub Pages "
+                f"at {expected_url}. {source_action} Pages source {source_branch}:{source_folder}; "
+                f"repository visibility: {visibility}; operation: {operation}; "
+                f"commit: {commit_message.strip()!r}; files: {', '.join(sorted(artifacts))}. "
+                f"Refresh the public gallery after verification. Artifact digest: {manifest_digest}."
+            )
+            summary = (
+                f"Approval needed to push {spoken_files} to {publisher.repository_name}, branch "
+                f"{branch}, and deploy them publicly on GitHub Pages. The repository is {visibility}. "
+                "Anyone can open the website after deployment. Say approve for both steps or cancel."
+            )
 
-                async def enable_pages(_operation_id):
-                    return await publisher.enable_pages_for_published_branch(
+            async def publish_and_deploy(operation_id):
+                published = await publish_branch(operation_id)
+                commit_sha = published.get("commit") if isinstance(published, dict) else None
+                if not isinstance(commit_sha, str) or not re.fullmatch(r"[a-f0-9]{40}", commit_sha):
+                    raise GitHubPublishError("github_publish_result_invalid")
+                receipt = {"branch_result": published, "status": "branch_published_pages_unverified"}
+                try:
+                    deployment = await publisher.enable_pages_for_published_branch(
                         branch,
                         commit_sha,
                         pages_site_path,
                         files=artifacts,
                         task_id=state["task_id"],
-                        operation_id=_operation_id,
+                        operation_id=operation_id,
                         operation=operation,
+                        expected_source=pages_config,
                     )
+                    if (
+                        deployment.get("status") != "deployed"
+                        or deployment.get("deployment_status") != "verified"
+                        or deployment.get("deployment_url") != expected_url
+                    ):
+                        raise GitHubPublishError("github_pages_public_url_unverified")
+                except GitHubPublishError as exc:
+                    # A completed push remains visible even when deployment fails.
+                    return {**receipt, "error": exc.code}
+                return {**receipt, "status": "published_and_deployed", "pages_result": deployment}
 
-                pages_result = await request_approved_effect(
-                    "github_pages_deploy",
-                    pages_details,
-                    perform=enable_pages,
-                    mode="public_github_pages_after_separate_approval",
-                    approval_suffix="pages",
-                    spoken_summary=pages_summary,
+            try:
+                result = await request_approved_effect(
+                    "github_publish_and_deploy",
+                    details,
+                    perform=publish_and_deploy,
+                    mode="public_github_pages_after_approval",
+                    approval_suffix="publish-site",
+                    spoken_summary=summary,
                 )
-                if not pages_result.get("ok"):
-                    return {
-                        "ok": False,
-                        "status": "branch_published_pages_not_enabled",
-                        "branch": branch,
-                        "commit": commit_sha,
-                        "pages_approval": pages_result,
-                    }
-                return {
-                    "ok": True,
-                    "status": "published_and_deployed",
-                    "branch": branch,
-                    "commit": commit_sha,
-                    "branch_result": published,
-                    "pages_result": pages_result.get("result"),
-                }
             except GitHubPublishError as exc:
                 raise TaskError(exc.code) from None
+            if not result.get("ok"):
+                return result
+            receipt = result["result"]
+            return {**receipt, "ok": receipt["status"] == "published_and_deployed"}
 
         demo_tools = []
         if os.environ.get("ME3_DEMO_OUTPUT"):
@@ -2727,7 +2728,7 @@ class TaskRuntime:
                         "Every selected file must be a saved artifact whose readback hash matches its task record. "
                         "Verify repository visibility, then pause for explicit user approval before creating/updating swift-artifacts. "
                         "Set deploy_pages=true only when the user explicitly requested a public GitHub Pages deployment; "
-                        "it requires exactly one Chromium-verified nested index.html and a separate approval. "
+                        "it requires exactly one Chromium-verified nested index.html and a single approval covering the push and public deployment. "
                         "Pages always preserves an existing source; first setup uses stable gh-pages root, later sites update only their selected nested paths. "
                         "Do not call it unless the user requested repository publication. Existing branches are never overwritten."
                     ),
@@ -2895,6 +2896,23 @@ class TaskRuntime:
         task = await self.store.get(state["task_id"])
         if not task or task["status"] != "running":
             raise TaskError("task_not_running")
+        last = state["messages"][-1]
+        if (
+            isinstance(last, ToolMessage)
+            and last.name == "publish_github_branch"
+            and (PAGES_REQUEST_NOTE in task["requirements"] or state.get("pages_artifact_paths"))
+        ):
+            # Completion derives the outcome from the durable receipt.
+            return {"messages": [AIMessage(content="GitHub Pages operation finished.")]}
+        if paths := state.get("pages_artifact_paths"):
+            return {"messages": [AIMessage(content="", tool_calls=[{
+                "name": "publish_github_branch",
+                "args": {
+                    "paths": paths, "commit_message": "Publish saved Swift website",
+                    "deploy_pages": True,
+                },
+                "id": f"publish-saved-site-{state['revision']}",
+            }])]}
         if task["model_calls"] >= min(self.max_model_calls, MAX_MODEL_CALLS):
             raise TaskError("model_budget_exhausted")
         next_calls = task["model_calls"] + 1
@@ -2939,8 +2957,8 @@ class TaskRuntime:
                 "write only the requested changes under that same site path, then use operation=update. "
                 "For a requested ordinary file push, select only that file and use operation=create for "
                 "new paths or update for an existing file. Never overwrite an existing path in create mode. "
-                "GitHub publication always pauses for exact user approval. Pages publication requires one "
-                "Chromium-verified nested index.html and a second approval; preserve the current Pages source "
+                "Set deploy_pages=true when the user asks for GitHub Pages, GitHub.io, or to make a site live. "
+                "Pages requires a Chromium-verified index.html and one approval covering the push and public deployment; preserve the current Pages source "
                 "and update only the selected nested site files. If Pages is unset, the approval will enable "
                 "the stable gh-pages root source once."
             )
@@ -3063,6 +3081,18 @@ class TaskRuntime:
                     )
                     return Command(update={"messages": [repair_message]}, goto="agent")
         verification = await self.store.verify(task["task_id"])
+        if PAGES_REQUEST_NOTE in task["requirements"] or state.get("pages_artifact_paths"):
+            publication = self.store.rows[task["task_id"]].get("_publication", {})
+            if url := publication.get("pages_url"):
+                answer = f"Your website is live on GitHub Pages. Verified public URL: {url}"
+            else:
+                verification["verified"] = False
+                verification["level"] = "unverified"
+                answer = (
+                    "The files are on GitHub, but the public Pages URL could not be verified."
+                    if publication.get("repository_url")
+                    else "The public site was not published. Your saved files are still in the task."
+                )
         if "materialize_demo" in task["requirements"]:
             if not demo_materialized:
                 verification["verified"] = False
@@ -3457,7 +3487,7 @@ class TaskRuntime:
             "durability": "sqlite_checkpointed",
         }
 
-    def _spawn(self, task_id, *, initial=False, resume=None):
+    def _spawn(self, task_id, *, initial=False, resume=None, pages_artifact_paths=None):
         active = self._jobs.get(task_id)
         if active and not active.done():
             if resume is not None:
@@ -3466,7 +3496,10 @@ class TaskRuntime:
                 self._pending_resumes[task_id] = resume
             return active
         job = asyncio.create_task(
-            self._drive(task_id, initial=initial, resume=resume), name="me3-task-" + task_id
+            self._drive(
+                task_id, initial=initial, resume=resume, pages_artifact_paths=pages_artifact_paths
+            ),
+            name="me3-task-" + task_id,
         )
         self._jobs[task_id] = job
         job.add_done_callback(lambda finished: self._job_finished(task_id, finished))
@@ -3493,7 +3526,7 @@ class TaskRuntime:
         if row and row["status"] == "running" and not self._closed:
             self._spawn(task_id, resume=resume)
 
-    async def _drive(self, task_id, *, initial=False, resume=None):
+    async def _drive(self, task_id, *, initial=False, resume=None, pages_artifact_paths=None):
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             config = {"configurable": {"thread_id": task_id}}
@@ -3510,6 +3543,8 @@ class TaskRuntime:
                         "final_answer": "",
                         "verification": {},
                         "cancelled": False,
+                        "demo_materialized": False,
+                        "pages_artifact_paths": pages_artifact_paths or [],
                     }
                     result = await self.graph.ainvoke(value, config=config)
                 else:
@@ -3676,8 +3711,29 @@ class TaskRuntime:
                 "campaign_input_tokens_limit": self.spec.max_input_tokens_total,
             },
             "approvals": approvals,
+            "publication": self.store.rows[task_id].get("_publication", {}),
             "progress": [dict(x, payload=json.loads(x["payload"])) for x in events],
         }
+
+    @serialized_control
+    async def publish_saved_site(self, task_id, expected_revision):
+        """Start an approval on the existing task and its recorded files."""
+        await self.start_runtime()
+        async with self.store.lock:
+            row = await self.store._get_locked(task_id)
+            if not row or row["revision"] != expected_revision:
+                raise TaskError("revision_conflict")
+            if row["status"] not in {"succeeded", "completed_unverified"} or task_id in self._jobs:
+                raise TaskError("task_not_ready_for_publication")
+            projected = self.store.rows[task_id]
+            if projected.get("_publication", {}).get("pages_url"):
+                raise TaskError("github_pages_already_published")
+            paths = sorted(projected.get("_artifact_paths", ()))
+            if not 1 <= len(paths) <= 20 or sum(Path(path).name == "index.html" for path in paths) != 1:
+                raise TaskError("github_pages_requires_one_index_html")
+            await self.store._set_locked(task_id, status="running", revision=expected_revision + 1)
+            await self.store._emit_locked(task_id, "site_publication_requested", {})
+        self._spawn(task_id, initial=True, pages_artifact_paths=paths)
 
     @serialized_control
     async def steer(self, task_id, expected_revision, delta):
